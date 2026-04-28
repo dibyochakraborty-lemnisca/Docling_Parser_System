@@ -64,6 +64,44 @@ class ParsedTable(BaseModel):
         return self.rows[:n]
 
 
+class NarrativeBlockType(str, Enum):
+    PARAGRAPH = "paragraph"
+    HEADING = "heading"
+    LIST_ITEM = "list_item"
+    CAPTION = "caption"
+    OTHER = "other"
+
+
+class NarrativeBlock(BaseModel):
+    """A non-table block of text extracted from a document (paragraph, heading, etc)."""
+
+    text: str
+    type: NarrativeBlockType = NarrativeBlockType.PARAGRAPH
+    locator: dict[str, Any]
+
+
+class NarrativeExtraction(BaseModel):
+    """Output of LLMNarrativeExtractor: a candidate observation pulled from prose.
+
+    Subject to evidence verification + dedup before becoming an Observation.
+    """
+
+    column: str
+    value: Any
+    unit: str | None = None
+    evidence: str
+    source_paragraph_idx: int
+    confidence: float = Field(ge=0.0, le=1.0)
+    rationale: str | None = None
+
+
+class ParseResult(BaseModel):
+    """What every FileParser returns. Tables always; narrative blocks for PDFs."""
+
+    tables: list[ParsedTable] = Field(default_factory=list)
+    narrative_blocks: list["NarrativeBlock"] = Field(default_factory=list)
+
+
 class MappingEntry(BaseModel):
     raw_header: str
     mapped_to: str | None
@@ -166,6 +204,10 @@ class IngestionFileResult(BaseModel):
     parse_error: str | None = None
     observations_written: int = 0
     residuals_written: int = 0
+    narrative_blocks_captured: int = 0
+    narrative_extractions_kept: int = 0
+    narrative_extractions_rejected: int = 0
+    narrative_extractions_deduped: int = 0
 
 
 class IngestionResult(BaseModel):

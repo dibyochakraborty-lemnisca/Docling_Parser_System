@@ -51,6 +51,14 @@ def build_dossier(experiment_id: str, repository: Repository) -> dict[str, Any]:
     )
     files_failed = sum(1 for f in files if f.parse_status == "failed")
 
+    narrative_kept = 0
+    narrative_blocks_total = 0
+    for r in residuals:
+        narrative_blocks_total += len(r.payload.get("narrative", []))
+    for row in obs_rows:
+        if row.source_locator and row.source_locator.get("section") == "narrative":
+            narrative_kept += 1
+
     return {
         "dossier_schema_version": DOSSIER_SCHEMA_VERSION,
         "experiment": {
@@ -100,5 +108,7 @@ def build_dossier(experiment_id: str, repository: Repository) -> dict[str, Any]:
             "golden_coverage_percent": coverage_percent,
             "files_failed_to_parse": files_failed,
             "schema_version": schema.version,
+            "narrative_blocks_captured": narrative_blocks_total,
+            "narrative_observations": narrative_kept,
         },
     }

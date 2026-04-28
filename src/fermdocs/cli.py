@@ -11,7 +11,7 @@ from sqlalchemy import create_engine
 from fermdocs.dossier import build_dossier
 from fermdocs.file_store.local import LocalFileStore
 from fermdocs.mapping.client import dump_response_schema
-from fermdocs.mapping.factory import build_mapper
+from fermdocs.mapping.factory import build_mapper, build_narrative_extractor
 from fermdocs.units.normalizer import build_default_normalizer
 from fermdocs.parsing.csv_parser import CsvParser
 from fermdocs.parsing.excel_parser import ExcelParser
@@ -35,6 +35,7 @@ def _build_pipeline(
     use_fake_mapper: bool,
     provider: str | None = None,
     llm_normalizer: bool | None = None,
+    extract_narrative: bool | None = None,
 ) -> tuple[IngestionPipeline, Repository]:
     db_url = os.environ.get("DATABASE_URL")
     if not db_url:
@@ -50,18 +51,35 @@ def _build_pipeline(
     file_store = LocalFileStore()
     schema = load_schema(schema_path) if schema_path else None
 
-    use_llm = (
+    use_llm_normalizer = (
         llm_normalizer
         if llm_normalizer is not None
-        else os.environ.get("FERMDOCS_USE_LLM_NORMALIZER", "false").lower() == "true"
+        else os.environ.get("FERMDOCS_USE_LLM_NORMALIZER", "true").lower() == "true"
     )
     if use_fake_mapper:
-        use_llm = False  # offline runs stay offline
+        use_llm_normalizer = False  # offline runs stay offline
     normalizer_provider = os.environ.get("FERMDOCS_NORMALIZER_PROVIDER") or provider
-    normalizer = build_default_normalizer(use_llm=use_llm, provider=normalizer_provider)
+    normalizer = build_default_normalizer(
+        use_llm=use_llm_normalizer, provider=normalizer_provider
+    )
+
+    extract_narr = (
+        extract_narrative
+        if extract_narrative is not None
+        else os.environ.get("FERMDOCS_EXTRACT_NARRATIVE", "true").lower() == "true"
+    )
+    if use_fake_mapper:
+        extract_narr = False
+    narrative_provider = os.environ.get("FERMDOCS_NARRATIVE_PROVIDER") or provider
+    narrative_extractor = build_narrative_extractor(
+        enabled=extract_narr, provider=narrative_provider
+    )
 
     return (
-        IngestionPipeline(router, mapper, converter, repo, file_store, schema, normalizer),
+        IngestionPipeline(
+            router, mapper, converter, repo, file_store, schema,
+            normalizer, narrative_extractor,
+        ),
         repo,
     )
 
@@ -86,17 +104,28 @@ def cli(ctx: click.Context, print_schema: str | None) -> None:
 @click.option("--fake-mapper", is_flag=True, help="Use deterministic FakeHeaderMapper (no LLM call).")
 @click.option(
     "--provider",
-    type=click.Choice(["anthropic", "gemini", "fake"], case_sensitive=False),
+    type=click.Choice(["gemini", "anthropic", "fake"], case_sensitive=False),
     default=None,
-    help="LLM provider for the header mapper. Defaults to FERMDOCS_MAPPER_PROVIDER or 'anthropic'.",
+    help="LLM provider for the header mapper. Defaults to FERMDOCS_MAPPER_PROVIDER or 'gemini'.",
 )
 @click.option(
     "--llm-normalizer/--no-llm-normalizer",
     "llm_normalizer",
     default=None,
     help=(
-        "Enable the LLM unit normalizer fallback for unit strings pint cannot parse. "
-        "Defaults to FERMDOCS_USE_LLM_NORMALIZER (off)."
+        "LLM fallback for unit strings pint cannot parse. "
+        "Defaults to FERMDOCS_USE_LLM_NORMALIZER (on). "
+        "Use --no-llm-normalizer to disable the LLM tier (rule-based stays on)."
+    ),
+)
+@click.option(
+    "--extract-narrative/--no-extract-narrative",
+    "extract_narrative",
+    default=None,
+    help=(
+        "Extract values from narrative paragraphs (PDFs only). Uses Sonnet (~10-50x "
+        "cost vs the mapper). Defaults to FERMDOCS_EXTRACT_NARRATIVE (on). "
+        "Tier 1 narrative residual capture is unconditional regardless."
     ),
 )
 def ingest(
@@ -107,10 +136,13 @@ def ingest(
     fake_mapper: bool,
     provider: str | None,
     llm_normalizer: bool | None,
+    extract_narrative: bool | None,
 ) -> None:
     """Ingest files for an experiment, then optionally write a dossier JSON."""
     try:
-        pipeline, repo = _build_pipeline(schema_path, fake_mapper, provider, llm_normalizer)
+        pipeline, repo = _build_pipeline(
+            schema_path, fake_mapper, provider, llm_normalizer, extract_narrative
+        )
     except Exception as e:
         click.echo(f"db init failed: {e}", err=True)
         sys.exit(EXIT_DB)

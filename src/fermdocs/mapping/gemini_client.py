@@ -13,7 +13,7 @@ from fermdocs.domain.models import (
 )
 from fermdocs.mapping.prompt import render_user_prompt, system_prompt
 
-_DEFAULT_MODEL = "gemini-2.5-flash"
+_DEFAULT_MODEL = "gemini-3-flash"
 
 
 class GeminiHeaderMapper:

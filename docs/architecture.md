@@ -201,9 +201,13 @@ These hold today. If a future change breaks them, you have a regression.
 
 ### 4.2 LLM contract
 
-- The header mapper LLM **never** sees raw cell values in a way that lets it return them as observations. It receives headers + sample rows for *context only*. Its output schema permits only header-to-column mappings, raw_unit strings, confidence, and rationale.
-- The unit normalizer LLM **never** returns a converted numeric value. Its output schema permits only an action (`use_pint_expr | dimensionless | unconvertible`), an optional pint expression string, rationale, and confidence. The `use_factor` action was deliberately excluded from v1 because it would bypass pint's dimensionality check.
-- LLM responses go through `pydantic.model_validate` before hitting any business logic. Malformed responses degrade to safe defaults (table -> residual; conversion -> failed), never crash the pipeline.
+Three LLM-using components, three different trust profiles. Read this carefully -- the safest one (mapper) and the riskiest one (narrative extractor) coexist in the codebase.
+
+- **Header mapper LLM:** **never** emits values. Receives headers + sample rows for context; emits only header-to-column mappings, raw_unit strings, confidence, and rationale. Code applies the mapping to extract values from the parsed table.
+- **Unit normalizer LLM:** **never** emits converted values. Output is restricted to one of three actions (`use_pint_expr | dimensionless | unconvertible`) with an optional pint expression string, rationale, and confidence. Code does the math via pint. The `use_factor` action was deliberately excluded so every successful path goes through pint's dimensionality check.
+- **Narrative extractor LLM:** **does** emit numeric values. This is the only LLM in the system that produces numbers directly. The relaxation is deliberate -- it is the only way to extract values from prose that has no tabular structure -- and is paired with seven compensating safety mechanisms (see Section 8).
+
+LLM responses go through `pydantic.model_validate` before hitting any business logic. Malformed responses degrade to safe defaults (table -> residual; conversion -> failed; narrative extraction -> empty list), never crash the pipeline.
 
 ### 4.3 Provenance
 
@@ -362,9 +366,9 @@ Implementations:
 
 `build_mapper(provider, use_fake)` resolves provider in this order:
 
-1. Explicit arg (`--provider gemini` on the CLI).
+1. Explicit arg (`--provider anthropic` on the CLI).
 2. `FERMDOCS_MAPPER_PROVIDER` env var.
-3. Default: `'anthropic'`.
+3. Default: `'gemini'` (cheap fast Flash model handles header mapping well; Anthropic stays available for users who prefer it).
 
 `use_fake=True` short-circuits to `FakeHeaderMapper` regardless. The CLI uses this when `--fake-mapper` is set.
 
@@ -424,7 +428,7 @@ If a future workload genuinely needs scalar factors, add them with a separate di
 ### 7.3 Why two normalizers, not one
 
 - `RuleBasedNormalizer` is **always on**. Deterministic regex transforms (Unicode superscripts, "of pellet" annotations, known dimensionless tokens). Zero LLM cost. Catches the predictable 70-80% of failures.
-- `LLMUnitNormalizer` is **opt-in** (`FERMDOCS_USE_LLM_NORMALIZER=true` or `--llm-normalizer`). For the unpredictable rest. In-process cache prevents repeat calls on the same `(unit_raw, canonical_unit)` within a run.
+- `LLMUnitNormalizer` is **on by default** (`FERMDOCS_USE_LLM_NORMALIZER=true`); pass `--no-llm-normalizer` to disable. For the unpredictable rest. In-process cache prevents repeat calls on the same `(unit_raw, canonical_unit)` within a run. If the API key is missing or the call fails, it degrades to `UNCONVERTIBLE` -- the pipeline never crashes.
 
 `ChainNormalizer` runs them in order: rule-based first, LLM only if rule-based returned `unconvertible`.
 
@@ -449,7 +453,83 @@ These are loaded at converter construction. Add to this file when a new dimensio
 
 ---
 
-## 8. The dossier
+## 8. Narrative extraction (Tier 1 + Tier 2)
+
+PDFs contain prose. Tables alone don't capture every value: methods sections describe vessel setup, observation paragraphs report measurements, captions describe figures. The narrative subsystem handles all of this.
+
+### 8.1 Tier 1 -- always-on capture
+
+The PDF parser walks `document.texts` (paragraphs, headings, list items, captions) in addition to `document.tables`. Every block >= 20 chars is captured into `ResidualPayload.narrative` and persisted in the `residual_data` JSONB column. This is unconditional -- no LLM cost, no opt-in.
+
+This fixes a silent data-loss bug from the table-only era: prose that contained meaningful information used to be discarded by the parser before reaching the residual.
+
+### 8.2 Tier 2 -- on-by-default LLM extraction
+
+`LLMNarrativeExtractor` (default `gemini-3-pro`, override via `FERMDOCS_NARRATIVE_MODEL`) reads narrative blocks and emits structured candidates:
+
+```
+NarrativeExtraction = {
+  column,                  -- must exist in golden_schema
+  value,                   -- numeric or string
+  unit,                    -- raw unit string from the prose
+  evidence,                -- VERBATIM substring of source text
+  source_paragraph_idx,    -- which block this came from
+  confidence,              -- 0..1 self-reported
+  rationale
+}
+```
+
+Disable by setting `FERMDOCS_EXTRACT_NARRATIVE=false` or `--no-extract-narrative`. Tier 1 capture is unaffected.
+
+### 8.3 The seven safety mechanisms
+
+The narrative extractor is the only LLM that emits values directly. Each candidate extraction passes through these gates before becoming an `Observation`:
+
+1. **Schema validation.** `column` must be a name in `golden_schema.yaml`. The LLM cannot invent column names.
+2. **Source-block resolution.** `source_paragraph_idx` must exist in the chunk currently being processed. Cross-chunk references are rejected.
+3. **Evidence substring.** `evidence` must be a verbatim substring of the source paragraph text.
+4. **Value-string-in-evidence.** The numeric value, in any of its rendered forms (`14.2`, `14.20`, `14`), must appear inside the evidence span. This catches "yields ranged from 11.7 to 14.2" -> wrong-pick attacks.
+5. **Sentence bound.** Evidence must be <= 200 chars and contain <= 2 sentence terminators (`.!?`). Catches paragraph-spanning quotes that lose context.
+6. **Dedup against table observations.** If `(column_name, value_canonical)` already exists with `source_locator.section == 'table'` for this file, the prose extraction is dropped. Prevents *phantom corroboration* -- prose that summarizes a table value should not produce a second observation that looks like an independent confirmation.
+7. **Confidence cap + needs_review forced.** Narrative observations have their `mapping_confidence` capped at `0.85` and always have `needs_review=true`. They never auto-accept; they always surface in `fermdocs review --next`.
+
+Additionally:
+
+- `observation_type` is **fixed** to `"reported"` for narrative observations. The LLM does not classify intent (planned vs measured vs reported). This was a v1 simplification; if downstream agents need finer signal, add it later.
+- Per-call paragraph cap of `MAX_PARAGRAPHS_PER_CALL = 20`. Larger files are chunked. Cross-chunk associations are intentionally lost (prevents the LLM from incorrectly linking facts across distant pages).
+- API failure (network, auth, malformed JSON) -> empty list. Pipeline continues. Tier 1 residual capture is unaffected.
+
+### 8.4 Provenance for narrative observations
+
+```json
+"source_locator": {
+  "format": "pdf",
+  "file": "report.pdf",
+  "page": 3,
+  "section": "narrative",
+  "paragraph_idx": 7,
+  "evidence_quote": "grown at 30°C"
+},
+"value_canonical": {
+  "value": 30.0,
+  "type": "float",
+  "via": "pint",
+  "extracted_via": "narrative_llm"
+}
+```
+
+`source_locator.section` is the discriminator: `"table"` vs `"narrative"`. Migration 0003 backfills `"table"` on pre-Tier-2 rows. Downstream consumers can filter by section.
+
+`evidence_quote` is content-addressable provenance -- if Docling version drift later changes `paragraph_idx` indexing, the literal evidence string still pins where the value came from.
+
+### 8.5 Observed behavior on real PDFs
+
+On the Astaxanthin PDF in `tests/fixtures/`:
+
+- Tier 1: 8 narrative blocks captured (previously dropped silently).
+- Tier 2: extractions depend on whether the prose contains values mappable to the current schema. With a fermentation-process-focused schema and an analytical-chemistry PDF, most narrative content is intentionally ignored (no matching golden columns). With a richer schema covering analytical metrics, expect 5-15 narrative observations per typical CRO report.
+
+## 9. The dossier
 
 `build_dossier(experiment_id, repository)` reads from Postgres and returns a versioned dict. It's a pure projection; no side effects. Shape:
 
@@ -499,7 +579,7 @@ Each `observation` (from `Observation.to_dossier_observation()`):
 
 ---
 
-## 9. CLI contracts (Rust-port-friendly)
+## 10. CLI contracts (Rust-port-friendly)
 
 The CLI surface is part of the durable contract. A future Rust binary should accept the same flags and exit codes.
 
@@ -507,8 +587,9 @@ The CLI surface is part of the durable contract. A future Rust binary should acc
 
 ```
 fermdocs ingest --experiment-id <str> --files <path>... [--out <path>]
-                [--schema <path>] [--provider {anthropic,gemini,fake}]
+                [--schema <path>] [--provider {gemini,anthropic,fake}]
                 [--fake-mapper] [--llm-normalizer/--no-llm-normalizer]
+                [--extract-narrative/--no-extract-narrative]
 
 fermdocs dossier --experiment-id <str> [--out <path>]
 
@@ -532,11 +613,11 @@ fermdocs --print-schema {dossier|golden|mapper}
 
 ```
 DATABASE_URL                    postgres connection string (required)
+GEMINI_API_KEY                  required if FERMDOCS_MAPPER_PROVIDER=gemini (default)
 ANTHROPIC_API_KEY               required if FERMDOCS_MAPPER_PROVIDER=anthropic
-GEMINI_API_KEY                  required if FERMDOCS_MAPPER_PROVIDER=gemini
-FERMDOCS_MAPPER_PROVIDER        anthropic | gemini | fake (default: anthropic)
-FERMDOCS_MAPPER_MODEL           override model id for the mapper
+FERMDOCS_MAPPER_PROVIDER        gemini | anthropic | fake (default: gemini)
 FERMDOCS_GEMINI_MODEL           override Gemini model id
+FERMDOCS_MAPPER_MODEL           override Anthropic mapper model id
 FERMDOCS_DATA_DIR               where source files are stored (default: ./data)
 FERMDOCS_SCHEMA_PATH            override the bundled golden_schema.yaml
 FERMDOCS_USE_LLM_NORMALIZER     true/false (default: false)
@@ -546,7 +627,7 @@ FERMDOCS_PDF_OCR                true/false; off by default for digital PDFs
 
 ---
 
-## 10. Failure modes and mitigations
+## 11. Failure modes and mitigations
 
 | Failure | Detection | Mitigation in code |
 |---|---|---|
@@ -559,10 +640,14 @@ FERMDOCS_PDF_OCR                true/false; off by default for digital PDFs
 | Schema YAML malformed | Pydantic validation at load time | Fail fast at startup, exit 1 |
 | Database connection lost mid-run | SQLAlchemy raises | Pipeline crashes; partial state in DB. Caller retries. (Re-ingest is idempotent.) |
 | LLM normalizer returns invalid action | Pydantic enum check | Caught -> hint becomes UNCONVERTIBLE -> conversion fails cleanly |
+| Narrative extractor LLM fails (network, auth, JSON) | Caught | Returns empty list; Tier 1 residual capture is unaffected |
+| Narrative extractor returns hallucinated evidence | Substring + value-string + sentence-bound check | Per-extraction reject; other extractions in the same call kept; rejection counted in `IngestionFileResult.narrative_extractions_rejected` |
+| Narrative extractor invents a column name | Schema validation against `golden_schema.yaml` | Per-extraction reject |
+| Prose value duplicates a table value | Dedup against table observations | Per-extraction drop; counted in `narrative_extractions_deduped` |
 
 ---
 
-## 11. Rust-portable contracts
+## 12. Rust-portable contracts
 
 The Python codebase is throwaway. The contracts that survive a Rust rewrite:
 
@@ -572,6 +657,7 @@ The Python codebase is throwaway. The contracts that survive a Rust rewrite:
 4. **`golden_schema.yaml`** format. Plain YAML, loaded the same way by both languages.
 5. **Mapper response JSON schema** (`fermdocs --print-schema mapper`). Provider-agnostic; same shape regardless of which LLM emits it.
 6. **Normalizer hint schema** (implicit; serialized inside `value_canonical.normalization`). Three actions, fixed fields.
+7. **Narrative extraction schema** (`NarrativeExtraction` Pydantic model). Column, value, unit, evidence, source_paragraph_idx, confidence, rationale. A future Rust port emits identical JSON.
 
 Python-specific code stays encapsulated in:
 
@@ -583,7 +669,7 @@ A Rust port swaps these modules; everything else is data shape.
 
 ---
 
-## 12. Rollback runbook
+## 13. Rollback runbook
 
 If the LLM normalizer (or any extractor change) is producing bad values:
 
@@ -633,7 +719,7 @@ The dossier-builder filters `superseded_by IS NULL`, so once superseded, old LLM
 
 ---
 
-## 13. Glossary
+## 14. Glossary
 
 | Term | Meaning |
 |---|---|
@@ -648,3 +734,7 @@ The dossier-builder filters `superseded_by IS NULL`, so once superseded, old LLM
 | **Superseded** | Observation marked as replaced by a newer extraction. Dossier ignores superseded rows. |
 | **Residual** | The JSONB bucket of everything that didn't map to a golden column. |
 | **Idempotent re-ingest** | Same file uploaded twice = no duplicate observations. Enforced by `(experiment_id, sha256)` uniqueness. |
+| **Tier 1 (narrative)** | Always-on capture of prose into `residual_data.payload.narrative`. No LLM. |
+| **Tier 2 (narrative)** | On-by-default LLM-based entity extraction from prose into `golden_observations`. Sonnet-class model; seven safety guards. |
+| **Evidence quote** | Verbatim substring of source prose used to verify (and justify) a narrative-derived observation. |
+| **Phantom corroboration** | The bug Tier 2 dedup prevents: prose that summarizes a table producing a second observation that looks like an independent confirmation. |

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from fermdocs.domain.models import ParsedTable
+from fermdocs.domain.models import ParsedTable, ParseResult
 from fermdocs.parsing.base import FileParser
 
 
@@ -12,7 +12,7 @@ class ExcelParser(FileParser):
     def supports(self, path: Path) -> bool:
         return path.suffix.lower() in {".xlsx", ".xls"}
 
-    def parse(self, path: Path) -> list[ParsedTable]:
+    def parse(self, path: Path) -> ParseResult:
         xls = pd.ExcelFile(path)
         tables: list[ParsedTable] = []
         for sheet_name in xls.sheet_names:
@@ -28,10 +28,13 @@ class ExcelParser(FileParser):
                     table_id=f"{path.name}#{sheet_name}",
                     headers=headers,
                     rows=rows,
-                    locator={"format": "xlsx", "file": path.name, "sheet": sheet_name},
+                    locator={
+                        "format": "xlsx", "file": path.name,
+                        "sheet": sheet_name, "section": "table",
+                    },
                 )
             )
-        return tables
+        return ParseResult(tables=tables)
 
 
 def _normalize(v: object) -> object:

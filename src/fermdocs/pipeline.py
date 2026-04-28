@@ -10,10 +10,13 @@ from typing import Any
 
 from fermdocs.domain.models import (
     ConfidenceBand,
+    ConversionStatus,
     GoldenSchema,
     IngestionFileResult,
     IngestionResult,
     MappingEntry,
+    NarrativeBlock,
+    NarrativeExtraction,
     Observation,
     ObservationType,
     ParsedTable,
@@ -23,6 +26,13 @@ from fermdocs.domain.models import (
 from fermdocs.file_store.base import FileStore
 from fermdocs.mapping.confidence import band
 from fermdocs.mapping.mapper import HeaderMapper
+from fermdocs.mapping.narrative_extractor import (
+    NARRATIVE_CONFIDENCE_CAP,
+    NarrativeExtractor,
+    chunk_blocks,
+    is_dup_of_table_observations,
+    verify_evidence,
+)
 from fermdocs.parsing.router import FormatRouter
 from fermdocs.storage.repository import FileRecord, Repository
 from fermdocs.units.converter import UnitConverter
@@ -41,6 +51,7 @@ class IngestionPipeline:
         file_store: FileStore,
         schema: GoldenSchema | None = None,
         normalizer: UnitNormalizer | None = None,
+        narrative_extractor: NarrativeExtractor | None = None,
     ):
         self._router = router
         self._mapper = mapper
@@ -50,6 +61,7 @@ class IngestionPipeline:
         self._schema = schema or load_schema()
         self._schema_index = self._schema.by_name()
         self._normalizer = normalizer
+        self._narrative_extractor = narrative_extractor
 
     def ingest(self, experiment_id: str, files: list[Path]) -> IngestionResult:
         self._repo.upsert_experiment(experiment_id)
@@ -76,17 +88,20 @@ class IngestionPipeline:
                 file_id=file_id, filename=path.name, parse_status="ok"
             )
         try:
-            tables = self._router.parse(path)
+            parsed = self._router.parse(path)
         except Exception as e:
             self._repo.mark_file_parsed(file_id, "failed", str(e))
             return IngestionFileResult(
                 file_id=file_id, filename=path.name, parse_status="failed", parse_error=str(e)
             )
 
+        tables = parsed.tables
+        narrative_blocks = parsed.narrative_blocks
+
         mapping = self._mapper.map(tables, self._schema)
         mapping_by_table = {tm.table_id: tm for tm in mapping.tables}
 
-        observations: list[Observation] = []
+        table_observations: list[Observation] = []
         residual = ResidualPayload()
 
         for table in tables:
@@ -97,11 +112,21 @@ class IngestionPipeline:
             obs, partial = self._observations_for_table(
                 experiment_id, file_id, table, tm
             )
-            observations.extend(obs)
+            table_observations.extend(obs)
             if partial:
                 _add_partial(residual, table, tm, partial)
 
-        n_obs = self._repo.write_observations(observations)
+        # Tier 1: always capture narrative blocks in residual.
+        if narrative_blocks:
+            residual.narrative = [b.model_dump(mode="json") for b in narrative_blocks]
+
+        # Tier 2: optional LLM extraction over narrative blocks.
+        narrative_observations, narrative_stats = self._extract_narrative_observations(
+            experiment_id, file_id, narrative_blocks, table_observations
+        )
+
+        all_observations = table_observations + narrative_observations
+        n_obs = self._repo.write_observations(all_observations)
         n_res = 0
         if any(
             getattr(residual, f) for f in residual.model_fields if getattr(residual, f)
@@ -116,6 +141,114 @@ class IngestionPipeline:
             parse_status="ok",
             observations_written=n_obs,
             residuals_written=n_res,
+            narrative_blocks_captured=len(narrative_blocks),
+            narrative_extractions_kept=narrative_stats["kept"],
+            narrative_extractions_rejected=narrative_stats["rejected"],
+            narrative_extractions_deduped=narrative_stats["deduped"],
+        )
+
+    def _extract_narrative_observations(
+        self,
+        experiment_id: str,
+        file_id: uuid.UUID,
+        blocks: list[NarrativeBlock],
+        table_observations: list[Observation],
+    ) -> tuple[list[Observation], dict[str, int]]:
+        stats = {"kept": 0, "rejected": 0, "deduped": 0}
+        if not blocks or self._narrative_extractor is None:
+            return [], stats
+
+        out: list[Observation] = []
+        for chunk in chunk_blocks(blocks):
+            blocks_by_idx = {
+                b.locator.get("paragraph_idx"): b for b in chunk
+            }
+            extractions = self._narrative_extractor.extract(chunk, self._schema)
+            for ext in extractions:
+                # 1. Schema validation: column must exist in golden schema.
+                if ext.column not in self._schema_index:
+                    stats["rejected"] += 1
+                    continue
+                # 2. Source paragraph must exist in this chunk.
+                src_block = blocks_by_idx.get(ext.source_paragraph_idx)
+                if src_block is None:
+                    stats["rejected"] += 1
+                    continue
+                # 3. Evidence verification.
+                ok, _reason = verify_evidence(ext.evidence, src_block.text, ext.value)
+                if not ok:
+                    stats["rejected"] += 1
+                    continue
+                # 4. Dedup against table observations.
+                if is_dup_of_table_observations(ext, table_observations):
+                    stats["deduped"] += 1
+                    continue
+                # 5. Build the observation.
+                obs = self._build_narrative_observation(
+                    experiment_id, file_id, ext, src_block
+                )
+                out.append(obs)
+                stats["kept"] += 1
+        return out, stats
+
+    def _build_narrative_observation(
+        self,
+        experiment_id: str,
+        file_id: uuid.UUID,
+        ext: NarrativeExtraction,
+        src_block: NarrativeBlock,
+    ) -> Observation:
+        golden = self._schema_index[ext.column]
+        data_type = str(golden.data_type)
+        conversion = self._converter.convert(
+            ext.value, ext.unit, golden.canonical_unit, normalizer=self._normalizer
+        )
+        value_raw = {"value": _coerce(ext.value, data_type), "type": data_type}
+        value_canonical: dict[str, Any] | None = None
+        if conversion.value_canonical is not None:
+            value_canonical = {
+                "value": conversion.value_canonical,
+                "type": data_type,
+                "via": conversion.via,
+                "extracted_via": "narrative_llm",
+            }
+            if conversion.hint is not None:
+                value_canonical["normalization"] = {
+                    "action": conversion.hint.action.value,
+                    "pint_expr": conversion.hint.pint_expr,
+                    "rationale": conversion.hint.rationale,
+                    "confidence": conversion.hint.confidence,
+                    "source": conversion.hint.source,
+                }
+        elif conversion.status == ConversionStatus.NOT_APPLICABLE:
+            # Text columns: store raw with extracted_via marker even though canonical is None.
+            pass
+
+        # Capped confidence: narrative observations never auto-accept.
+        capped_conf = min(ext.confidence, NARRATIVE_CONFIDENCE_CAP)
+        locator = {
+            **src_block.locator,
+            "section": "narrative",
+            "evidence_quote": ext.evidence,
+        }
+        return Observation(
+            observation_id=uuid.uuid4(),
+            experiment_id=experiment_id,
+            file_id=file_id,
+            column_name=ext.column,
+            raw_header=ext.evidence[:80],  # short label for the value source
+            observation_type=ObservationType.REPORTED,  # fixed; LLM does not classify
+            value_raw=value_raw,
+            unit_raw=ext.unit,
+            value_canonical=value_canonical,
+            unit_canonical=conversion.unit_canonical,
+            conversion_status=conversion.status,
+            source_locator=locator,
+            mapping_confidence=capped_conf,
+            extraction_confidence=_extraction_confidence(ext.value, data_type),
+            needs_review=True,  # narrative observations always go to review queue
+            extractor_version=EXTRACTOR_VERSION,
+            extracted_at=datetime.utcnow(),
         )
 
     def _observations_for_table(
@@ -207,7 +340,7 @@ class IngestionPipeline:
                     "confidence": conversion.hint.confidence,
                     "source": conversion.hint.source,
                 }
-        locator = {**table.locator, "row": row_idx, "col": col_idx}
+        locator = {**table.locator, "row": row_idx, "col": col_idx, "section": "table"}
         return Observation(
             observation_id=uuid.uuid4(),
             experiment_id=experiment_id,

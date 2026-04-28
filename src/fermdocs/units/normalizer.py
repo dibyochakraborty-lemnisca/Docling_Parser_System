@@ -164,7 +164,7 @@ class LLMUnitNormalizer:
             provider
             or os.environ.get("FERMDOCS_NORMALIZER_PROVIDER")
             or os.environ.get("FERMDOCS_MAPPER_PROVIDER")
-            or "anthropic"
+            or "gemini"
         ).lower()
         self._cache: dict[tuple[str, str], NormalizationHint] = {}
 
@@ -228,7 +228,7 @@ class LLMUnitNormalizer:
 
         client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
         response = client.models.generate_content(
-            model=os.environ.get("FERMDOCS_GEMINI_MODEL", "gemini-2.5-flash"),
+            model=os.environ.get("FERMDOCS_GEMINI_MODEL", "gemini-3-flash"),
             contents=user_prompt,
             config=types.GenerateContentConfig(
                 system_instruction=self._SYSTEM_PROMPT,

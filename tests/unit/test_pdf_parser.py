@@ -63,14 +63,15 @@ def test_pdf_parser_extracts_tables_with_provenance(tmp_path: Path):
     document = _FakeDocument(tables=[_FakeTable(df=df, page_no=2)])
     parser = DoclingPdfParser(converter=_FakeConverter(document))
 
-    tables = parser.parse(pdf_path)
-    assert len(tables) == 1
-    table = tables[0]
+    result = parser.parse(pdf_path)
+    assert len(result.tables) == 1
+    table = result.tables[0]
     assert table.headers == ["Strain", "Titer (g/L)"]
     assert table.rows == [["HEX-12", "14.2"]]
     assert table.locator["format"] == "pdf"
     assert table.locator["page"] == 2
     assert table.locator["table_idx"] == 0
+    assert table.locator["section"] == "table"
     assert table.table_id == "sample.pdf#p2#t0"
 
 
@@ -79,4 +80,6 @@ def test_pdf_parser_skips_empty_tables(tmp_path: Path):
     pdf_path.write_bytes(b"%PDF-1.4 fake")
     document = _FakeDocument(tables=[_FakeTable(df=pd.DataFrame(), page_no=1)])
     parser = DoclingPdfParser(converter=_FakeConverter(document))
-    assert parser.parse(pdf_path) == []
+    result = parser.parse(pdf_path)
+    assert result.tables == []
+    assert result.narrative_blocks == []

@@ -56,7 +56,12 @@ psql -d fermdocs -c "ALTER USER fermdocs WITH PASSWORD 'fermdocs';"
 
 ```bash
 cp .env.example .env
-# Edit .env: at minimum set DATABASE_URL and one LLM API key.
+# Edit .env. At minimum:
+#   - DATABASE_URL   (Postgres connection string)
+#   - GEMINI_API_KEY (default provider; get one at https://aistudio.google.com/apikey)
+# Or switch to Anthropic:
+#   - FERMDOCS_MAPPER_PROVIDER=anthropic
+#   - ANTHROPIC_API_KEY=sk-ant-...
 set -a; source .env; set +a
 ```
 
@@ -85,6 +90,8 @@ fermdocs ingest \
 cat /tmp/EXP-001.dossier.json | head -50
 ```
 
+The `--fake-mapper` flag forces all LLM tiers off (mapper, unit normalizer, narrative extractor). Drop it for real LLM-backed ingest -- Gemini is the default provider.
+
 What happened:
 
 1. The CSV got parsed into one `ParsedTable`.
@@ -93,17 +100,23 @@ What happened:
 4. `Repository` wrote 16 observations into Postgres.
 5. `build_dossier` projected those rows into a versioned JSON envelope.
 
-Now with a real LLM:
+Now with a real LLM (Gemini is the default; drop `--provider` to use the env var):
 
 ```bash
 fermdocs ingest \
   --experiment-id EXP-002 \
   --files tests/fixtures/sample_run.csv \
-  --provider gemini \
   --out /tmp/EXP-002.dossier.json
 ```
 
 Compare the dossiers. Confidence scores will differ; the mappings should mostly agree.
+
+If you ingest a PDF with prose, three things happen by default:
+1. The header mapper (`gemini-3-flash`) maps table columns.
+2. The LLM unit normalizer fires for any unit pint can't parse.
+3. The narrative extractor (`gemini-3-pro`) reads paragraphs and pulls values for golden columns, with mandatory evidence verification and dedup against table observations.
+
+Disable any of the three: `--no-llm-normalizer`, `--no-extract-narrative`, or `--fake-mapper` (forces all LLM tiers off).
 
 ---
 
@@ -337,11 +350,11 @@ All behavior is environment-configurable. The full list is in `.env.example`; th
 DATABASE_URL=postgresql+psycopg://fermdocs:fermdocs@localhost:5432/fermdocs
 
 # Mapper provider
-FERMDOCS_MAPPER_PROVIDER=anthropic      # or 'gemini' or 'fake'
-ANTHROPIC_API_KEY=sk-ant-...            # if using Anthropic
-GEMINI_API_KEY=AI...                    # if using Gemini
+FERMDOCS_MAPPER_PROVIDER=gemini         # default; alternatives: 'anthropic' or 'fake'
+GEMINI_API_KEY=AI...                    # required if using Gemini (default)
+ANTHROPIC_API_KEY=sk-ant-...            # required if FERMDOCS_MAPPER_PROVIDER=anthropic
+FERMDOCS_GEMINI_MODEL=gemini-3-flash
 FERMDOCS_MAPPER_MODEL=claude-haiku-4-5-20251001
-FERMDOCS_GEMINI_MODEL=gemini-2.5-flash
 
 # Storage
 FERMDOCS_DATA_DIR=./data                # where original files land
@@ -416,7 +429,6 @@ Use these to validate downstream consumers and to lock contracts for a future Ru
 
 ## What's intentionally NOT in v1
 
-- Narrative / free-text extraction (only structured tables today)
 - Figure / chart data extraction (figures stored as references only)
 - Multi-product breakdown columns (one product per experiment_id assumed; see `docs/architecture.md` for the workaround)
 - Self-learning unit hints (one-shot LLM normalization without persistence)
