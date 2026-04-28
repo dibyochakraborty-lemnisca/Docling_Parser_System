@@ -1,0 +1,158 @@
+"""Integration test for the normalizer wired through the full pipeline.
+
+Uses fakes for Repository and FileStore so the test runs without Postgres.
+Exercises: CSV parser -> FakeHeaderMapper -> UnitConverter -> RuleBasedNormalizer
+-> assertion that observations have correct via field and value_canonical shape.
+"""
+from __future__ import annotations
+
+import uuid
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from fermdocs.domain.models import GoldenColumn, GoldenSchema, DataType
+from fermdocs.file_store.base import StoredFile
+from fermdocs.mapping.mapper import FakeHeaderMapper
+from fermdocs.parsing.csv_parser import CsvParser
+from fermdocs.parsing.router import FormatRouter
+from fermdocs.pipeline import IngestionPipeline
+from fermdocs.units.converter import UnitConverter
+from fermdocs.units.normalizer import ChainNormalizer, RuleBasedNormalizer
+
+
+class _FakeRepo:
+    def __init__(self):
+        self.experiments: list[str] = []
+        self.files: dict[uuid.UUID, dict] = {}
+        self.observations: list[Any] = []
+        self.residuals: list[dict] = []
+        self.parsed_marks: list[tuple] = []
+
+    def upsert_experiment(self, experiment_id, name=None, uploaded_by=None):
+        self.experiments.append(experiment_id)
+
+    def find_or_create_file(self, record):
+        self.files[record.file_id] = {"record": record}
+        return record.file_id, True
+
+    def mark_file_parsed(self, file_id, status, error=None, parsed_at=None):
+        self.parsed_marks.append((file_id, status, error))
+
+    def write_observations(self, obs_list):
+        self.observations.extend(obs_list)
+        return len(obs_list)
+
+    def write_residual(self, file_id, experiment_id, payload, extractor_version):
+        self.residuals.append({"file_id": file_id, "payload": payload.model_dump()})
+        return uuid.uuid4()
+
+
+class _FakeFileStore:
+    def __init__(self):
+        self.put_calls = 0
+
+    def put(self, src):
+        self.put_calls += 1
+        return StoredFile(sha256="deadbeef", storage_path=str(src), size_bytes=src.stat().st_size)
+
+    def open(self, storage_path):
+        return Path(storage_path).read_bytes()
+
+
+def _minimal_schema() -> GoldenSchema:
+    return GoldenSchema(
+        version="test-1.0",
+        columns=[
+            GoldenColumn(
+                name="final_titer_g_l",
+                description="final titer",
+                data_type=DataType.FLOAT,
+                canonical_unit="g/L",
+                synonyms=["titer", "final titer"],
+            ),
+            GoldenColumn(
+                name="productivity_g_l_h",
+                description="productivity",
+                data_type=DataType.FLOAT,
+                canonical_unit="g/(L*h)",
+                synonyms=["productivity"],
+            ),
+        ],
+    )
+
+
+@pytest.fixture
+def weird_csv(tmp_path: Path) -> Path:
+    p = tmp_path / "weird.csv"
+    # Final titer uses normal g/L (pint handles directly).
+    # Productivity uses 'of broth' annotation (pint fails: 'of' not a unit)
+    # -> rule-based normalizer strips 'of broth' -> retry pint succeeds.
+    p.write_text(
+        "Final Titer (g/L),Productivity (g/(L*h) of broth)\n"
+        "14.2,0.85\n"
+        "13.6,0.81\n"
+    )
+    return p
+
+
+def test_pipeline_uses_normalizer_for_unicode_superscripts(weird_csv: Path):
+    repo = _FakeRepo()
+    store = _FakeFileStore()
+    router = FormatRouter([CsvParser()])
+    pipeline = IngestionPipeline(
+        router=router,
+        mapper=FakeHeaderMapper(),
+        unit_converter=UnitConverter(),
+        repository=repo,
+        file_store=store,
+        schema=_minimal_schema(),
+        normalizer=ChainNormalizer([RuleBasedNormalizer()]),
+    )
+    result = pipeline.ingest("EXP-INT-1", [weird_csv])
+    assert result.all_ok
+    assert result.files[0].observations_written >= 4
+
+    titer_obs = [o for o in repo.observations if o.column_name == "final_titer_g_l"]
+    productivity_obs = [
+        o for o in repo.observations if o.column_name == "productivity_g_l_h"
+    ]
+    assert len(titer_obs) == 2
+    assert len(productivity_obs) == 2
+
+    # Pint handles g/L directly
+    for o in titer_obs:
+        assert o.value_canonical["via"] == "pint"
+        assert "normalization" not in o.value_canonical
+
+    # Productivity needed the rule-based normalizer (stripped 'of broth')
+    for o in productivity_obs:
+        assert o.value_canonical["via"] == "rule_based"
+        assert o.value_canonical["normalization"]["action"] == "use_pint_expr"
+        assert "of" not in o.value_canonical["normalization"]["pint_expr"]
+
+
+def test_pipeline_without_normalizer_marks_unparseable_units_failed(weird_csv: Path):
+    repo = _FakeRepo()
+    store = _FakeFileStore()
+    router = FormatRouter([CsvParser()])
+    pipeline = IngestionPipeline(
+        router=router,
+        mapper=FakeHeaderMapper(),
+        unit_converter=UnitConverter(),
+        repository=repo,
+        file_store=store,
+        schema=_minimal_schema(),
+        normalizer=None,
+    )
+    result = pipeline.ingest("EXP-INT-2", [weird_csv])
+    assert result.all_ok
+
+    productivity_obs = [
+        o for o in repo.observations if o.column_name == "productivity_g_l_h"
+    ]
+    # Without normalizer, productivity values exist as raw but value_canonical is None
+    for o in productivity_obs:
+        assert o.value_canonical is None
+        assert o.conversion_status == "failed"

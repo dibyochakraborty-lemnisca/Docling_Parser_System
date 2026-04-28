@@ -114,12 +114,17 @@ class Observation(BaseModel):
     extracted_at: datetime
 
     def to_dossier_observation(self) -> dict[str, Any]:
-        """Project to the dossier JSON shape. Single source of truth for serialization."""
+        """Project to the dossier JSON shape. Single source of truth for serialization.
+
+        Backward-compatible: pre-normalizer observations have value_canonical without
+        a 'via' field. The .get() calls below tolerate missing keys.
+        """
         combined = (
             (self.mapping_confidence or 0.0) * (self.extraction_confidence or 0.0)
             if self.mapping_confidence is not None and self.extraction_confidence is not None
             else None
         )
+        canonical = self.value_canonical or {}
         return {
             "observation_id": str(self.observation_id),
             "value": (self.value_canonical or self.value_raw).get("value"),
@@ -140,6 +145,8 @@ class Observation(BaseModel):
             },
             "conversion_status": self.conversion_status,
             "extractor_version": self.extractor_version,
+            "via": canonical.get("via"),
+            "normalization": canonical.get("normalization"),
         }
 
 

@@ -6,6 +6,8 @@ from datetime import datetime
 from pathlib import Path
 
 from fermdocs.domain.golden_schema import load_schema
+from typing import Any
+
 from fermdocs.domain.models import (
     ConfidenceBand,
     GoldenSchema,
@@ -24,6 +26,7 @@ from fermdocs.mapping.mapper import HeaderMapper
 from fermdocs.parsing.router import FormatRouter
 from fermdocs.storage.repository import FileRecord, Repository
 from fermdocs.units.converter import UnitConverter
+from fermdocs.units.normalizer import UnitNormalizer
 
 EXTRACTOR_VERSION = "v0.1.0"
 
@@ -37,6 +40,7 @@ class IngestionPipeline:
         repository: Repository,
         file_store: FileStore,
         schema: GoldenSchema | None = None,
+        normalizer: UnitNormalizer | None = None,
     ):
         self._router = router
         self._mapper = mapper
@@ -45,6 +49,7 @@ class IngestionPipeline:
         self._files = file_store
         self._schema = schema or load_schema()
         self._schema_index = self._schema.by_name()
+        self._normalizer = normalizer
 
     def ingest(self, experiment_id: str, files: list[Path]) -> IngestionResult:
         self._repo.upsert_experiment(experiment_id)
@@ -183,13 +188,25 @@ class IngestionPipeline:
         col_idx: int,
         decision: ConfidenceBand,
     ) -> Observation:
-        conversion = self._converter.convert(raw_value, entry.raw_unit, golden_unit)
-        value_raw = {"value": _coerce(raw_value, data_type), "type": data_type}
-        value_canonical = (
-            {"value": conversion.value_canonical, "type": data_type}
-            if conversion.value_canonical is not None
-            else None
+        conversion = self._converter.convert(
+            raw_value, entry.raw_unit, golden_unit, normalizer=self._normalizer
         )
+        value_raw = {"value": _coerce(raw_value, data_type), "type": data_type}
+        value_canonical: dict[str, Any] | None = None
+        if conversion.value_canonical is not None:
+            value_canonical = {
+                "value": conversion.value_canonical,
+                "type": data_type,
+                "via": conversion.via,
+            }
+            if conversion.hint is not None:
+                value_canonical["normalization"] = {
+                    "action": conversion.hint.action.value,
+                    "pint_expr": conversion.hint.pint_expr,
+                    "rationale": conversion.hint.rationale,
+                    "confidence": conversion.hint.confidence,
+                    "source": conversion.hint.source,
+                }
         locator = {**table.locator, "row": row_idx, "col": col_idx}
         return Observation(
             observation_id=uuid.uuid4(),

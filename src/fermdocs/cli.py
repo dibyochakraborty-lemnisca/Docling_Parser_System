@@ -12,6 +12,7 @@ from fermdocs.dossier import build_dossier
 from fermdocs.file_store.local import LocalFileStore
 from fermdocs.mapping.client import dump_response_schema
 from fermdocs.mapping.factory import build_mapper
+from fermdocs.units.normalizer import build_default_normalizer
 from fermdocs.parsing.csv_parser import CsvParser
 from fermdocs.parsing.excel_parser import ExcelParser
 from fermdocs.parsing.pdf_parser import DoclingPdfParser
@@ -30,7 +31,10 @@ EXIT_PARTIAL = 5
 
 
 def _build_pipeline(
-    schema_path: str | None, use_fake_mapper: bool, provider: str | None = None
+    schema_path: str | None,
+    use_fake_mapper: bool,
+    provider: str | None = None,
+    llm_normalizer: bool | None = None,
 ) -> tuple[IngestionPipeline, Repository]:
     db_url = os.environ.get("DATABASE_URL")
     if not db_url:
@@ -46,8 +50,18 @@ def _build_pipeline(
     file_store = LocalFileStore()
     schema = load_schema(schema_path) if schema_path else None
 
+    use_llm = (
+        llm_normalizer
+        if llm_normalizer is not None
+        else os.environ.get("FERMDOCS_USE_LLM_NORMALIZER", "false").lower() == "true"
+    )
+    if use_fake_mapper:
+        use_llm = False  # offline runs stay offline
+    normalizer_provider = os.environ.get("FERMDOCS_NORMALIZER_PROVIDER") or provider
+    normalizer = build_default_normalizer(use_llm=use_llm, provider=normalizer_provider)
+
     return (
-        IngestionPipeline(router, mapper, converter, repo, file_store, schema),
+        IngestionPipeline(router, mapper, converter, repo, file_store, schema, normalizer),
         repo,
     )
 
@@ -76,6 +90,15 @@ def cli(ctx: click.Context, print_schema: str | None) -> None:
     default=None,
     help="LLM provider for the header mapper. Defaults to FERMDOCS_MAPPER_PROVIDER or 'anthropic'.",
 )
+@click.option(
+    "--llm-normalizer/--no-llm-normalizer",
+    "llm_normalizer",
+    default=None,
+    help=(
+        "Enable the LLM unit normalizer fallback for unit strings pint cannot parse. "
+        "Defaults to FERMDOCS_USE_LLM_NORMALIZER (off)."
+    ),
+)
 def ingest(
     experiment_id: str,
     files: tuple[Path, ...],
@@ -83,10 +106,11 @@ def ingest(
     schema_path: str | None,
     fake_mapper: bool,
     provider: str | None,
+    llm_normalizer: bool | None,
 ) -> None:
     """Ingest files for an experiment, then optionally write a dossier JSON."""
     try:
-        pipeline, repo = _build_pipeline(schema_path, fake_mapper, provider)
+        pipeline, repo = _build_pipeline(schema_path, fake_mapper, provider, llm_normalizer)
     except Exception as e:
         click.echo(f"db init failed: {e}", err=True)
         sys.exit(EXIT_DB)
