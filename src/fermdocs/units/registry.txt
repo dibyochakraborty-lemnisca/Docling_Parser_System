@@ -1,0 +1,6 @@
+# Custom units for fermentation. Treated as dimensionless because they don't
+# fit pint's SI dimensions (logarithmic, fractional, count-based).
+pH = [pH_unit]
+OD600 = [OD_unit]
+fold_change = [fold_unit]
+log_cfu_per_ml = [log_cfu_unit]

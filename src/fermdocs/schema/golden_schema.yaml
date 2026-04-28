@@ -1,0 +1,131 @@
+version: "1.0"
+columns:
+  - name: experiment_id
+    description: Unique identifier for the fermentation experiment.
+    data_type: text
+    canonical_unit: null
+    synonyms: [batch_id, run_id, exp_id, experiment, run]
+    examples:
+      - {raw_header: "Experiment ID"}
+      - {raw_header: "Batch"}
+      - {raw_header: "Run #"}
+
+  - name: strain_id
+    description: Strain identifier for the producing organism.
+    data_type: text
+    canonical_unit: null
+    synonyms: [strain, strain_name, organism_id]
+    examples:
+      - {raw_header: "Strain"}
+      - {raw_header: "Strain ID"}
+
+  - name: organism
+    description: Organism scientific or common name.
+    data_type: text
+    canonical_unit: null
+    synonyms: [species, microbe, host, host_organism]
+    examples:
+      - {raw_header: "Organism"}
+      - {raw_header: "Species"}
+
+  - name: product
+    description: Target metabolite, protein, or compound.
+    data_type: text
+    canonical_unit: null
+    synonyms: [target, metabolite, compound, product_of_interest]
+    examples:
+      - {raw_header: "Product"}
+      - {raw_header: "Target compound"}
+
+  - name: working_volume_l
+    description: Bioreactor working volume.
+    data_type: float
+    canonical_unit: L
+    synonyms: [volume, working_volume, working volume, V_w]
+    examples:
+      - {raw_header: "Working Volume (L)"}
+      - {raw_header: "Volume [L]"}
+      - {raw_header: "V_w (mL)"}
+
+  - name: temperature_c
+    description: Cultivation temperature.
+    data_type: float
+    canonical_unit: degC
+    synonyms: [temp, temperature, T, cultivation_temp]
+    examples:
+      - {raw_header: "Temperature (°C)"}
+      - {raw_header: "Temp [C]"}
+      - {raw_header: "T (°F)"}
+
+  - name: ph_setpoint
+    description: pH setpoint controlled during fermentation.
+    data_type: float
+    canonical_unit: pH
+    synonyms: [pH, pH_sp, pH_target]
+    examples:
+      - {raw_header: "pH"}
+      - {raw_header: "pH setpoint"}
+
+  - name: do_setpoint_percent
+    description: Dissolved oxygen setpoint as percent saturation.
+    data_type: float
+    canonical_unit: percent
+    synonyms: [DO, dissolved_oxygen]
+    examples:
+      - {raw_header: "DO (%)"}
+      - {raw_header: "Dissolved O2 setpoint"}
+
+  - name: agitation_rpm
+    description: Stirrer speed.
+    data_type: float
+    canonical_unit: rpm
+    synonyms: [stirrer, agitation, RPM, N]
+    examples:
+      - {raw_header: "RPM"}
+      - {raw_header: "Agitation (rpm)"}
+
+  - name: duration_h
+    description: Total fermentation duration.
+    data_type: float
+    canonical_unit: hour
+    synonyms: [duration, run_time, fermentation_time]
+    examples:
+      - {raw_header: "Duration (h)"}
+      - {raw_header: "Time (hr)"}
+
+  - name: harvest_od600
+    description: Optical density at 600 nm at harvest.
+    data_type: float
+    canonical_unit: OD600
+    synonyms: [final_OD, final OD600, harvest_OD, harvest OD, OD_h, A600]
+    examples:
+      - {raw_header: "Final OD600"}
+      - {raw_header: "Harvest OD"}
+
+  - name: final_titer_g_l
+    description: Final product titer at end of fermentation.
+    data_type: float
+    canonical_unit: g/L
+    synonyms: [titer, product_titer, final_concentration]
+    examples:
+      - {raw_header: "Titer (g/L)"}
+      - {raw_header: "Final Titer"}
+      - {raw_header: "Product conc. [mg/mL]"}
+
+  - name: yield_g_g
+    description: Product yield per substrate consumed.
+    data_type: float
+    canonical_unit: g/g
+    synonyms: [yield, Y_ps]
+    examples:
+      - {raw_header: "Yield (g/g)"}
+      - {raw_header: "Y_p/s"}
+
+  - name: productivity_g_l_h
+    description: Volumetric productivity.
+    data_type: float
+    canonical_unit: g/L/hour
+    synonyms: [productivity, Q_p]
+    examples:
+      - {raw_header: "Productivity (g/L/h)"}
+      - {raw_header: "Q_P [g L^-1 h^-1]"}
