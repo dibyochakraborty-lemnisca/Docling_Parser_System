@@ -8,7 +8,7 @@ This README is a tour for someone who just cloned the repo. If you want the desi
 
 ## What it does, in one paragraph
 
-You hand `fermdocs` an experiment ID and a bunch of files. It parses each file into tables, asks an LLM (Anthropic or Gemini) to map raw headers like `"Titer (g/L)"` to canonical golden columns like `final_titer_g_l`, normalizes units via pint, stores every value with full provenance back to the source cell, and produces a JSON dossier for the next agent in your pipeline. Anything that doesn't map cleanly lands in a JSONB residual blob, never lost. Re-ingesting the same file is a no-op (sha256 dedup). The LLM never invents numeric values; it only emits mappings and unit-normalization hints.
+You hand `fermdocs` an experiment ID and a bunch of files. It parses each file into tables, asks an LLM (Anthropic or Gemini) to map raw headers like `"Biomass (X)"` to canonical golden columns like `biomass_g_l`, normalizes units via pint, stores every value with full provenance back to the source cell, and produces a JSON dossier for the next agent in your pipeline. Anything that doesn't map cleanly lands in a JSONB residual blob, never lost. Re-ingesting the same file is a no-op (sha256 dedup). The LLM never invents numeric values; it only emits mappings and unit-normalization hints.
 
 ---
 

@@ -66,18 +66,18 @@ def _minimal_schema() -> GoldenSchema:
         version="test-1.0",
         columns=[
             GoldenColumn(
-                name="final_titer_g_l",
-                description="final titer",
+                name="biomass_g_l",
+                description="biomass",
                 data_type=DataType.FLOAT,
                 canonical_unit="g/L",
-                synonyms=["titer", "final titer"],
+                synonyms=["biomass", "X"],
             ),
             GoldenColumn(
-                name="productivity_g_l_h",
-                description="productivity",
+                name="volume_l",
+                description="volume",
                 data_type=DataType.FLOAT,
-                canonical_unit="g/(L*h)",
-                synonyms=["productivity"],
+                canonical_unit="L",
+                synonyms=["volume"],
             ),
         ],
     )
@@ -86,13 +86,13 @@ def _minimal_schema() -> GoldenSchema:
 @pytest.fixture
 def weird_csv(tmp_path: Path) -> Path:
     p = tmp_path / "weird.csv"
-    # Final titer uses normal g/L (pint handles directly).
-    # Productivity uses 'of broth' annotation (pint fails: 'of' not a unit)
+    # Biomass uses normal g/L (pint handles directly).
+    # Volume uses 'of broth' annotation (pint fails: 'of' not a unit)
     # -> rule-based normalizer strips 'of broth' -> retry pint succeeds.
     p.write_text(
-        "Final Titer (g/L),Productivity (g/(L*h) of broth)\n"
-        "14.2,0.85\n"
-        "13.6,0.81\n"
+        "Biomass (g/L),Volume (L of broth)\n"
+        "0.5,58000\n"
+        "0.6,58100\n"
     )
     return p
 
@@ -114,20 +114,20 @@ def test_pipeline_uses_normalizer_for_unicode_superscripts(weird_csv: Path):
     assert result.all_ok
     assert result.files[0].observations_written >= 4
 
-    titer_obs = [o for o in repo.observations if o.column_name == "final_titer_g_l"]
-    productivity_obs = [
-        o for o in repo.observations if o.column_name == "productivity_g_l_h"
+    biomass_obs = [o for o in repo.observations if o.column_name == "biomass_g_l"]
+    volume_obs = [
+        o for o in repo.observations if o.column_name == "volume_l"
     ]
-    assert len(titer_obs) == 2
-    assert len(productivity_obs) == 2
+    assert len(biomass_obs) == 2
+    assert len(volume_obs) == 2
 
     # Pint handles g/L directly
-    for o in titer_obs:
+    for o in biomass_obs:
         assert o.value_canonical["via"] == "pint"
         assert "normalization" not in o.value_canonical
 
-    # Productivity needed the rule-based normalizer (stripped 'of broth')
-    for o in productivity_obs:
+    # Volume needed the rule-based normalizer (stripped 'of broth')
+    for o in volume_obs:
         assert o.value_canonical["via"] == "rule_based"
         assert o.value_canonical["normalization"]["action"] == "use_pint_expr"
         assert "of" not in o.value_canonical["normalization"]["pint_expr"]
@@ -149,10 +149,10 @@ def test_pipeline_without_normalizer_marks_unparseable_units_failed(weird_csv: P
     result = pipeline.ingest("EXP-INT-2", [weird_csv])
     assert result.all_ok
 
-    productivity_obs = [
-        o for o in repo.observations if o.column_name == "productivity_g_l_h"
+    volume_obs = [
+        o for o in repo.observations if o.column_name == "volume_l"
     ]
-    # Without normalizer, productivity values exist as raw but value_canonical is None
-    for o in productivity_obs:
+    # Without normalizer, volume values exist as raw but value_canonical is None
+    for o in volume_obs:
         assert o.value_canonical is None
         assert o.conversion_status == "failed"

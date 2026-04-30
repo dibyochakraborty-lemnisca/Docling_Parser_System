@@ -69,11 +69,11 @@ def _schema() -> GoldenSchema:
     return GoldenSchema(
         version="test-1.0",
         columns=[
-            GoldenColumn(name="final_titer_g_l", description="titer",
+            GoldenColumn(name="biomass_g_l", description="biomass",
                          data_type=DataType.FLOAT, canonical_unit="g/L",
-                         synonyms=["titer"]),
-            GoldenColumn(name="temperature_c", description="temp",
-                         data_type=DataType.FLOAT, canonical_unit="degC",
+                         synonyms=["biomass", "X"]),
+            GoldenColumn(name="temperature_k", description="temp",
+                         data_type=DataType.FLOAT, canonical_unit="K",
                          synonyms=["temp", "temperature"]),
             GoldenColumn(name="strain_id", description="strain",
                          data_type=DataType.TEXT, canonical_unit=None,
@@ -95,12 +95,12 @@ def _build_pipeline_with_extractor(extractor):
 
 
 def _make_doc() -> _FakeConverter:
-    df = pd.DataFrame({"Titer (g/L)": ["14.2"]})
+    df = pd.DataFrame({"Biomass (g/L)": ["0.5"]})
     doc = _FakeDocument(
         tables=[_FakeTable(df=df, page_no=1)],
         texts=[
             _FakeText(
-                text="The reactor was operated at 30 degrees C with strain HEX-12.",
+                text="The reactor was operated at 297 K with strain HEX-12.",
                 label="text", page_no=1,
             ),
         ],
@@ -124,16 +124,16 @@ def test_narrative_blocks_always_captured_in_residual(pdf_path: Path):
     assert len(repo.residuals) == 1
     narrative = repo.residuals[0]["payload"]["narrative"]
     assert len(narrative) == 1
-    assert "30 degrees C" in narrative[0]["text"]
+    assert "297 K" in narrative[0]["text"]
 
 
 def test_valid_extraction_yields_narrative_observation(pdf_path: Path):
     extractor = _ScriptedExtractor([
         NarrativeExtraction(
-            column="temperature_c",
-            value=30,
-            unit="degC",
-            evidence="operated at 30 degrees C",
+            column="temperature_k",
+            value=297,
+            unit="K",
+            evidence="operated at 297 K",
             source_paragraph_idx=0,
             confidence=0.95,
         ),
@@ -148,20 +148,20 @@ def test_valid_extraction_yields_narrative_observation(pdf_path: Path):
     ]
     assert len(narrative_obs) == 1
     obs = narrative_obs[0]
-    assert obs.column_name == "temperature_c"
+    assert obs.column_name == "temperature_k"
     # Confidence cap applied: input 0.95 -> capped at 0.85
     assert obs.mapping_confidence == 0.85
     assert obs.needs_review is True
     assert obs.value_canonical["extracted_via"] == "narrative_llm"
-    assert obs.source_locator["evidence_quote"] == "operated at 30 degrees C"
+    assert obs.source_locator["evidence_quote"] == "operated at 297 K"
 
 
 def test_hallucinated_evidence_rejected(pdf_path: Path):
     extractor = _ScriptedExtractor([
         NarrativeExtraction(
-            column="temperature_c",
-            value=30,
-            unit="degC",
+            column="temperature_k",
+            value=297,
+            unit="K",
             evidence="this string is not in the source paragraph",
             source_paragraph_idx=0,
             confidence=0.95,
@@ -182,8 +182,8 @@ def test_invalid_column_rejected(pdf_path: Path):
     extractor = _ScriptedExtractor([
         NarrativeExtraction(
             column="nonexistent_column",
-            value=30,
-            evidence="30 degrees C",
+            value=297,
+            evidence="297 K",
             source_paragraph_idx=0,
             confidence=0.95,
         ),
@@ -200,29 +200,24 @@ def test_invalid_column_rejected(pdf_path: Path):
 
 
 def test_dedup_against_table_observation(pdf_path: Path):
-    """If table reports titer=14.2 and prose also says 14.2, narrative is dropped."""
-    # The fake table has Titer (g/L) = 14.2 in the doc above.
-    # Using FakeHeaderMapper: 'Titer (g/L)' would not map (no exact synonym match),
-    # so the table won't produce a final_titer_g_l observation in this test.
-    # Use 'titer' synonym instead by overriding the schema column in the local doc.
-    # For dedup, we need a real table observation; use a column the FakeMapper handles.
-    # Use a custom doc where the table header is 'titer' (a synonym).
-    df = pd.DataFrame({"titer": ["14.2"]})
+    """If table reports biomass=0.5 and prose also says 0.5, narrative is dropped."""
+    # Use 'biomass' synonym so FakeHeaderMapper resolves the table column.
+    df = pd.DataFrame({"biomass": ["0.5"]})
     doc = _FakeDocument(
         tables=[_FakeTable(df=df, page_no=1)],
         texts=[
             _FakeText(
-                text="The final titer reached 14.2 g/L at end of run.",
+                text="Final biomass reached 0.5 g/L at end of run.",
                 label="text", page_no=1,
             ),
         ],
     )
     extractor = _ScriptedExtractor([
         NarrativeExtraction(
-            column="final_titer_g_l",
-            value=14.2,
+            column="biomass_g_l",
+            value=0.5,
             unit="g/L",
-            evidence="final titer reached 14.2 g/L",
+            evidence="Final biomass reached 0.5 g/L",
             source_paragraph_idx=0,
             confidence=0.92,
         ),

@@ -575,7 +575,7 @@ Each `observation` (from `Observation.to_dossier_observation()`):
 }
 ```
 
-**Multiple observations per column is intentional.** When two files in the same experiment both report `final_titer_g_l`, the dossier shows both, with their provenance. The next agent decides what to do (e.g., compare planned vs measured, flag contradictions). No resolver collapses them.
+**Multiple observations per column is intentional.** When two files in the same experiment both report `biomass_g_l`, the dossier shows both, with their provenance. The next agent decides what to do (e.g., compare planned vs measured, flag contradictions). No resolver collapses them.
 
 ---
 
@@ -723,7 +723,7 @@ The dossier-builder filters `superseded_by IS NULL`, so once superseded, old LLM
 
 | Term | Meaning |
 |---|---|
-| **Golden column** | A canonical fermentation field defined in `golden_schema.yaml` (e.g., `final_titer_g_l`) |
+| **Golden column** | A canonical fermentation field defined in `golden_schema.yaml` (e.g., `biomass_g_l`) |
 | **Tier 1 / Tier 2 / Tier 3** | Identity columns / common KPIs / residual JSONB. Implicit in the current schema. |
 | **Observation** | One value extracted from one cell, with provenance. Multiple observations per (experiment, column) are normal. |
 | **Provenance** | The chain `(experiment_id, file_id, source_locator, raw_header)` that points back to a specific cell. |

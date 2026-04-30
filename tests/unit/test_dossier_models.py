@@ -15,12 +15,12 @@ def test_observation_to_dossier_includes_all_keys():
         observation_id=uuid.uuid4(),
         experiment_id="EXP-1",
         file_id=uuid.uuid4(),
-        column_name="final_titer_g_l",
-        raw_header="Titer (g/L)",
+        column_name="biomass_g_l",
+        raw_header="Biomass (X)",
         observation_type=ObservationType.MEASURED,
-        value_raw={"value": 14.2, "type": "float"},
+        value_raw={"value": 0.5, "type": "float"},
         unit_raw="g/L",
-        value_canonical={"value": 14.2, "type": "float"},
+        value_canonical={"value": 0.5, "type": "float"},
         unit_canonical="g/L",
         conversion_status=ConversionStatus.OK,
         source_locator={"format": "csv", "row": 0, "col": 6},
@@ -31,8 +31,8 @@ def test_observation_to_dossier_includes_all_keys():
         extracted_at=datetime.now(timezone.utc),
     )
     out = o.to_dossier_observation()
-    assert out["value"] == 14.2
+    assert out["value"] == 0.5
     assert out["unit"] == "g/L"
     assert out["confidence"]["combined"] == 0.95
-    assert out["source"]["raw_header"] == "Titer (g/L)"
+    assert out["source"]["raw_header"] == "Biomass (X)"
     assert out["source"]["locator"]["row"] == 0

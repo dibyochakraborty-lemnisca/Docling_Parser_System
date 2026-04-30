@@ -46,31 +46,31 @@ def _ext(column: str, value: float) -> NarrativeExtraction:
 
 
 def test_exact_value_match_is_dup():
-    table = [_table_obs("final_titer_g_l", 14.2)]
-    assert is_dup_of_table_observations(_ext("final_titer_g_l", 14.2), table)
+    table = [_table_obs("biomass_g_l", 14.2)]
+    assert is_dup_of_table_observations(_ext("biomass_g_l", 14.2), table)
 
 
 def test_close_value_match_is_dup():
-    table = [_table_obs("final_titer_g_l", 14.2)]
-    assert is_dup_of_table_observations(_ext("final_titer_g_l", 14.20001), table)
+    table = [_table_obs("biomass_g_l", 14.2)]
+    assert is_dup_of_table_observations(_ext("biomass_g_l", 14.20001), table)
 
 
 def test_different_value_not_dup():
-    table = [_table_obs("final_titer_g_l", 14.2)]
-    assert not is_dup_of_table_observations(_ext("final_titer_g_l", 13.6), table)
+    table = [_table_obs("biomass_g_l", 14.2)]
+    assert not is_dup_of_table_observations(_ext("biomass_g_l", 13.6), table)
 
 
 def test_different_column_not_dup():
-    table = [_table_obs("final_titer_g_l", 14.2)]
-    assert not is_dup_of_table_observations(_ext("yield_g_g", 14.2), table)
+    table = [_table_obs("biomass_g_l", 14.2)]
+    assert not is_dup_of_table_observations(_ext("substrate_g_l", 14.2), table)
 
 
 def test_no_table_observations_not_dup():
-    assert not is_dup_of_table_observations(_ext("final_titer_g_l", 14.2), [])
+    assert not is_dup_of_table_observations(_ext("biomass_g_l", 14.2), [])
 
 
 def test_narrative_observation_does_not_dedup_against_self():
     """Only table observations count for dedup, not other narrative ones."""
-    narr_obs = _table_obs("final_titer_g_l", 14.2)
+    narr_obs = _table_obs("biomass_g_l", 14.2)
     narr_obs.source_locator = {"format": "pdf", "section": "narrative"}
-    assert not is_dup_of_table_observations(_ext("final_titer_g_l", 14.2), [narr_obs])
+    assert not is_dup_of_table_observations(_ext("biomass_g_l", 14.2), [narr_obs])
