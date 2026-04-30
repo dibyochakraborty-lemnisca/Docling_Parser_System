@@ -5,7 +5,9 @@ from enum import Enum
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+import math
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class DataType(str, Enum):
@@ -39,9 +41,25 @@ class GoldenColumn(BaseModel):
     description: str
     data_type: DataType
     canonical_unit: str | None = None
+    nominal: float | None = None
+    std_dev: float | None = None
     synonyms: list[str] = Field(default_factory=list)
     observation_types: list[ObservationType] = Field(default_factory=list)
     examples: list[GoldenColumnExample] = Field(default_factory=list)
+
+    @field_validator("nominal", "std_dev")
+    @classmethod
+    def _finite(cls, v: float | None) -> float | None:
+        if v is not None and not math.isfinite(v):
+            raise ValueError("must be a finite number (got inf or nan)")
+        return v
+
+    @field_validator("std_dev")
+    @classmethod
+    def _non_negative(cls, v: float | None) -> float | None:
+        if v is not None and v < 0:
+            raise ValueError("std_dev must be >= 0")
+        return v
 
 
 class GoldenSchema(BaseModel):
@@ -148,6 +166,7 @@ class Observation(BaseModel):
     extraction_confidence: float | None = None
     needs_review: bool = False
     extractor_version: str
+    schema_version: str | None = None
     superseded_by: UUID | None = None
     extracted_at: datetime
 
