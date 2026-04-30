@@ -82,6 +82,7 @@ class ObservationRow(Base):
     extraction_confidence: Mapped[float | None] = mapped_column(Numeric)
     needs_review: Mapped[bool] = mapped_column(Boolean, default=False)
     extractor_version: Mapped[str] = mapped_column(String, nullable=False)
+    schema_version: Mapped[str | None] = mapped_column(String)
     superseded_by: Mapped[uuid.UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("golden_observations.observation_id")
     )

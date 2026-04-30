@@ -116,6 +116,7 @@ class Repository:
                         extraction_confidence=o.extraction_confidence,
                         needs_review=o.needs_review,
                         extractor_version=o.extractor_version,
+                        schema_version=o.schema_version,
                     )
                     for o in observations
                 ]
@@ -211,6 +212,7 @@ class Repository:
                 else None,
                 "needs_review": row.needs_review,
                 "extractor_version": row.extractor_version,
+                "schema_version": row.schema_version,
                 "superseded_by": row.superseded_by,
                 "extracted_at": row.extracted_at,
             }

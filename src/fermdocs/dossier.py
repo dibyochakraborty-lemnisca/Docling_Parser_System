@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from typing import Any
 
@@ -7,6 +8,8 @@ from fermdocs.domain.golden_schema import load_schema
 from fermdocs.storage.repository import Repository
 
 DOSSIER_SCHEMA_VERSION = "1.0"
+
+_log = logging.getLogger(__name__)
 
 
 def build_dossier(experiment_id: str, repository: Repository) -> dict[str, Any]:
@@ -21,9 +24,21 @@ def build_dossier(experiment_id: str, repository: Repository) -> dict[str, Any]:
     residuals = repository.fetch_residuals(experiment_id)
 
     by_column: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    stale_versions: set[str] = set()
     for row in obs_rows:
         obs = repository.row_to_observation(row)
+        if obs.schema_version is not None and obs.schema_version != schema.version:
+            stale_versions.add(obs.schema_version)
         by_column[obs.column_name].append(obs.to_dossier_observation())
+
+    if stale_versions:
+        _log.warning(
+            "experiment %s has observations from older schema versions %s; "
+            "current schema is %s. Mappings and unit semantics may have shifted.",
+            experiment_id,
+            sorted(stale_versions),
+            schema.version,
+        )
 
     golden_columns: dict[str, Any] = {}
     for col_name, observations in by_column.items():
@@ -108,6 +123,7 @@ def build_dossier(experiment_id: str, repository: Repository) -> dict[str, Any]:
             "golden_coverage_percent": coverage_percent,
             "files_failed_to_parse": files_failed,
             "schema_version": schema.version,
+            "stale_schema_versions": sorted(stale_versions),
             "narrative_blocks_captured": narrative_blocks_total,
             "narrative_observations": narrative_kept,
         },

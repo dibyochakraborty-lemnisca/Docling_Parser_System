@@ -248,6 +248,7 @@ class IngestionPipeline:
             extraction_confidence=_extraction_confidence(ext.value, data_type),
             needs_review=True,  # narrative observations always go to review queue
             extractor_version=EXTRACTOR_VERSION,
+            schema_version=self._schema.version,
             extracted_at=datetime.utcnow(),
         )
 
@@ -358,6 +359,7 @@ class IngestionPipeline:
             extraction_confidence=_extraction_confidence(raw_value, data_type),
             needs_review=(decision == ConfidenceBand.NEEDS_REVIEW),
             extractor_version=EXTRACTOR_VERSION,
+            schema_version=self._schema.version,
             extracted_at=datetime.utcnow(),
         )
 
