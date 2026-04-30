@@ -1,4 +1,4 @@
-version: "1.0"
+version: "2.0"
 columns:
   - name: experiment_id
     description: Unique identifier for the fermentation experiment.
@@ -37,95 +37,145 @@ columns:
       - {raw_header: "Product"}
       - {raw_header: "Target compound"}
 
-  - name: working_volume_l
+  - name: biomass_g_l
+    description: Biomass concentration (X).
+    data_type: float
+    canonical_unit: g/L
+    nominal: 0.5
+    std_dev: 0.05
+    synonyms: [biomass, X, cell_concentration, cell_density, DCW, dry_cell_weight]
+    examples:
+      - {raw_header: "Biomass (X)"}
+      - {raw_header: "X [g/L]"}
+      - {raw_header: "DCW (g/L)"}
+
+  - name: mu_x_max_per_h
+    description: Maximum specific growth rate.
+    data_type: float
+    canonical_unit: h^-1
+    nominal: 0.41
+    std_dev: 0.025
+    synonyms: [mu_x, mu_x_max, mu_max, max_specific_growth_rate, mumax]
+    examples:
+      - {raw_header: "mu_x (max)"}
+      - {raw_header: "mu_max [h^-1]"}
+      - {raw_header: "μ_x max"}
+
+  - name: mu_p_max_per_h
+    description: Maximum specific product formation rate.
+    data_type: float
+    canonical_unit: h^-1
+    nominal: 0.041
+    std_dev: 0.0025
+    synonyms: [mu_p, mu_p_max, q_p_max, max_specific_product_rate]
+    examples:
+      - {raw_header: "mu_p (max)"}
+      - {raw_header: "μ_p max"}
+      - {raw_header: "q_P max [h^-1]"}
+
+  - name: substrate_g_l
+    description: Substrate concentration (S).
+    data_type: float
+    canonical_unit: g/L
+    nominal: 1.0
+    std_dev: 0.1
+    synonyms: [substrate, S, sugar, carbon_source, glucose]
+    examples:
+      - {raw_header: "Substrate (S)"}
+      - {raw_header: "S [g/L]"}
+      - {raw_header: "Glucose (g/L)"}
+
+  - name: dissolved_o2_mg_l
+    description: Dissolved oxygen concentration.
+    data_type: float
+    canonical_unit: mg/L
+    nominal: 15.0
+    std_dev: 0.5
+    synonyms: [DO, dissolved_oxygen, dO2, DO_mg_l]
+    examples:
+      - {raw_header: "Dissolved O2"}
+      - {raw_header: "DO (mg/L)"}
+      - {raw_header: "dO2 [mg L^-1]"}
+
+  - name: volume_l
     description: Bioreactor working volume.
     data_type: float
     canonical_unit: L
-    synonyms: [volume, working_volume, working volume, V_w]
+    nominal: 58000.0
+    std_dev: 500.0
+    synonyms: [volume, working_volume, V, V_w]
     examples:
-      - {raw_header: "Working Volume (L)"}
-      - {raw_header: "Volume [L]"}
-      - {raw_header: "V_w (mL)"}
+      - {raw_header: "Volume"}
+      - {raw_header: "V (L)"}
+      - {raw_header: "Working Volume"}
 
-  - name: temperature_c
-    description: Cultivation temperature.
+  - name: weight_kg
+    description: Bioreactor broth weight.
     data_type: float
-    canonical_unit: degC
-    synonyms: [temp, temperature, T, cultivation_temp]
+    canonical_unit: kg
+    nominal: 62000.0
+    std_dev: 500.0
+    synonyms: [weight, broth_weight, mass]
     examples:
-      - {raw_header: "Temperature (°C)"}
-      - {raw_header: "Temp [C]"}
-      - {raw_header: "T (°F)"}
+      - {raw_header: "Weight"}
+      - {raw_header: "Mass (kg)"}
+      - {raw_header: "Broth weight [kg]"}
 
-  - name: ph_setpoint
-    description: pH setpoint controlled during fermentation.
+  - name: ph
+    description: Broth pH.
     data_type: float
     canonical_unit: pH
-    synonyms: [pH, pH_sp, pH_target]
+    nominal: 6.5
+    std_dev: 0.1
+    synonyms: [pH, pH_setpoint, pH_sp, pH_target]
     examples:
       - {raw_header: "pH"}
       - {raw_header: "pH setpoint"}
 
-  - name: do_setpoint_percent
-    description: Dissolved oxygen setpoint as percent saturation.
+  - name: temperature_k
+    description: Cultivation temperature.
     data_type: float
-    canonical_unit: percent
-    synonyms: [DO, dissolved_oxygen]
+    canonical_unit: K
+    nominal: 297.0
+    std_dev: 0.5
+    synonyms: [temp, temperature, T, cultivation_temp]
     examples:
-      - {raw_header: "DO (%)"}
-      - {raw_header: "Dissolved O2 setpoint"}
+      - {raw_header: "Temperature"}
+      - {raw_header: "T (K)"}
+      - {raw_header: "Temp [°C]"}
 
-  - name: agitation_rpm
-    description: Stirrer speed.
+  - name: paa_mg_l
+    description: Phenylacetic acid concentration.
     data_type: float
-    canonical_unit: rpm
-    synonyms: [stirrer, agitation, RPM, N]
+    canonical_unit: mg/L
+    nominal: 1400.0
+    std_dev: 50.0
+    synonyms: [PAA, phenylacetic_acid, phenylacetate]
     examples:
-      - {raw_header: "RPM"}
-      - {raw_header: "Agitation (rpm)"}
+      - {raw_header: "PAA"}
+      - {raw_header: "PAA (mg/L)"}
+      - {raw_header: "Phenylacetic acid [mg L^-1]"}
 
-  - name: duration_h
-    description: Total fermentation duration.
+  - name: nh3_mg_l
+    description: Ammonia concentration in broth.
     data_type: float
-    canonical_unit: hour
-    synonyms: [duration, run_time, fermentation_time]
+    canonical_unit: mg/L
+    nominal: 1700.0
+    std_dev: 50.0
+    synonyms: [NH3, ammonia, NH3_conc]
     examples:
-      - {raw_header: "Duration (h)"}
-      - {raw_header: "Time (hr)"}
+      - {raw_header: "NH3"}
+      - {raw_header: "NH3 (mg/L)"}
+      - {raw_header: "Ammonia [mg L^-1]"}
 
-  - name: harvest_od600
-    description: Optical density at 600 nm at harvest.
+  - name: alpha_kla
+    description: Oxygen mass-transfer coefficient scaling factor.
     data_type: float
-    canonical_unit: OD600
-    synonyms: [final_OD, final OD600, harvest_OD, harvest OD, OD_h, A600]
+    canonical_unit: null
+    nominal: 85.0
+    std_dev: 10.0
+    synonyms: [alpha_kla, alphaKLa, alpha_kLa, kla_alpha]
     examples:
-      - {raw_header: "Final OD600"}
-      - {raw_header: "Harvest OD"}
-
-  - name: final_titer_g_l
-    description: Final product titer at end of fermentation.
-    data_type: float
-    canonical_unit: g/L
-    synonyms: [titer, product_titer, final_concentration]
-    examples:
-      - {raw_header: "Titer (g/L)"}
-      - {raw_header: "Final Titer"}
-      - {raw_header: "Product conc. [mg/mL]"}
-
-  - name: yield_g_g
-    description: Product yield per substrate consumed.
-    data_type: float
-    canonical_unit: g/g
-    synonyms: [yield, Y_ps]
-    examples:
-      - {raw_header: "Yield (g/g)"}
-      - {raw_header: "Y_p/s"}
-
-  - name: productivity_g_l_h
-    description: Volumetric productivity.
-    data_type: float
-    canonical_unit: g/L/hour
-    synonyms: [productivity, Q_p]
-    examples:
-      - {raw_header: "Productivity (g/L/h)"}
-      - {raw_header: "Q_P [g L^-1 h^-1]"}
+      - {raw_header: "alpha_kla"}
+      - {raw_header: "α·kLa"}
+      - {raw_header: "alpha kLa"}
