@@ -1,0 +1,140 @@
+{
+  "dossier_schema_version": "1.0",
+  "experiment": {
+    "experiment_id": "FIX-01-BOUNDARY",
+    "name": "Boundary fixture (synthetic)",
+    "uploaded_by": "fixture",
+    "created_at": "2026-01-01T00:00:00",
+    "status": "complete",
+    "source_files": [
+      {
+        "file_id": "f0000001-0000-0000-0000-000000000001",
+        "filename": "synthetic_run_a.csv",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000001",
+        "page_count": null,
+        "parse_status": "ok",
+        "parse_error": null
+      }
+    ]
+  },
+  "golden_columns": {
+    "pH": {
+      "canonical_unit": "-",
+      "observations": [
+        {
+          "observation_id": "a0000001-0000-0000-0000-000000000001",
+          "value": 6.7,
+          "unit": "-",
+          "value_raw": 6.7,
+          "unit_raw": "-",
+          "observation_type": "measured",
+          "confidence": {"mapping": 1.0, "extraction": 1.0, "combined": 1.0},
+          "needs_review": false,
+          "source": {
+            "file_id": "f0000001-0000-0000-0000-000000000001",
+            "raw_header": "pH",
+            "locator": {"section": "table", "run_id": "RUN-A001", "timestamp_h": 24.0}
+          },
+          "conversion_status": "ok",
+          "extractor_version": "fixture-v1",
+          "via": "pint",
+          "normalization": null
+        }
+      ]
+    },
+    "Temperature": {
+      "canonical_unit": "K",
+      "observations": [
+        {
+          "observation_id": "a0000001-0000-0000-0000-000000000002",
+          "value": 298.5,
+          "unit": "K",
+          "value_raw": 298.5,
+          "unit_raw": "K",
+          "observation_type": "measured",
+          "confidence": {"mapping": 1.0, "extraction": 1.0, "combined": 1.0},
+          "needs_review": false,
+          "source": {
+            "file_id": "f0000001-0000-0000-0000-000000000001",
+            "raw_header": "Temperature",
+            "locator": {"section": "table", "run_id": "RUN-A001", "timestamp_h": 24.0}
+          },
+          "conversion_status": "ok",
+          "extractor_version": "fixture-v1",
+          "via": "pint",
+          "normalization": null
+        }
+      ]
+    },
+    "Biomass (X)": {
+      "canonical_unit": "g/L",
+      "observations": [
+        {
+          "observation_id": "a0000001-0000-0000-0000-000000000003",
+          "value": 0.75,
+          "unit": "g/L",
+          "value_raw": 0.75,
+          "unit_raw": "g/L",
+          "observation_type": "measured",
+          "confidence": {"mapping": 1.0, "extraction": 1.0, "combined": 1.0},
+          "needs_review": false,
+          "source": {
+            "file_id": "f0000001-0000-0000-0000-000000000001",
+            "raw_header": "Biomass",
+            "locator": {"section": "table", "run_id": "RUN-A001", "timestamp_h": 24.0}
+          },
+          "conversion_status": "ok",
+          "extractor_version": "fixture-v1",
+          "via": "pint",
+          "normalization": null
+        }
+      ]
+    },
+    "Dissolved O2": {
+      "canonical_unit": "mg/L",
+      "observations": [
+        {
+          "observation_id": "a0000001-0000-0000-0000-000000000004",
+          "value": 15.0,
+          "unit": "mg/L",
+          "value_raw": 15.0,
+          "unit_raw": "mg/L",
+          "observation_type": "measured",
+          "confidence": {"mapping": 1.0, "extraction": 1.0, "combined": 1.0},
+          "needs_review": false,
+          "source": {
+            "file_id": "f0000001-0000-0000-0000-000000000001",
+            "raw_header": "DO",
+            "locator": {"section": "table", "run_id": "RUN-A001", "timestamp_h": 24.0}
+          },
+          "conversion_status": "ok",
+          "extractor_version": "fixture-v1",
+          "via": "pint",
+          "normalization": null
+        }
+      ]
+    }
+  },
+  "residual": {
+    "summary": {"residual_records": 0, "tables_unmapped": 0, "tables_partial": 0},
+    "records": []
+  },
+  "ingestion_summary": {
+    "total_observations": 4,
+    "high_confidence": 4,
+    "needs_review": 0,
+    "fell_to_residual": 0,
+    "golden_coverage_percent": 100,
+    "files_failed_to_parse": 0,
+    "schema_version": "fixture-v1",
+    "narrative_blocks_captured": 0,
+    "narrative_observations": 0
+  },
+  "_specs": {
+    "comment": "Per-variable nominal/std_dev. Forward-compat field; real ingestion will source these from a setpoints table.",
+    "pH": {"nominal": 6.5, "std_dev": 0.1, "unit": "-"},
+    "Temperature": {"nominal": 297.0, "std_dev": 0.5, "unit": "K"},
+    "Biomass (X)": {"nominal": 0.5, "std_dev": 0.05, "unit": "g/L"},
+    "Dissolved O2": {"nominal": 15.0, "std_dev": 0.5, "unit": "mg/L"}
+  }
+}

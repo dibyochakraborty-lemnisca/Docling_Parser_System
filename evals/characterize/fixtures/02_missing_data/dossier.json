@@ -1,0 +1,109 @@
+{
+  "dossier_schema_version": "1.0",
+  "experiment": {
+    "experiment_id": "FIX-02-MISSING",
+    "name": "Missing-data fixture (synthetic)",
+    "uploaded_by": "fixture",
+    "created_at": "2026-01-01T00:00:00",
+    "status": "complete",
+    "source_files": [
+      {
+        "file_id": "f0000002-0000-0000-0000-000000000001",
+        "filename": "sparse_run.csv",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000002",
+        "page_count": null,
+        "parse_status": "ok",
+        "parse_error": null
+      }
+    ]
+  },
+  "golden_columns": {
+    "Biomass (X)": {
+      "canonical_unit": "g/L",
+      "observations": [
+        {
+          "observation_id": "a0000002-0000-0000-0000-000000000001",
+          "value": 0.5,
+          "unit": "g/L",
+          "value_raw": 0.5,
+          "unit_raw": "g/L",
+          "observation_type": "measured",
+          "confidence": {"mapping": 1.0, "extraction": 1.0, "combined": 1.0},
+          "needs_review": false,
+          "source": {
+            "file_id": "f0000002-0000-0000-0000-000000000001",
+            "raw_header": "Biomass",
+            "locator": {"section": "table", "run_id": "RUN-B001", "timestamp_h": 0.0}
+          },
+          "conversion_status": "ok",
+          "extractor_version": "fixture-v1",
+          "via": "pint",
+          "normalization": null
+        },
+        {
+          "observation_id": "a0000002-0000-0000-0000-000000000002",
+          "value": 0.7,
+          "unit": "g/L",
+          "value_raw": 0.7,
+          "unit_raw": "g/L",
+          "observation_type": "measured",
+          "confidence": {"mapping": 1.0, "extraction": 1.0, "combined": 1.0},
+          "needs_review": false,
+          "source": {
+            "file_id": "f0000002-0000-0000-0000-000000000001",
+            "raw_header": "Biomass",
+            "locator": {"section": "table", "run_id": "RUN-B001", "timestamp_h": 24.0}
+          },
+          "conversion_status": "ok",
+          "extractor_version": "fixture-v1",
+          "via": "pint",
+          "normalization": null
+        },
+        {
+          "observation_id": "a0000002-0000-0000-0000-000000000003",
+          "value": 0.85,
+          "unit": "g/L",
+          "value_raw": 0.85,
+          "unit_raw": "g/L",
+          "observation_type": "measured",
+          "confidence": {"mapping": 1.0, "extraction": 1.0, "combined": 1.0},
+          "needs_review": false,
+          "source": {
+            "file_id": "f0000002-0000-0000-0000-000000000001",
+            "raw_header": "Biomass",
+            "locator": {"section": "table", "run_id": "RUN-B001", "timestamp_h": 48.0}
+          },
+          "conversion_status": "ok",
+          "extractor_version": "fixture-v1",
+          "via": "pint",
+          "normalization": null
+        }
+      ]
+    }
+  },
+  "residual": {
+    "summary": {"residual_records": 0, "tables_unmapped": 0, "tables_partial": 0},
+    "records": []
+  },
+  "ingestion_summary": {
+    "total_observations": 3,
+    "high_confidence": 3,
+    "needs_review": 0,
+    "fell_to_residual": 0,
+    "golden_coverage_percent": 7,
+    "files_failed_to_parse": 0,
+    "schema_version": "fixture-v1",
+    "narrative_blocks_captured": 0,
+    "narrative_observations": 0
+  },
+  "_specs": {
+    "comment": "Sparse Biomass measurements at t=0,24,48 with grid Δt=12h → 5 grid points, only 3 real → 60% real after carry-forward imputation. Tests Trajectory.data_quality.",
+    "Biomass (X)": {"nominal": 0.5, "std_dev": 0.05, "unit": "g/L"}
+  },
+  "_trajectory_grid": {
+    "comment": "Forward-compat hint to characterization on which time grid to build. Future ingestion will derive this from a setpoints/protocol table.",
+    "dt_hours": 12.0,
+    "start": 0.0,
+    "end": 48.0
+  }
+}

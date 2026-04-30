@@ -1,0 +1,122 @@
+{
+  "dossier_schema_version": "1.0",
+  "experiment": {
+    "experiment_id": "FIX-03-MULTIRUN",
+    "name": "Multi-run fixture (synthetic, same condition, 4 runs)",
+    "uploaded_by": "fixture",
+    "created_at": "2026-01-01T00:00:00",
+    "status": "complete",
+    "source_files": [
+      {
+        "file_id": "f0000003-0000-0000-0000-000000000001",
+        "filename": "multirun.csv",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000003",
+        "page_count": null,
+        "parse_status": "ok",
+        "parse_error": null
+      }
+    ]
+  },
+  "golden_columns": {
+    "Temperature": {
+      "canonical_unit": "K",
+      "observations": [
+        {
+          "observation_id": "a0000003-0000-0000-0000-000000000001",
+          "value": 297.1,
+          "unit": "K",
+          "value_raw": 297.1,
+          "unit_raw": "K",
+          "observation_type": "measured",
+          "confidence": {"mapping": 1.0, "extraction": 1.0, "combined": 1.0},
+          "needs_review": false,
+          "source": {
+            "file_id": "f0000003-0000-0000-0000-000000000001",
+            "raw_header": "T",
+            "locator": {"section": "table", "run_id": "RUN-C001", "timestamp_h": 24.0}
+          },
+          "conversion_status": "ok",
+          "extractor_version": "fixture-v1",
+          "via": "pint",
+          "normalization": null
+        },
+        {
+          "observation_id": "a0000003-0000-0000-0000-000000000002",
+          "value": 296.9,
+          "unit": "K",
+          "value_raw": 296.9,
+          "unit_raw": "K",
+          "observation_type": "measured",
+          "confidence": {"mapping": 1.0, "extraction": 1.0, "combined": 1.0},
+          "needs_review": false,
+          "source": {
+            "file_id": "f0000003-0000-0000-0000-000000000001",
+            "raw_header": "T",
+            "locator": {"section": "table", "run_id": "RUN-C002", "timestamp_h": 24.0}
+          },
+          "conversion_status": "ok",
+          "extractor_version": "fixture-v1",
+          "via": "pint",
+          "normalization": null
+        },
+        {
+          "observation_id": "a0000003-0000-0000-0000-000000000003",
+          "value": 297.0,
+          "unit": "K",
+          "value_raw": 297.0,
+          "unit_raw": "K",
+          "observation_type": "measured",
+          "confidence": {"mapping": 1.0, "extraction": 1.0, "combined": 1.0},
+          "needs_review": false,
+          "source": {
+            "file_id": "f0000003-0000-0000-0000-000000000001",
+            "raw_header": "T",
+            "locator": {"section": "table", "run_id": "RUN-C003", "timestamp_h": 24.0}
+          },
+          "conversion_status": "ok",
+          "extractor_version": "fixture-v1",
+          "via": "pint",
+          "normalization": null
+        },
+        {
+          "observation_id": "a0000003-0000-0000-0000-000000000004",
+          "value": 299.0,
+          "unit": "K",
+          "value_raw": 299.0,
+          "unit_raw": "K",
+          "observation_type": "measured",
+          "confidence": {"mapping": 1.0, "extraction": 1.0, "combined": 1.0},
+          "needs_review": false,
+          "source": {
+            "file_id": "f0000003-0000-0000-0000-000000000001",
+            "raw_header": "T",
+            "locator": {"section": "table", "run_id": "RUN-C004", "timestamp_h": 24.0}
+          },
+          "conversion_status": "ok",
+          "extractor_version": "fixture-v1",
+          "via": "pint",
+          "normalization": null
+        }
+      ]
+    }
+  },
+  "residual": {
+    "summary": {"residual_records": 0, "tables_unmapped": 0, "tables_partial": 0},
+    "records": []
+  },
+  "ingestion_summary": {
+    "total_observations": 4,
+    "high_confidence": 4,
+    "needs_review": 0,
+    "fell_to_residual": 0,
+    "golden_coverage_percent": 7,
+    "files_failed_to_parse": 0,
+    "schema_version": "fixture-v1",
+    "narrative_blocks_captured": 0,
+    "narrative_observations": 0
+  },
+  "_specs": {
+    "comment": "4 runs at the same condition. Setpoint Temperature 297 ± 0.5 K. Runs C001–C003 within ±σ, RUN-C004 at 4σ (299.0 K) → only RUN-C004 should produce a finding.",
+    "Temperature": {"nominal": 297.0, "std_dev": 0.5, "unit": "K"}
+  }
+}

@@ -1,0 +1,137 @@
+{
+  "meta": {
+    "schema_version": "1.0",
+    "characterization_version": "v1.0.0",
+    "process_priors_version": null,
+    "characterization_id": "c2000002-0000-0000-0000-000000000002",
+    "generation_timestamp": "2026-01-01T00:00:00",
+    "supersedes": null,
+    "source_dossier_ids": ["FIX-02-MISSING"]
+  },
+  "findings": [
+    {
+      "finding_id": "c2000002-0000-0000-0000-000000000002:F-0001",
+      "type": "range_violation",
+      "severity": "critical",
+      "summary": "Biomass (X) 0.85 is 7.0σ above nominal 0.5 ± 0.05 in run RUN-B001 at 48.0h",
+      "confidence": 0.99,
+      "extracted_via": "deterministic",
+      "caveats": ["trajectory has 40% imputed/missing data on a 12h grid"],
+      "competing_explanations": [],
+      "evidence_strength": {"n_observations": 1, "n_independent_runs": 1, "statistical_power": null},
+      "evidence_observation_ids": ["a0000002-0000-0000-0000-000000000003"],
+      "variables_involved": ["Biomass (X)"],
+      "time_window": {"start": 48.0, "end": 48.0},
+      "run_ids": ["RUN-B001"],
+      "statistics": {"nominal": 0.5, "std_dev": 0.05, "observed": 0.85, "sigmas": 7.0, "residual": 0.35}
+    },
+    {
+      "finding_id": "c2000002-0000-0000-0000-000000000002:F-0002",
+      "type": "range_violation",
+      "severity": "major",
+      "summary": "Biomass (X) 0.7 is 4.0σ above nominal 0.5 ± 0.05 in run RUN-B001 at 24.0h",
+      "confidence": 0.95,
+      "extracted_via": "deterministic",
+      "caveats": ["trajectory has 40% imputed/missing data on a 12h grid"],
+      "competing_explanations": [],
+      "evidence_strength": {"n_observations": 1, "n_independent_runs": 1, "statistical_power": null},
+      "evidence_observation_ids": ["a0000002-0000-0000-0000-000000000002"],
+      "variables_involved": ["Biomass (X)"],
+      "time_window": {"start": 24.0, "end": 24.0},
+      "run_ids": ["RUN-B001"],
+      "statistics": {"nominal": 0.5, "std_dev": 0.05, "observed": 0.7, "sigmas": 4.0, "residual": 0.2}
+    }
+  ],
+  "timeline": [
+    {
+      "event_id": "E-0001",
+      "run_id": "RUN-B001",
+      "time": 24.0,
+      "finding_id": "c2000002-0000-0000-0000-000000000002:F-0002",
+      "summary": "Biomass (X) 0.7 is 4.0σ above nominal 0.5 ± 0.05 in run RUN-B001 at 24.0h",
+      "severity": "major",
+      "lag_to_next_seconds": 86400.0
+    },
+    {
+      "event_id": "E-0002",
+      "run_id": "RUN-B001",
+      "time": 48.0,
+      "finding_id": "c2000002-0000-0000-0000-000000000002:F-0001",
+      "summary": "Biomass (X) 0.85 is 7.0σ above nominal 0.5 ± 0.05 in run RUN-B001 at 48.0h",
+      "severity": "critical",
+      "lag_to_next_seconds": null
+    }
+  ],
+  "expected_vs_observed": [
+    {
+      "deviation_id": "D-0001",
+      "run_id": "RUN-B001",
+      "variable": "Biomass (X)",
+      "time": 0.0,
+      "expected": 0.5,
+      "expected_std_dev": 0.05,
+      "observed": 0.5,
+      "residual": 0.0,
+      "sigmas": 0.0,
+      "source_observation_ids": ["a0000002-0000-0000-0000-000000000001"]
+    },
+    {
+      "deviation_id": "D-0002",
+      "run_id": "RUN-B001",
+      "variable": "Biomass (X)",
+      "time": 24.0,
+      "expected": 0.5,
+      "expected_std_dev": 0.05,
+      "observed": 0.7,
+      "residual": 0.2,
+      "sigmas": 4.0,
+      "source_observation_ids": ["a0000002-0000-0000-0000-000000000002"]
+    },
+    {
+      "deviation_id": "D-0003",
+      "run_id": "RUN-B001",
+      "variable": "Biomass (X)",
+      "time": 48.0,
+      "expected": 0.5,
+      "expected_std_dev": 0.05,
+      "observed": 0.85,
+      "residual": 0.35,
+      "sigmas": 7.0,
+      "source_observation_ids": ["a0000002-0000-0000-0000-000000000003"]
+    }
+  ],
+  "trajectories": [
+    {
+      "trajectory_id": "T-0001",
+      "run_id": "RUN-B001",
+      "variable": "Biomass (X)",
+      "time_grid": [0.0, 12.0, 24.0, 36.0, 48.0],
+      "values": [0.5, 0.5, 0.7, 0.7, 0.85],
+      "imputation_flags": [false, true, false, true, false],
+      "imputation_method": "carry_forward",
+      "source_observation_ids": [
+        "a0000002-0000-0000-0000-000000000001",
+        "a0000002-0000-0000-0000-000000000002",
+        "a0000002-0000-0000-0000-000000000003"
+      ],
+      "unit": "g/L",
+      "quality": 0.6,
+      "data_quality": {"pct_missing": 0.0, "pct_imputed": 0.4, "pct_real": 0.6}
+    }
+  ],
+  "facts_graph": {"nodes": [], "edges": []},
+  "kinetic_estimates": [],
+  "open_questions": [
+    {
+      "question_id": "Q-0001",
+      "question_text": "Biomass (X) trajectory in RUN-B001 has 40% imputed data on a 12h grid. Is the apparent growth pattern (0.5 → 0.7 → 0.85 g/L) genuinely monotonic, or does sparse sampling hide a non-monotonic trajectory?",
+      "decision_type": "evidence_request",
+      "relevant_finding_ids": [
+        "c2000002-0000-0000-0000-000000000002:F-0001",
+        "c2000002-0000-0000-0000-000000000002:F-0002"
+      ],
+      "relevant_run_ids": ["RUN-B001"],
+      "would_resolve_with": ["finer_biomass_sampling", "online_OD_trace"]
+    }
+  ]
+}
