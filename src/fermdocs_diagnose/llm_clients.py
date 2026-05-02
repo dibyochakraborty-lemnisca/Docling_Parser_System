@@ -162,6 +162,8 @@ _GEMINI_TOOL_CALL_FIELDS: dict[str, Any] = {
             "get_timecourse",
             "execute_python",
             "submit_diagnosis",
+            # Plan A Stage 2: organism-aware priors
+            "get_priors",
         ],
         "nullable": True,
     },
@@ -189,6 +191,9 @@ _GEMINI_TOOL_CALL_FIELDS: dict[str, Any] = {
                 "items": {"type": "NUMBER"},
                 "nullable": True,
             },
+            # get_priors
+            "organism": {"type": "STRING", "nullable": True},
+            "process_family": {"type": "STRING", "nullable": True},
             # submit_diagnosis carries an opaque payload — Gemini structured
             # output can't model arbitrary recursive shapes, so we provide a
             # stringified payload escape hatch and parse it on receipt.
@@ -349,6 +354,8 @@ _ANTHROPIC_TOOL_CALL_SCHEMA: dict[str, Any] = {
                 "get_timecourse",
                 "execute_python",
                 "submit_diagnosis",
+                # Plan A Stage 2: organism-aware priors
+                "get_priors",
             ],
         },
         "args": {"type": "object"},

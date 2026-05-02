@@ -20,6 +20,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from fermdocs.bundle import BundleReader
+from fermdocs.domain.process_priors import (
+    ProcessPriors,
+    cached_priors,
+    resolve_priors,
+)
 from fermdocs_characterize.schema import CharacterizationOutput
 from fermdocs_characterize.specs import DictSpecsProvider, SpecsProvider
 from fermdocs_diagnose.audit.trace_writer import TraceWriter
@@ -74,6 +79,7 @@ class DiagnosisToolBundle:
     specs: SpecsProvider
     upstream: CharacterizationOutput
     trace_writer: TraceWriter | None = None
+    priors: ProcessPriors | None = None
     state: _AgentState = field(default_factory=_AgentState)
 
     # ------------------------------------------------------------------
@@ -125,6 +131,10 @@ class DiagnosisToolBundle:
             "observations_csv_columns": [
                 "run_id", "variable", "time_h", "value", "imputed", "unit",
             ],
+            "process_priors_version": self.priors.version if self.priors is not None else None,
+            "process_priors_organisms": (
+                [o.name for o in self.priors.organisms] if self.priors is not None else []
+            ),
         }
 
     def get_findings(
@@ -193,6 +203,58 @@ class DiagnosisToolBundle:
         if hasattr(spec, "model_dump"):
             return {"variable": variable, "spec": spec.model_dump(mode="json")}
         return {"variable": variable, "spec": dict(spec) if isinstance(spec, dict) else str(spec)}
+
+    def get_priors(
+        self,
+        organism: str | None = None,
+        process_family: str | None = None,
+        variable: str | None = None,
+    ) -> dict:
+        """Return organism × process-family expected ranges (literature-sourced).
+
+        Cost: Low. Returns {"priors": [...], "n": int, "matched_organism": str|None,
+        "matched_process_family": str|None, "available_organisms": [...]}.
+
+        Use this BEFORE claiming a value is anomalous on a single-run dossier.
+        Without priors, single-run reasoning falls back to schema_only and
+        confidence is capped lower. The bundle's organism comes from get_meta()
+        and the dossier — pass it through to get organism-specific ranges.
+
+        Each prior carries a `source` citation (e.g. "Verduyn 1991"). Cite the
+        source in your claim's summary when grounding a finding on a prior.
+
+        When no priors match (uncovered organism), returns an empty list and
+        names the available organisms so you can see what's loaded.
+        """
+        gated = self._gate("get_priors")
+        if gated:
+            return gated
+        if self.priors is None:
+            return {
+                "priors": [],
+                "n": 0,
+                "matched_organism": None,
+                "matched_process_family": None,
+                "available_organisms": [],
+                "note": "No priors loaded for this bundle.",
+            }
+        rows = resolve_priors(
+            self.priors,
+            organism=organism,
+            process_family=process_family,
+            variable=variable,
+        )
+        # Identify which organism actually matched (substring resolution
+        # may pick the canonical name even when the query was an alias).
+        matched_org = rows[0].organism if rows else None
+        matched_fam = rows[0].process_family if rows else None
+        return {
+            "priors": [r.to_dict() for r in rows],
+            "n": len(rows),
+            "matched_organism": matched_org,
+            "matched_process_family": matched_fam,
+            "available_organisms": [o.name for o in self.priors.organisms],
+        }
 
     def get_timecourse(
         self,
@@ -308,10 +370,19 @@ def make_diagnosis_tools(
     specs: SpecsProvider | None = None,
     dossier: dict | None = None,
     trace_writer: TraceWriter | None = None,
+    priors: ProcessPriors | None = None,
+    load_default_priors: bool = True,
 ) -> DiagnosisToolBundle:
-    """Build a tool bundle curried over `reader`. `specs` defaults to
-    DictSpecsProvider.from_dossier(dossier) when dossier is provided, else
-    an empty provider."""
+    """Build a tool bundle curried over `reader`.
+
+    Args:
+      specs: defaults to DictSpecsProvider.from_dossier(dossier) when dossier
+        is provided, else an empty provider.
+      priors: explicit ProcessPriors instance. When omitted and
+        load_default_priors=True (the default), loads the shipped
+        process_priors.yaml. Set load_default_priors=False to run priors-less
+        (used by tests that need to exercise the no-priors path).
+    """
     if specs is None:
         if dossier is None:
             try:
@@ -319,9 +390,15 @@ def make_diagnosis_tools(
             except FileNotFoundError:
                 dossier = {}
         specs = DictSpecsProvider.from_dossier(dossier)
+    if priors is None and load_default_priors:
+        try:
+            priors = cached_priors()
+        except (OSError, ValueError):
+            priors = None
     return DiagnosisToolBundle(
         reader=reader,
         upstream=upstream,
         specs=specs,
         trace_writer=trace_writer,
+        priors=priors,
     )

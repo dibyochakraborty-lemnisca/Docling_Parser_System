@@ -579,6 +579,8 @@ def _dispatch_tool_bundle(
         "get_timecourse": tools.get_timecourse,
         "execute_python": tools.execute_python,
         "submit_diagnosis": tools.submit_diagnosis,
+        # Stage 2 (Plan A): organism-aware priors
+        "get_priors": tools.get_priors,
         # Wave 1 aliases (agent prompt still names these). Best-effort: route
         # to bundle-aware equivalents so an unchanged system prompt keeps
         # working when --bundle is used.
