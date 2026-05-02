@@ -1,0 +1,13 @@
+{
+  "observed": {
+    "organism": "Penicillium chrysogenum",
+    "product": "penicillin",
+    "provenance": "llm_whitelisted"
+  },
+  "registered": {
+    "process_id": null,
+    "provenance": "unknown",
+    "rationale_contains": "fingerprint mismatch"
+  },
+  "note": "Observed survives even though registered fails the fingerprint check."
+}

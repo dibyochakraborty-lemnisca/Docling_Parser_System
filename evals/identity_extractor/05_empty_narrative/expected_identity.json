@@ -1,0 +1,11 @@
+{
+  "observed": {
+    "provenance": "unknown",
+    "organism": null
+  },
+  "registered": {
+    "provenance": "unknown",
+    "process_id": null
+  },
+  "llm_must_not_be_called": true
+}

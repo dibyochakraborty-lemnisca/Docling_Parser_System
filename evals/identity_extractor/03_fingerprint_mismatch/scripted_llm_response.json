@@ -1,0 +1,16 @@
+{
+  "observed": {
+    "organism": "Penicillium chrysogenum",
+    "product": "penicillin",
+    "confidence": 0.9,
+    "evidence": [
+      {"paragraph_idx": 0, "span_text": "Penicillium chrysogenum"},
+      {"paragraph_idx": 0, "span_text": "penicillin production"}
+    ],
+    "rationale": "organism + product named explicitly"
+  },
+  "registered": {
+    "process_id": "penicillin_indpensim",
+    "confidence": 0.9
+  }
+}

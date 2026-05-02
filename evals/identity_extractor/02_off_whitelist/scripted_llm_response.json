@@ -1,0 +1,16 @@
+{
+  "observed": {
+    "organism": "Escherichia coli",
+    "product": "recombinant protein",
+    "confidence": 0.85,
+    "evidence": [
+      {"paragraph_idx": 0, "span_text": "Escherichia coli"},
+      {"paragraph_idx": 0, "span_text": "recombinant protein"}
+    ],
+    "rationale": "organism + product named in prose"
+  },
+  "registered": {
+    "process_id": null,
+    "rationale": "no registry entry matches E. coli recombinant protein production"
+  }
+}

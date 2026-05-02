@@ -1,0 +1,12 @@
+{
+  "observed": {
+    "organism": "Escherichia coli",
+    "product": "recombinant protein",
+    "provenance": "llm_whitelisted"
+  },
+  "registered": {
+    "process_id": null,
+    "provenance": "unknown"
+  },
+  "note": "Yeast-style case rebranded as E. coli: organism survives even though no registry match exists."
+}

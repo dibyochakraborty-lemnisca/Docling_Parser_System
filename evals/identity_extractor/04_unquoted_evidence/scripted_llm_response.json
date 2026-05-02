@@ -1,0 +1,15 @@
+{
+  "observed": {
+    "organism": "Penicillium chrysogenum",
+    "product": "penicillin",
+    "confidence": 0.85,
+    "evidence": [
+      {"paragraph_idx": 0, "span_text": "Penicillium chrysogenum was the strain used"}
+    ],
+    "rationale": "extrapolated from antibiotic-producing fungus context"
+  },
+  "registered": {
+    "process_id": "penicillin_indpensim",
+    "confidence": 0.85
+  }
+}

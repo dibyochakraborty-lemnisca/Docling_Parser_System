@@ -1,0 +1,10 @@
+{
+  "observed": {
+    "organism": "should_never_be_read",
+    "evidence": []
+  },
+  "registered": {
+    "process_id": "penicillin_indpensim",
+    "rationale": "this should never run; LLM must not be called when narrative is empty"
+  }
+}

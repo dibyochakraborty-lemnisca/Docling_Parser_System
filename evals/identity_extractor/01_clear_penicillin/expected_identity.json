@@ -1,0 +1,12 @@
+{
+  "observed": {
+    "organism": "Penicillium chrysogenum",
+    "product": "penicillin",
+    "provenance": "llm_whitelisted"
+  },
+  "registered": {
+    "process_id": "penicillin_indpensim",
+    "provenance": "llm_whitelisted",
+    "confidence_max": 0.85
+  }
+}

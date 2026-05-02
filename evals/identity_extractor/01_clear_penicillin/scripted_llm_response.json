@@ -1,0 +1,19 @@
+{
+  "observed": {
+    "organism": "Penicillium chrysogenum",
+    "product": "penicillin",
+    "process_family_hint": "fed-batch",
+    "confidence": 0.93,
+    "evidence": [
+      {"paragraph_idx": 0, "span_text": "Penicillium chrysogenum"},
+      {"paragraph_idx": 0, "span_text": "penicillin production"},
+      {"paragraph_idx": 0, "span_text": "fed-batch"}
+    ],
+    "rationale": "organism, product, mode all named in prose"
+  },
+  "registered": {
+    "process_id": "penicillin_indpensim",
+    "confidence": 0.93,
+    "rationale": "PAA + NH3 + organism match the indpensim entry"
+  }
+}

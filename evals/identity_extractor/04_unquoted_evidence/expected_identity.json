@@ -1,0 +1,13 @@
+{
+  "observed": {
+    "organism": null,
+    "product": null,
+    "provenance": "unknown",
+    "rationale_contains": "evidence"
+  },
+  "registered": {
+    "process_id": "penicillin_indpensim",
+    "provenance": "llm_whitelisted",
+    "note": "Registered layer still accepts the on-list pick because PAA + NH3 are present; observed layer rejects everything because the evidence span isn't a substring of the source."
+  }
+}
