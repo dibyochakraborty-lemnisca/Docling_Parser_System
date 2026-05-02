@@ -281,3 +281,82 @@ def test_serialize_produces_stable_output_for_identical_input():
     ctx1 = build_agent_context(dossier, output)
     ctx2 = build_agent_context(dossier, output)
     assert serialize_for_agent(ctx1, output) == serialize_for_agent(ctx2, output)
+
+
+# ---------- Finding summary expansion (diagnosis-agent dependency) ----------
+
+
+def test_top_findings_carry_statistics_and_evidence_id():
+    """The diagnosis agent needs numeric context in the prefix to triage by
+    magnitude without burning a tool call per finding. Regression guard for the
+    Issue 4 expansion (plan §7).
+    """
+    from fermdocs_characterize.schema import (
+        CharacterizationOutput,
+        EvidenceStrength,
+        ExtractedVia,
+        Finding,
+        FindingType,
+        Meta,
+        Severity,
+    )
+
+    char_id = uuid.UUID(int=7)
+    finding = Finding(
+        finding_id=f"{char_id}:F-0001",
+        type=FindingType.RANGE_VIOLATION,
+        severity=Severity.MAJOR,
+        summary="biomass below nominal",
+        confidence=0.8,
+        extracted_via=ExtractedVia.DETERMINISTIC,
+        evidence_strength=EvidenceStrength(n_observations=3, n_independent_runs=1),
+        evidence_observation_ids=["O-42", "O-43", "O-44"],
+        variables_involved=["biomass_g_l"],
+        statistics={"sigma": 2.5, "observed": 7.5, "nominal": 10.0, "std_dev": 1.0},
+    )
+    output = CharacterizationOutput(
+        meta=Meta(
+            schema_version="2.0",
+            characterization_version="v1.0.0",
+            characterization_id=char_id,
+            generation_timestamp=datetime(2026, 1, 1),
+            source_dossier_ids=["EXP-X"],
+        ),
+        findings=[finding],
+    )
+    dossier = _dossier_with_identity()
+    ctx = build_agent_context(dossier, output)
+    parsed = json.loads(serialize_for_agent(ctx, output))
+
+    top = parsed["findings"]["top"]
+    assert len(top) == 1
+    assert top[0]["statistics"] == {
+        "sigma": 2.5,
+        "observed": 7.5,
+        "nominal": 10.0,
+        "std_dev": 1.0,
+    }
+    # Only the first evidence observation is carried, not the full list.
+    assert top[0]["evidence_observation_id"] == "O-42"
+
+
+def test_fixtures_still_under_budget_after_expansion():
+    """Issue 4 added ~50 tokens per finding to the prefix. All 3 fixtures must
+    still fit the 1500-token budget; otherwise the expansion is too greedy.
+    """
+    for fixture_name in ("01_boundary", "02_missing_data", "03_multi_run"):
+        dossier = json.loads(
+            (FIXTURES_DIR / fixture_name / "dossier.json").read_text()
+        )
+        output = CharacterizationPipeline(validate=False).run(
+            dossier,
+            characterization_id=uuid.UUID(int=0),
+            generation_timestamp=datetime(2026, 1, 1),
+        )
+        ctx = build_agent_context(dossier, output)
+        rendered = serialize_for_agent(ctx, output)
+        approx_tokens = len(rendered) // 4
+        assert approx_tokens <= DEFAULT_MAX_TOKENS, (
+            f"{fixture_name}: ~{approx_tokens} tokens exceeds budget after"
+            f" finding-summary expansion"
+        )

@@ -235,9 +235,18 @@ def _severity_rollup(
 def _finding_summary(finding: Finding) -> dict[str, Any]:
     """Compact rendering of a finding for the prompt blob.
 
-    Drops verbose fields (full evidence_strength, statistics dict) and keeps
-    severity + summary text + variables + a truncated rationale-by-caveats.
+    Includes enough numeric context that the diagnosis agent can triage by
+    magnitude without burning a tool call on every finding (~50 extra tokens
+    per finding, total stays under 1500-token budget on existing fixtures).
+
+    Kept compact: full evidence_observation_ids list collapsed to first id;
+    statistics dict carried as-is (caller controls cardinality).
     """
+    first_evidence = (
+        finding.evidence_observation_ids[0]
+        if finding.evidence_observation_ids
+        else None
+    )
     return {
         "id": finding.finding_id,
         "type": finding.type.value,
@@ -246,6 +255,8 @@ def _finding_summary(finding: Finding) -> dict[str, Any]:
         "confidence": round(finding.confidence, 3),
         "variables": finding.variables_involved,
         "caveats": finding.caveats[:3],
+        "statistics": finding.statistics,
+        "evidence_observation_id": first_evidence,
     }
 
 
