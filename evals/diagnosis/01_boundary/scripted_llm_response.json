@@ -1,0 +1,51 @@
+{
+  "action": "emit",
+  "failures": [
+    {
+      "summary": "Biomass at 24h reads 0.75 g/L, 5 sigma above nominal",
+      "cited_finding_ids": ["00000000-0000-0000-0000-000000000000:F-0001"],
+      "affected_variables": ["Biomass (X)"],
+      "confidence": 0.8,
+      "confidence_basis": "schema_only",
+      "domain_tags": ["growth"],
+      "severity": "critical",
+      "time_window": {"start": 24.0, "end": 24.0}
+    },
+    {
+      "summary": "Temperature at 24h reads 298.5 K, 3 sigma above nominal 297.0",
+      "cited_finding_ids": ["00000000-0000-0000-0000-000000000000:F-0002"],
+      "affected_variables": ["Temperature"],
+      "confidence": 0.75,
+      "confidence_basis": "schema_only",
+      "domain_tags": ["environmental"],
+      "severity": "major",
+      "time_window": {"start": 24.0, "end": 24.0}
+    }
+  ],
+  "trends": [],
+  "analysis": [
+    {
+      "summary": "All three deviations occur at the same 24h sampling point in run RUN-A001",
+      "cited_finding_ids": [
+        "00000000-0000-0000-0000-000000000000:F-0001",
+        "00000000-0000-0000-0000-000000000000:F-0002",
+        "00000000-0000-0000-0000-000000000000:F-0003"
+      ],
+      "affected_variables": ["Biomass (X)", "Temperature", "pH"],
+      "confidence": 0.7,
+      "confidence_basis": "schema_only",
+      "domain_tags": ["data_quality"],
+      "kind": "phase_characterization"
+    }
+  ],
+  "open_questions": [
+    {
+      "question": "Was the 24h sample drawn from a different vessel or instrument than earlier samples?",
+      "why_it_matters": "would explain why three independent variables all read high at the same timestamp",
+      "cited_finding_ids": ["00000000-0000-0000-0000-000000000000:F-0001"],
+      "answer_format_hint": "yes_no",
+      "domain_tags": ["data_quality"]
+    }
+  ],
+  "narrative": "Run RUN-A001 shows three concurrent above-nominal readings at the 24h sample (Biomass critical, Temperature major, pH minor). Pattern is concentrated at a single timestamp; investigate sampling integrity before drawing biological conclusions."
+}

@@ -1,0 +1,36 @@
+{
+  "action": "emit",
+  "failures": [
+    {
+      "summary": "Temperature reads 299 K in run RUN-A001, 4 sigma above nominal 297",
+      "cited_finding_ids": ["00000000-0000-0000-0000-000000000000:F-0001"],
+      "affected_variables": ["Temperature"],
+      "confidence": 0.8,
+      "confidence_basis": "schema_only",
+      "domain_tags": ["environmental"],
+      "severity": "major"
+    }
+  ],
+  "trends": [],
+  "analysis": [
+    {
+      "summary": "Temperature anomaly observed in run RUN-A001 was not observed in run RUN-A002 at the same timestamp",
+      "cited_finding_ids": ["00000000-0000-0000-0000-000000000000:F-0001"],
+      "affected_variables": ["Temperature"],
+      "confidence": 0.7,
+      "confidence_basis": "cross_run",
+      "domain_tags": ["environmental"],
+      "kind": "cross_run_observation"
+    }
+  ],
+  "open_questions": [
+    {
+      "question": "Were RUN-A001 and RUN-A002 carried out in different vessels or with different temperature setpoints?",
+      "why_it_matters": "would explain why one run shows a temperature deviation and the other does not",
+      "cited_finding_ids": ["00000000-0000-0000-0000-000000000000:F-0001"],
+      "answer_format_hint": "free_text",
+      "domain_tags": ["process_control"]
+    }
+  ],
+  "narrative": "Two runs carry the same nominals; only RUN-A001 shows a Temperature deviation at 24h. Investigate whether the runs differed operationally."
+}

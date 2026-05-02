@@ -1,0 +1,52 @@
+{
+  "action": "emit",
+  "failures": [
+    {
+      "summary": "Biomass reads 0.85 g/L, 7 sigma above nominal 0.5",
+      "cited_finding_ids": ["00000000-0000-0000-0000-000000000000:F-0001"],
+      "affected_variables": ["Biomass (X)"],
+      "confidence": 0.8,
+      "confidence_basis": "schema_only",
+      "domain_tags": ["growth"],
+      "severity": "critical"
+    },
+    {
+      "summary": "Biomass at second sample reads 0.7 g/L, 4 sigma above nominal",
+      "cited_finding_ids": ["00000000-0000-0000-0000-000000000000:F-0002"],
+      "affected_variables": ["Biomass (X)"],
+      "confidence": 0.75,
+      "confidence_basis": "schema_only",
+      "domain_tags": ["growth"],
+      "severity": "major"
+    }
+  ],
+  "trends": [],
+  "analysis": [
+    {
+      "summary": "Only Biomass observations are present; spec coverage is sparse and other variables have no data to characterize",
+      "cited_finding_ids": ["00000000-0000-0000-0000-000000000000:F-0001"],
+      "affected_variables": ["Biomass (X)"],
+      "confidence": 0.7,
+      "confidence_basis": "schema_only",
+      "domain_tags": ["data_quality"],
+      "kind": "data_quality_caveat"
+    }
+  ],
+  "open_questions": [
+    {
+      "question": "Were measurements for pH, Temperature, and DO collected for this run?",
+      "why_it_matters": "without those variables, biomass anomalies cannot be cross-checked",
+      "cited_finding_ids": ["00000000-0000-0000-0000-000000000000:F-0001"],
+      "answer_format_hint": "yes_no",
+      "domain_tags": ["data_quality"]
+    },
+    {
+      "question": "How frequently was Biomass sampled in this run?",
+      "why_it_matters": "two readings is too few to distinguish a real trend from sampling noise",
+      "cited_finding_ids": ["00000000-0000-0000-0000-000000000000:F-0002"],
+      "answer_format_hint": "numeric",
+      "domain_tags": ["data_quality"]
+    }
+  ],
+  "narrative": "Sparse fixture with two Biomass anomalies. Other variables not measured, so the diagnosis is heavy on open questions about sampling completeness."
+}

@@ -1,0 +1,33 @@
+# Expected diagnosis claims for the 01_boundary fixture.
+#
+# Plan ref: plans/2026-05-02-diagnosis-agent.md §11.
+# Score axes: claim recall, citation integrity (hard), forbidden phrases (soft),
+# honesty under UNKNOWN flags (hard, but no UNKNOWN flag here).
+
+expected_failures:
+  - summary_keywords: ["biomass", "sigma"]
+    must_cite_findings: ["00000000-0000-0000-0000-000000000000:F-0001"]
+    min_confidence: 0.5
+    must_have_domain_tags: ["growth"]
+  - summary_keywords: ["temperature", "sigma"]
+    must_cite_findings: ["00000000-0000-0000-0000-000000000000:F-0002"]
+    min_confidence: 0.5
+    must_have_domain_tags: ["environmental"]
+
+expected_open_questions:
+  - keywords: ["sample", "24h"]
+    must_cite_findings: ["00000000-0000-0000-0000-000000000000:F-0001"]
+
+forbidden_phrases:
+  - "because"
+  - "due to"
+  - "caused by"
+  - "resulted in"
+  - "leading to"
+
+citation_integrity:
+  all_cited_findings_must_exist: true
+
+honesty_under_unknown_flags:
+  if_flag: null  # this fixture has registered process; no UNKNOWN flag
+  no_claim_with_basis: null

@@ -1,0 +1,47 @@
+# 04_unknown_everything: adversarial — organism + process unknown.
+#
+# Two things get tested here that none of 01-03 test:
+#   1. Soft-enforcement under UNKNOWN_ORGANISM: the LLM emits process_priors
+#      and the validator must downgrade every such claim to schema_only with
+#      provenance_downgraded=True.
+#   2. Heavy open-question emission: ≥3 questions, each citing a finding.
+#
+# This fixture reuses the 01_boundary upstream characterization (same dossier
+# path) — characterization itself doesn't care about identity; AgentContext
+# does, and that's what drives the flags the validator reads.
+
+reuses_upstream: "01_boundary"
+
+expected_failures:
+  - summary_keywords: ["biomass", "sigma"]
+    must_cite_findings: ["00000000-0000-0000-0000-000000000000:F-0001"]
+    min_confidence: 0.5
+
+# All process_priors claims must be downgraded.
+expected_provenance_downgrades:
+  - claim_kind: "failure"
+    cited_findings: ["00000000-0000-0000-0000-000000000000:F-0001"]
+  - claim_kind: "failure"
+    cited_findings: ["00000000-0000-0000-0000-000000000000:F-0002"]
+
+honesty_under_unknown_flags:
+  if_flag: "unknown_organism"
+  no_claim_with_basis: "process_priors"
+
+min_open_questions: 3
+
+expected_open_questions:
+  - keywords: ["organism"]
+    must_cite_findings: ["00000000-0000-0000-0000-000000000000:F-0001"]
+  - keywords: ["product", "process", "recipe"]
+    must_cite_findings: ["00000000-0000-0000-0000-000000000000:F-0002"]
+
+forbidden_phrases:
+  - "because"
+  - "due to"
+  - "caused by"
+  - "resulted in"
+  - "leading to"
+
+citation_integrity:
+  all_cited_findings_must_exist: true

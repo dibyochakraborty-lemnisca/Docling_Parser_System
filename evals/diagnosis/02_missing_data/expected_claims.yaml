@@ -1,0 +1,34 @@
+# 02_missing_data: sparse dossier — score data_quality_caveat + open questions.
+
+expected_failures:
+  - summary_keywords: ["biomass", "sigma"]
+    must_cite_findings: ["00000000-0000-0000-0000-000000000000:F-0001"]
+    min_confidence: 0.5
+    must_have_domain_tags: ["growth"]
+
+expected_analysis:
+  - summary_keywords: ["sparse", "data"]
+    must_cite_findings: ["00000000-0000-0000-0000-000000000000:F-0001"]
+    must_have_kind: "data_quality_caveat"
+
+expected_open_questions:
+  - keywords: ["measure"]
+    must_cite_findings: ["00000000-0000-0000-0000-000000000000:F-0001"]
+  - keywords: ["sampl"]
+    must_cite_findings: ["00000000-0000-0000-0000-000000000000:F-0002"]
+
+min_open_questions: 2
+
+forbidden_phrases:
+  - "because"
+  - "due to"
+  - "caused by"
+  - "resulted in"
+  - "leading to"
+
+citation_integrity:
+  all_cited_findings_must_exist: true
+
+honesty_under_unknown_flags:
+  if_flag: null
+  no_claim_with_basis: null

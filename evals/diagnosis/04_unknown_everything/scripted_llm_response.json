@@ -1,0 +1,59 @@
+{
+  "action": "emit",
+  "failures": [
+    {
+      "summary": "Biomass at 24h reads 0.75 g/L, 5 sigma above nominal 0.5",
+      "cited_finding_ids": ["00000000-0000-0000-0000-000000000000:F-0001"],
+      "affected_variables": ["Biomass (X)"],
+      "confidence": 0.7,
+      "confidence_basis": "process_priors",
+      "domain_tags": ["growth"],
+      "severity": "critical"
+    },
+    {
+      "summary": "Temperature at 24h reads 298.5 K, 3 sigma above nominal 297.0",
+      "cited_finding_ids": ["00000000-0000-0000-0000-000000000000:F-0002"],
+      "affected_variables": ["Temperature"],
+      "confidence": 0.7,
+      "confidence_basis": "process_priors",
+      "domain_tags": ["environmental"],
+      "severity": "major"
+    }
+  ],
+  "trends": [],
+  "analysis": [
+    {
+      "summary": "Without a registered process or organism, recipe-specific priors are unavailable; reasoning is grounded in schema nominal/std_dev only",
+      "cited_finding_ids": ["00000000-0000-0000-0000-000000000000:F-0001"],
+      "affected_variables": ["Biomass (X)"],
+      "confidence": 0.7,
+      "confidence_basis": "schema_only",
+      "domain_tags": ["data_quality"],
+      "kind": "data_quality_caveat"
+    }
+  ],
+  "open_questions": [
+    {
+      "question": "What organism is being cultured in this experiment?",
+      "why_it_matters": "without organism, biological priors cannot be applied to interpret the deviations",
+      "cited_finding_ids": ["00000000-0000-0000-0000-000000000000:F-0001"],
+      "answer_format_hint": "free_text",
+      "domain_tags": ["data_quality"]
+    },
+    {
+      "question": "What product or process recipe is this run targeting?",
+      "why_it_matters": "without a registered process, expected nominal ranges may differ from schema defaults",
+      "cited_finding_ids": ["00000000-0000-0000-0000-000000000000:F-0002"],
+      "answer_format_hint": "free_text",
+      "domain_tags": ["data_quality"]
+    },
+    {
+      "question": "Was the 24h sample drawn from the same vessel and instrument as earlier samples?",
+      "why_it_matters": "explains whether the concurrent above-nominal readings reflect biology or sampling artefact",
+      "cited_finding_ids": ["00000000-0000-0000-0000-000000000000:F-0003"],
+      "answer_format_hint": "yes_no",
+      "domain_tags": ["data_quality"]
+    }
+  ],
+  "narrative": "Identity is unknown for this experiment. Two findings observed at the 24h sample point. Diagnosis stays grounded in schema specs and explicitly defers process-specific reasoning to the next stage once identity is clarified."
+}

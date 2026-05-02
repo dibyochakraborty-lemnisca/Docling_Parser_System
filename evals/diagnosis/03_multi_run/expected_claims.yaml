@@ -1,0 +1,31 @@
+# 03_multi_run: cross-run pattern — score cross_run analysis + MIXED_RUNS context.
+
+expected_failures:
+  - summary_keywords: ["temperature", "sigma"]
+    must_cite_findings: ["00000000-0000-0000-0000-000000000000:F-0001"]
+    min_confidence: 0.5
+    must_have_domain_tags: ["environmental"]
+
+expected_analysis:
+  - summary_keywords: ["run"]
+    must_cite_findings: ["00000000-0000-0000-0000-000000000000:F-0001"]
+    must_have_kind: "cross_run_observation"
+    must_have_confidence_basis: "cross_run"
+
+expected_open_questions:
+  - keywords: ["run"]
+    must_cite_findings: ["00000000-0000-0000-0000-000000000000:F-0001"]
+
+forbidden_phrases:
+  - "because"
+  - "due to"
+  - "caused by"
+  - "resulted in"
+  - "leading to"
+
+citation_integrity:
+  all_cited_findings_must_exist: true
+
+honesty_under_unknown_flags:
+  if_flag: null
+  no_claim_with_basis: null
