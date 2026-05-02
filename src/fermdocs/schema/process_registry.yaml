@@ -1,0 +1,14 @@
+version: "1.0"
+processes:
+  - id: penicillin_indpensim
+    organism: "Penicillium chrysogenum"
+    product: "penicillin"
+    process_family: "fed-batch"
+    typical_scale_l: 58000
+    aliases:
+      organism: ["P. chrysogenum", "P chrysogenum"]
+      product: ["pen-G", "penicillin G", "6-APA precursor"]
+    variable_fingerprint:
+      required: [paa_mg_l, nh3_mg_l]
+      strong:   [alpha_kla, mu_p_max_per_h, biomass_g_l]
+      forbidden: []
