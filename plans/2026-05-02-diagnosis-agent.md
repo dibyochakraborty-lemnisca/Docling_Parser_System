@@ -540,7 +540,7 @@ context plan: one entry per commit._
 |------|--------|------|-------|
 | 2026-05-02 | 9559639 | Wave 1 (A+B+C) | schema, validators, tools, AgentContext finding-summary expansion. 36 new tests, 230 total pass. |
 | 2026-05-02 | a1c97c0 | Wave 2 (D+E) | ReAct agent.py with scripted-client testability + retry/error paths, renderers.py (5 markdown sidecars), cli.py. 29 new tests, 259 total pass. |
-| 2026-05-02 | _pending_ | Wave 3 (F) | 4 eval fixtures (01_boundary, 02_missing_data, 03_multi_run, 04_unknown_everything) with scripted LLM responses + expected_claims.yaml, pytest-parametrized run_evals.py scoring citation integrity, honesty under UNKNOWN flags, claim recall, provenance downgrade, forbidden phrases. 29 eval pass + 7 skipped (by-design optional checks). 293 total tests pass. |
+| 2026-05-02 | 82c95ee | Wave 3 (F) | 4 eval fixtures (01_boundary, 02_missing_data, 03_multi_run, 04_unknown_everything) with scripted LLM responses + expected_claims.yaml, pytest-parametrized run_evals.py scoring citation integrity, honesty under UNKNOWN flags, claim recall, provenance downgrade, forbidden phrases. 29 eval pass + 7 skipped (by-design optional checks). 293 total tests pass. |
 
 ## 18. Working agreement
 
