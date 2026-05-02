@@ -500,3 +500,18 @@ All 116 existing tests still pass. The 5 committed commits use the v4 atomic-`Pr
 ### 2026-05-01 — v4.1 design pivot
 
 User pushback: yeast (and any non-registered process) was losing organism info because v4's atomic `ProcessIdentity` collapsed surface facts and registry classification into one. v4.1 splits them; see Revision log at top. Refactor and Lane E commit together as commits 6-7. No history rewrites — the v4 commits stay as-is, the split lands as `refactor(domain,mapping,dossier): split ProcessIdentity into observed + registered`.
+
+### 2026-05-01 — PR1 commits 6-7 landed (v4.1 split + Lane E)
+
+- `79b1d35 refactor(domain,mapping,dossier): split ProcessIdentity into observed + registered`
+- `f1d7b45 eval+test(identity): scripted-LLM fixtures and full test coverage`
+
+160 tests pass. The yeast guard is verified by `evals/identity_extractor/02_off_whitelist`: an *E. coli* paper produces `observed.organism = "Escherichia coli"` + `registered.process_id = null`. PR1 complete.
+
+### 2026-05-01 — PR2 Lanes F + G + H landed
+
+- `feat(characterize): add ProcessFlag enum with documented emission rules`
+- `feat(characterize): add agent_context builder with token-budget truncation`
+- `test(characterize): per-flag boundary tests and agent-context coverage`
+
+194 tests pass total (160 prior + 21 flag tests + 13 agent_context tests). All 3 existing characterize fixtures (01_boundary, 02_missing_data, 03_multi_run) serialize the AgentContext under the 1500-token budget (~160-300 tokens each). Yeast-style cases verified: `observed.organism` surfaces in `AgentContext.process` even when `registered.process_id` is null; `UNKNOWN_PROCESS` and `UNKNOWN_ORGANISM` are independent flags so cases that have one without the other are preserved.
