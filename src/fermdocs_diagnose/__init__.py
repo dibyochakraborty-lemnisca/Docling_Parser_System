@@ -7,6 +7,7 @@ speculate on causes — that belongs to the hypothesis stage.
 See plans/2026-05-02-diagnosis-agent.md for the locked design.
 """
 
+from fermdocs_diagnose.agent import DiagnosisAgent, DiagnosisLLMClient
 from fermdocs_diagnose.schema import (
     AnalysisClaim,
     BaseClaim,
@@ -23,6 +24,8 @@ __all__ = [
     "AnalysisClaim",
     "BaseClaim",
     "ConfidenceBasis",
+    "DiagnosisAgent",
+    "DiagnosisLLMClient",
     "DiagnosisMeta",
     "DiagnosisOutput",
     "FailureClaim",

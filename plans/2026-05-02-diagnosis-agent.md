@@ -538,7 +538,8 @@ context plan: one entry per commit._
 
 | Date | Commit | Lane | Notes |
 |------|--------|------|-------|
-| 2026-05-02 | _pending_ | Wave 1 (A+B+C) | schema, validators, tools, AgentContext finding-summary expansion. 36 new tests, 230 total pass. |
+| 2026-05-02 | 9559639 | Wave 1 (A+B+C) | schema, validators, tools, AgentContext finding-summary expansion. 36 new tests, 230 total pass. |
+| 2026-05-02 | _pending_ | Wave 2 (D+E) | ReAct agent.py with scripted-client testability + retry/error paths, renderers.py (5 markdown sidecars), cli.py. 29 new tests, 259 total pass. |
 
 ## 18. Working agreement
 
