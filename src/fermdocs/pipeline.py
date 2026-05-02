@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import mimetypes
 import uuid
 from datetime import datetime
@@ -291,6 +292,13 @@ class IngestionPipeline:
                     continue
                 raw_value = row[col_idx]
                 if raw_value is None or raw_value == "":
+                    continue
+                # Filter NaN sentinels so they never reach JSONB (Postgres
+                # JSON spec forbids NaN). Common in offline-measurement
+                # columns where most timestamps lack a sample.
+                if isinstance(raw_value, str) and raw_value.strip().lower() == "nan":
+                    continue
+                if isinstance(raw_value, float) and math.isnan(raw_value):
                     continue
                 observations.append(
                     self._build_observation(

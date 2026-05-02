@@ -1,0 +1,25 @@
+# Process identity manifest for the IndPenSim industrial penicillin simulator.
+#
+# Source: Goldrick et al. (2015, 2019) — "The development of an industrial-scale
+# fed-batch fermentation simulation" (Journal of Biotechnology). Models a
+# 100,000-L Penicillium chrysogenum fed-batch process with PAA precursor and
+# NH3 nitrogen feeds, ~230 h batches.
+#
+# Flat shape per fermdocs.dossier.load_process_manifest. Both observed and
+# registered layers get IdentityProvenance.MANIFEST; the LLM identity
+# extractor is skipped when this manifest is supplied.
+
+organism: Penicillium chrysogenum
+product: penicillin
+process_family: industrial fed-batch fermentation
+process_id: penicillin_indpensim
+
+scale:
+  volume_l: 100000
+  vessel_type: stirred_tank_bioreactor
+
+confidence: 1.0
+rationale: >
+  IndPenSim_V2_export_V7.csv is the published canonical export from the
+  IndPenSim simulator. Identity is operator-asserted from the file's source
+  attribution, not LLM-extracted.

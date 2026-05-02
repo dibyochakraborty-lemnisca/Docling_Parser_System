@@ -123,5 +123,8 @@ def run(
     sys.exit(EXIT_OK if result.meta.error is None else EXIT_LLM)
 
 
+main = cli
+
+
 if __name__ == "__main__":
     cli()
