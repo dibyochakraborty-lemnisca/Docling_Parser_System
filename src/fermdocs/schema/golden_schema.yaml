@@ -179,3 +179,110 @@ columns:
       - {raw_header: "alpha_kla"}
       - {raw_header: "α·kLa"}
       - {raw_header: "alpha kLa"}
+
+  # ---------------------------------------------------------------------------
+  # Universal aerobic-fermentation columns (added in Wave 1b — generalization).
+  # These are function-based and apply across organisms (yeast, E. coli,
+  # Penicillium, mammalian cell culture). Process-specific feeds (PAA, IPTG,
+  # antifoam) belong in process_priors when that lands, not here.
+  #
+  # nominal/std_dev intentionally left null: ranges for these signals are
+  # heavily process-dependent (OUR for E. coli ≠ OUR for Penicillium) and
+  # range_violation against schema specs would produce noise. Process_priors
+  # supplies real bounds when registered processes declare them.
+  # ---------------------------------------------------------------------------
+
+  - name: our_mmol_per_l_per_h
+    description: Oxygen Uptake Rate. Universal aerobic metabolic indicator.
+    data_type: float
+    canonical_unit: mmol/L/h
+    nominal: null
+    std_dev: null
+    synonyms: [OUR, oxygen_uptake_rate, qO2, q_O2, OUR_mmol]
+    examples:
+      - {raw_header: "OUR"}
+      - {raw_header: "OUR (mmol/L/h)"}
+      - {raw_header: "Oxygen Uptake Rate"}
+
+  - name: cer_mmol_per_l_per_h
+    description: Carbon Evolution Rate (CO2 production). Pairs with OUR for RQ.
+    data_type: float
+    canonical_unit: mmol/L/h
+    nominal: null
+    std_dev: null
+    synonyms: [CER, carbon_evolution_rate, qCO2, q_CO2, CO2_evolution]
+    examples:
+      - {raw_header: "CER"}
+      - {raw_header: "CER (mmol/L/h)"}
+      - {raw_header: "Carbon Evolution Rate"}
+
+  - name: rq_dimensionless
+    description: Respiratory Quotient (CER / OUR). Indicates metabolic regime.
+    data_type: float
+    canonical_unit: "1"
+    nominal: null
+    std_dev: null
+    synonyms: [RQ, respiratory_quotient, RQ_value]
+    examples:
+      - {raw_header: "RQ"}
+      - {raw_header: "Respiratory Quotient"}
+
+  - name: viscosity_cp
+    description: Broth viscosity. Critical for mycelial / non-Newtonian cultures.
+    data_type: float
+    canonical_unit: cP
+    nominal: null
+    std_dev: null
+    synonyms: [viscosity, mu, broth_viscosity, apparent_viscosity]
+    examples:
+      - {raw_header: "Viscosity"}
+      - {raw_header: "Viscosity (cP)"}
+      - {raw_header: "Apparent viscosity [cP]"}
+
+  - name: agitation_rpm
+    description: Impeller agitation speed.
+    data_type: float
+    canonical_unit: rpm
+    nominal: null
+    std_dev: null
+    synonyms: [RPM, rpm, agitation, impeller_speed, stirrer_rpm]
+    examples:
+      - {raw_header: "RPM"}
+      - {raw_header: "Agitation (rpm)"}
+      - {raw_header: "Stirrer Speed"}
+
+  - name: pressure_bar
+    description: Headspace pressure in the bioreactor.
+    data_type: float
+    canonical_unit: bar
+    nominal: null
+    std_dev: null
+    synonyms: [pressure, head_pressure, headspace_pressure, P_head]
+    examples:
+      - {raw_header: "Pressure"}
+      - {raw_header: "Pressure (bar)"}
+      - {raw_header: "Head Pressure"}
+
+  - name: gas_flow_l_per_min
+    description: Aeration / sparge gas flow rate. Universal across aerobic processes.
+    data_type: float
+    canonical_unit: L/min
+    nominal: null
+    std_dev: null
+    synonyms: [gas_flow, aeration_rate, Fg, sparge_rate, air_flow, vvm_flow]
+    examples:
+      - {raw_header: "Fg"}
+      - {raw_header: "Aeration"}
+      - {raw_header: "Air flow (L/min)"}
+
+  - name: feed_rate_l_per_h
+    description: Substrate feed rate (generic). Process-specific feed identities (PAA, IPTG, antifoam) belong in process_priors when that lands.
+    data_type: float
+    canonical_unit: L/h
+    nominal: null
+    std_dev: null
+    synonyms: [feed_rate, F_s, substrate_feed_rate, glucose_feed_rate, carbon_feed]
+    examples:
+      - {raw_header: "Fs"}
+      - {raw_header: "Feed rate"}
+      - {raw_header: "Substrate Feed (L/h)"}

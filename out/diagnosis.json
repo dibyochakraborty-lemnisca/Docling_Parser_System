@@ -2,9 +2,9 @@
   "meta": {
     "schema_version": "1.0",
     "diagnosis_version": "v1.0.0",
-    "diagnosis_id": "72da2ff1-db55-49c8-976a-7bc4fc63f768",
-    "supersedes_characterization_id": "cca8939e-bd44-47d4-8c49-2d10c39acd38",
-    "generation_timestamp": "2026-05-02T14:07:43.284001",
+    "diagnosis_id": "25b5fc47-d36c-4f87-8552-80b54bfa879b",
+    "supersedes_characterization_id": "fad84738-3e85-4f88-a113-b3724cccf80a",
+    "generation_timestamp": "2026-05-02T14:41:27.996005",
     "model": "claude-opus-4-7",
     "provider": "gemini",
     "error": null
@@ -12,17 +12,17 @@
   "failures": [
     {
       "claim_id": "D-F-0001",
-      "summary": "Temperature consistently violated the nominal specification of 297 \u00b1 0.5 K across 949 observations, reaching up to 299.65 K.",
+      "summary": "Substrate concentration in RUN-0001 deviated from the nominal 1.0 \u00b1 0.1 g/L, reaching a maximum of 43.8 g/L.",
       "cited_finding_ids": [
-        "cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0078"
+        "fad84738-3e85-4f88-a113-b3724cccf80a:F-0078"
       ],
       "affected_variables": [
-        "temperature_k"
+        "substrate_g_l"
       ],
       "confidence": 0.85,
       "confidence_basis": "schema_only",
       "domain_tags": [
-        "environmental",
+        "metabolism",
         "process_control"
       ],
       "provenance_downgraded": false,
@@ -31,9 +31,9 @@
     },
     {
       "claim_id": "D-F-0002",
-      "summary": "Dissolved oxygen deviated from the nominal specification of 15 \u00b1 0.5 mg/L across 1861 observations, dropping as low as 9.22 mg/L.",
+      "summary": "Dissolved oxygen in RUN-0001 operated below the nominal 15.0 \u00b1 0.5 mg/L, with observations ranging from 9.47 to 13.99 mg/L.",
       "cited_finding_ids": [
-        "cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0080"
+        "fad84738-3e85-4f88-a113-b3724cccf80a:F-0079"
       ],
       "affected_variables": [
         "dissolved_o2_mg_l"
@@ -50,48 +50,10 @@
     },
     {
       "claim_id": "D-F-0003",
-      "summary": "Substrate concentration showed extreme deviations from the nominal 1 \u00b1 0.1 g/L across 2242 observations, reaching up to 43.81 g/L.",
+      "summary": "Bioreactor volume and weight in RUN-0001 exceeded their nominal specifications of 58000 L and 62000 kg, reaching up to 87052 L and 94982 kg respectively.",
       "cited_finding_ids": [
-        "cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0079"
-      ],
-      "affected_variables": [
-        "substrate_g_l"
-      ],
-      "confidence": 0.85,
-      "confidence_basis": "schema_only",
-      "domain_tags": [
-        "metabolism",
-        "process_control"
-      ],
-      "provenance_downgraded": false,
-      "severity": "critical",
-      "time_window": null
-    },
-    {
-      "claim_id": "D-F-0004",
-      "summary": "Biomass concentration significantly exceeded the nominal specification of 0.5 \u00b1 0.05 g/L, reaching over 24.72 g/L at 144.0h.",
-      "cited_finding_ids": [
-        "cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0001",
-        "cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0002"
-      ],
-      "affected_variables": [
-        "biomass_g_l"
-      ],
-      "confidence": 0.85,
-      "confidence_basis": "schema_only",
-      "domain_tags": [
-        "growth"
-      ],
-      "provenance_downgraded": false,
-      "severity": "critical",
-      "time_window": null
-    },
-    {
-      "claim_id": "D-F-0005",
-      "summary": "Reactor volume and weight substantially exceeded their nominal specifications (58000 \u00b1 500 L and 62000 \u00b1 500 kg) across over 2000 observations, reaching up to 87141 L and 96184 kg respectively.",
-      "cited_finding_ids": [
-        "cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0081",
-        "cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0082"
+        "fad84738-3e85-4f88-a113-b3724cccf80a:F-0080",
+        "fad84738-3e85-4f88-a113-b3724cccf80a:F-0081"
       ],
       "affected_variables": [
         "volume_l",
@@ -105,26 +67,62 @@
       "provenance_downgraded": false,
       "severity": "critical",
       "time_window": null
+    },
+    {
+      "claim_id": "D-F-0004",
+      "summary": "Temperature in RUN-0002 operated above the nominal 297 \u00b1 0.5 K, with observations ranging from 298.0 to 299.65 K.",
+      "cited_finding_ids": [
+        "fad84738-3e85-4f88-a113-b3724cccf80a:F-0082"
+      ],
+      "affected_variables": [
+        "temperature_k"
+      ],
+      "confidence": 0.85,
+      "confidence_basis": "schema_only",
+      "domain_tags": [
+        "environmental",
+        "process_control"
+      ],
+      "provenance_downgraded": false,
+      "severity": "critical",
+      "time_window": null
+    },
+    {
+      "claim_id": "D-F-0005",
+      "summary": "Substrate concentration in RUN-0002 deviated from the nominal 1.0 \u00b1 0.1 g/L, reaching a maximum of 2.79 g/L.",
+      "cited_finding_ids": [
+        "fad84738-3e85-4f88-a113-b3724cccf80a:F-0083"
+      ],
+      "affected_variables": [
+        "substrate_g_l"
+      ],
+      "confidence": 0.85,
+      "confidence_basis": "schema_only",
+      "domain_tags": [
+        "metabolism",
+        "process_control"
+      ],
+      "provenance_downgraded": false,
+      "severity": "critical",
+      "time_window": null
     }
   ],
   "trends": [],
   "analysis": [
     {
       "claim_id": "D-A-0001",
-      "summary": "The extreme sigma deviations across volume, weight, biomass, and substrate suggest that the schema specifications represent initial setpoints rather than valid trajectory bounds for a fed-batch fermentation process.",
+      "summary": "Schema specifications for volume, weight, and substrate appear to represent initial setpoints rather than trajectory bounds, given the continuous deviations observed across hundreds of data points in a fed-batch process.",
       "cited_finding_ids": [
-        "cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0079",
-        "cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0081",
-        "cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0082",
-        "cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0001"
+        "fad84738-3e85-4f88-a113-b3724cccf80a:F-0078",
+        "fad84738-3e85-4f88-a113-b3724cccf80a:F-0080",
+        "fad84738-3e85-4f88-a113-b3724cccf80a:F-0081"
       ],
       "affected_variables": [
         "volume_l",
         "weight_kg",
-        "biomass_g_l",
         "substrate_g_l"
       ],
-      "confidence": 0.85,
+      "confidence": 0.8,
       "confidence_basis": "process_priors",
       "domain_tags": [
         "data_quality",
@@ -137,10 +135,10 @@
   "open_questions": [
     {
       "question_id": "D-Q-0001",
-      "question": "Are the schema specifications for volume, weight, biomass, and substrate intended to represent initial batch setpoints rather than dynamic trajectory bounds?",
-      "why_it_matters": "Clarifying spec semantics is necessary to distinguish true process deviations from expected fed-batch accumulation.",
+      "question": "Are the schema specifications for volume and weight intended to be initial setpoints rather than strict trajectory bounds?",
+      "why_it_matters": "Clarifying spec semantics prevents false positive critical alerts for expected volume increases in fed-batch operations.",
       "cited_finding_ids": [
-        "cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0081"
+        "fad84738-3e85-4f88-a113-b3724cccf80a:F-0080"
       ],
       "answer_format_hint": "yes_no",
       "domain_tags": [
@@ -148,5 +146,5 @@
       ]
     }
   ],
-  "narrative": "The run exhibits widespread and severe range violations across multiple key variables, including temperature, dissolved oxygen, substrate, biomass, volume, and weight. However, the magnitude of these deviations\u2014such as volume increasing from a nominal 58,000 L to over 87,000 L, and biomass exceeding nominal by over 480 sigma\u2014strongly indicates that the provided schema specifications reflect initial setpoints rather than valid operational bounds for a fed-batch process. In a fed-batch penicillin fermentation, volume, weight, and biomass are expected to increase significantly over the 228-hour run. The deviations in temperature and dissolved oxygen, while smaller in relative magnitude, also represent sustained departures from their nominal targets."
+  "narrative": "The analysis of the Penicillium chrysogenum fed-batch fermentation runs reveals multiple critical range violations across both RUN-0001 and RUN-0002. In RUN-0001, substrate concentration, dissolved oxygen, volume, and weight all deviated significantly from their nominal specifications. Notably, volume and weight increased well beyond their nominal values, which aligns with expected behavior in a fed-batch process but triggers critical alerts under the current schema. In RUN-0002, temperature and substrate concentration also exceeded their specified ranges. The continuous nature of these violations suggests that the schema specifications may be configured as static setpoints rather than dynamic trajectory bounds appropriate for a fed-batch process."
 }

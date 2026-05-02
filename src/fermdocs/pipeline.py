@@ -35,6 +35,7 @@ from fermdocs.mapping.narrative_extractor import (
     verify_evidence,
 )
 from fermdocs.parsing.router import FormatRouter
+from fermdocs.parsing.run_id_resolver import RunIdResolution, RunIdResolver
 from fermdocs.storage.repository import FileRecord, Repository
 from fermdocs.units.converter import UnitConverter
 from fermdocs.units.normalizer import UnitNormalizer
@@ -53,6 +54,7 @@ class IngestionPipeline:
         schema: GoldenSchema | None = None,
         normalizer: UnitNormalizer | None = None,
         narrative_extractor: NarrativeExtractor | None = None,
+        run_id_resolver: "RunIdResolver | None" = None,
     ):
         self._router = router
         self._mapper = mapper
@@ -63,6 +65,11 @@ class IngestionPipeline:
         self._schema_index = self._schema.by_name()
         self._normalizer = normalizer
         self._narrative_extractor = narrative_extractor
+        # Strategy-chain resolver. Tests can inject a custom chain (e.g.
+        # only ColumnStrategy) to assert specific paths.
+        from fermdocs.parsing.run_id_resolver import RunIdResolver as _RIR
+
+        self._run_id_resolver = run_id_resolver or _RIR()
 
     def ingest(self, experiment_id: str, files: list[Path]) -> IngestionResult:
         self._repo.upsert_experiment(experiment_id)
@@ -263,7 +270,16 @@ class IngestionPipeline:
         observations: list[Observation] = []
         unmapped_columns: list[dict] = []
         col_index = {h: i for i, h in enumerate(table.headers)}
-        time_col_idx, run_col_idx = _detect_time_and_run_columns(table.headers)
+        time_col_idx = _detect_time_column(table.headers)
+        # Run-id resolution via strategy chain. ColumnStrategy returns
+        # column_idx → per-row read; other strategies return a single value
+        # used for every row.
+        run_resolution = self._run_id_resolver.resolve(
+            headers=table.headers,
+            rows=table.rows,
+            filename=table.locator.get("file") if isinstance(table.locator, dict) else None,
+            manifest_run_id=None,  # CLI manifest threading is a future enhancement
+        )
 
         for entry in mapping.entries:
             decision = band(entry.confidence)
@@ -315,11 +331,7 @@ class IngestionPipeline:
                     continue
                 if isinstance(raw_value, float) and math.isnan(raw_value):
                     continue
-                row_run_id = (
-                    _coerce_run_id(row[run_col_idx])
-                    if run_col_idx is not None and run_col_idx < len(row)
-                    else None
-                )
+                row_run_id = _resolve_row_run_id(run_resolution, row)
                 row_time_h = (
                     _coerce_time_h(row[time_col_idx])
                     if time_col_idx is not None and time_col_idx < len(row)
@@ -406,14 +418,13 @@ class IngestionPipeline:
 
 
 # -----------------------------------------------------------------------------
-# Time / run-id auto-detection
+# Time-column auto-detection + run-id resolution helpers
 #
-# Real fermentation CSVs almost always carry one column for elapsed time and
-# one for the batch / run identifier. The characterization stage reads
-# locator.run_id and locator.timestamp_h off every observation; without those
-# fields, every row is dropped from the summary. We auto-detect once per
-# table by matching the headers against a small allow-list. CLI overrides
-# come later if a real file ever needs disambiguation.
+# Time-column detection stays a simple header match — there's no ambiguity
+# in practice (a CSV either has a clearly-named time column or it doesn't).
+# Run-id resolution moved to a strategy chain (parsing/run_id_resolver.py)
+# because it has many failure modes and grows over time. See that module
+# for the generalization rationale.
 # -----------------------------------------------------------------------------
 
 _TIME_HEADER_PATTERNS = (
@@ -426,33 +437,34 @@ _TIME_HEADER_PATTERNS = (
     "elapsed time",
     "t",
 )
-_RUN_HEADER_PATTERNS = (
-    "batch_ref",
-    "batch",
-    "batch_id",
-    "run",
-    "run_id",
-    "run_ref",
-)
 
 
-def _detect_time_and_run_columns(
-    headers: list[str],
-) -> tuple[int | None, int | None]:
-    """Return (time_col_idx, run_col_idx) by matching header strings.
-
-    Case-insensitive, whitespace-trimmed. First match wins; duplicate columns
-    (e.g. IndPenSim's 'Batch_ref' / 'Batch_ref.1') resolve to the first hit.
+def _detect_time_column(headers: list[str]) -> int | None:
+    """Return the index of the first column whose header matches a time
+    pattern, or None.
     """
-    time_idx: int | None = None
-    run_idx: int | None = None
     for i, h in enumerate(headers):
         norm = (h or "").strip().lower()
-        if time_idx is None and norm in _TIME_HEADER_PATTERNS:
-            time_idx = i
-        if run_idx is None and norm in _RUN_HEADER_PATTERNS:
-            run_idx = i
-    return time_idx, run_idx
+        if norm in _TIME_HEADER_PATTERNS:
+            return i
+    return None
+
+
+def _resolve_row_run_id(
+    resolution: RunIdResolution, row: list[Any]
+) -> str | None:
+    """Apply a RunIdResolution to one row of the table.
+
+    When the resolution carries a column_idx (ColumnStrategy), we read the
+    cell. Otherwise we use the resolution's verbatim value (manifest /
+    filename / synthetic). Coercion is identical to the column path so the
+    resulting run_ids are interchangeable.
+    """
+    if resolution.column_idx is not None:
+        if resolution.column_idx >= len(row):
+            return None
+        return _coerce_run_id(row[resolution.column_idx])
+    return resolution.value or None
 
 
 def _coerce_time_h(value: object) -> float | None:

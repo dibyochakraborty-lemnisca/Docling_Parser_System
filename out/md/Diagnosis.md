@@ -1,31 +1,31 @@
 # Diagnosis Report
 
-- diagnosis_id: `72da2ff1-db55-49c8-976a-7bc4fc63f768`
-- supersedes characterization: `cca8939e-bd44-47d4-8c49-2d10c39acd38`
-- generated: 2026-05-02T14:07:43.284001
+- diagnosis_id: `25b5fc47-d36c-4f87-8552-80b54bfa879b`
+- supersedes characterization: `fad84738-3e85-4f88-a113-b3724cccf80a`
+- generated: 2026-05-02T14:41:27.996005
 - model: `claude-opus-4-7` (gemini)
 
 ## Narrative
 
-The run exhibits widespread and severe range violations across multiple key variables, including temperature, dissolved oxygen, substrate, biomass, volume, and weight. However, the magnitude of these deviations—such as volume increasing from a nominal 58,000 L to over 87,000 L, and biomass exceeding nominal by over 480 sigma—strongly indicates that the provided schema specifications reflect initial setpoints rather than valid operational bounds for a fed-batch process. In a fed-batch penicillin fermentation, volume, weight, and biomass are expected to increase significantly over the 228-hour run. The deviations in temperature and dissolved oxygen, while smaller in relative magnitude, also represent sustained departures from their nominal targets.
+The analysis of the Penicillium chrysogenum fed-batch fermentation runs reveals multiple critical range violations across both RUN-0001 and RUN-0002. In RUN-0001, substrate concentration, dissolved oxygen, volume, and weight all deviated significantly from their nominal specifications. Notably, volume and weight increased well beyond their nominal values, which aligns with expected behavior in a fed-batch process but triggers critical alerts under the current schema. In RUN-0002, temperature and substrate concentration also exceeded their specified ranges. The continuous nature of these violations suggests that the schema specifications may be configured as static setpoints rather than dynamic trajectory bounds appropriate for a fed-batch process.
 
 # Failures
 
 ## D-F-0001 [critical]
 
-Temperature consistently violated the nominal specification of 297 ± 0.5 K across 949 observations, reaching up to 299.65 K.
+Substrate concentration in RUN-0001 deviated from the nominal 1.0 ± 0.1 g/L, reaching a maximum of 43.8 g/L.
 
-- cites: `cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0078`
-- variables: temperature_k
+- cites: `fad84738-3e85-4f88-a113-b3724cccf80a:F-0078`
+- variables: substrate_g_l
 - confidence: 0.85 (schema_only)
-- domain_tags: environmental, process_control
+- domain_tags: metabolism, process_control
 - time_window: —
 
 ## D-F-0002 [critical]
 
-Dissolved oxygen deviated from the nominal specification of 15 ± 0.5 mg/L across 1861 observations, dropping as low as 9.22 mg/L.
+Dissolved oxygen in RUN-0001 operated below the nominal 15.0 ± 0.5 mg/L, with observations ranging from 9.47 to 13.99 mg/L.
 
-- cites: `cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0080`
+- cites: `fad84738-3e85-4f88-a113-b3724cccf80a:F-0079`
 - variables: dissolved_o2_mg_l
 - confidence: 0.85 (schema_only)
 - domain_tags: environmental, process_control
@@ -33,32 +33,32 @@ Dissolved oxygen deviated from the nominal specification of 15 ± 0.5 mg/L acros
 
 ## D-F-0003 [critical]
 
-Substrate concentration showed extreme deviations from the nominal 1 ± 0.1 g/L across 2242 observations, reaching up to 43.81 g/L.
+Bioreactor volume and weight in RUN-0001 exceeded their nominal specifications of 58000 L and 62000 kg, reaching up to 87052 L and 94982 kg respectively.
 
-- cites: `cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0079`
-- variables: substrate_g_l
+- cites: `fad84738-3e85-4f88-a113-b3724cccf80a:F-0080`, `fad84738-3e85-4f88-a113-b3724cccf80a:F-0081`
+- variables: volume_l, weight_kg
 - confidence: 0.85 (schema_only)
-- domain_tags: metabolism, process_control
+- domain_tags: process_control
 - time_window: —
 
 ## D-F-0004 [critical]
 
-Biomass concentration significantly exceeded the nominal specification of 0.5 ± 0.05 g/L, reaching over 24.72 g/L at 144.0h.
+Temperature in RUN-0002 operated above the nominal 297 ± 0.5 K, with observations ranging from 298.0 to 299.65 K.
 
-- cites: `cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0001`, `cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0002`
-- variables: biomass_g_l
+- cites: `fad84738-3e85-4f88-a113-b3724cccf80a:F-0082`
+- variables: temperature_k
 - confidence: 0.85 (schema_only)
-- domain_tags: growth
+- domain_tags: environmental, process_control
 - time_window: —
 
 ## D-F-0005 [critical]
 
-Reactor volume and weight substantially exceeded their nominal specifications (58000 ± 500 L and 62000 ± 500 kg) across over 2000 observations, reaching up to 87141 L and 96184 kg respectively.
+Substrate concentration in RUN-0002 deviated from the nominal 1.0 ± 0.1 g/L, reaching a maximum of 2.79 g/L.
 
-- cites: `cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0081`, `cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0082`
-- variables: volume_l, weight_kg
+- cites: `fad84738-3e85-4f88-a113-b3724cccf80a:F-0083`
+- variables: substrate_g_l
 - confidence: 0.85 (schema_only)
-- domain_tags: process_control
+- domain_tags: metabolism, process_control
 - time_window: —
 
 # Trends
@@ -69,20 +69,20 @@ _No trends emitted._
 
 ## D-A-0001 [spec_alignment]
 
-The extreme sigma deviations across volume, weight, biomass, and substrate suggest that the schema specifications represent initial setpoints rather than valid trajectory bounds for a fed-batch fermentation process.
+Schema specifications for volume, weight, and substrate appear to represent initial setpoints rather than trajectory bounds, given the continuous deviations observed across hundreds of data points in a fed-batch process.
 
-- cites: `cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0079`, `cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0081`, `cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0082`, `cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0001`
-- variables: volume_l, weight_kg, biomass_g_l, substrate_g_l
-- confidence: 0.85 (process_priors)
+- cites: `fad84738-3e85-4f88-a113-b3724cccf80a:F-0078`, `fad84738-3e85-4f88-a113-b3724cccf80a:F-0080`, `fad84738-3e85-4f88-a113-b3724cccf80a:F-0081`
+- variables: volume_l, weight_kg, substrate_g_l
+- confidence: 0.80 (process_priors)
 - domain_tags: data_quality, process_control
 
 # Open questions
 
 ## D-Q-0001
 
-**Are the schema specifications for volume, weight, biomass, and substrate intended to represent initial batch setpoints rather than dynamic trajectory bounds?**
+**Are the schema specifications for volume and weight intended to be initial setpoints rather than strict trajectory bounds?**
 
-- why_it_matters: Clarifying spec semantics is necessary to distinguish true process deviations from expected fed-batch accumulation.
-- cites: `cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0081`
+- why_it_matters: Clarifying spec semantics prevents false positive critical alerts for expected volume increases in fed-batch operations.
+- cites: `fad84738-3e85-4f88-a113-b3724cccf80a:F-0080`
 - answer_format: yes_no
 - domain_tags: data_quality

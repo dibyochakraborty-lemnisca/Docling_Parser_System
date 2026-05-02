@@ -92,11 +92,14 @@ def test_metadata_column_produces_no_observations():
     when the mapper points at it.
     """
     schema = _schema()
+    from fermdocs.parsing.run_id_resolver import RunIdResolver
+
     pipeline = IngestionPipeline.__new__(IngestionPipeline)
     pipeline._schema = schema
     pipeline._schema_index = schema.by_name()
     pipeline._converter = _FakeConverter()
     pipeline._normalizer = None
+    pipeline._run_id_resolver = RunIdResolver()
 
     import uuid
 
@@ -117,11 +120,14 @@ def test_metadata_column_recorded_in_unmapped_with_reason():
     mappings the guard caught.
     """
     schema = _schema()
+    from fermdocs.parsing.run_id_resolver import RunIdResolver
+
     pipeline = IngestionPipeline.__new__(IngestionPipeline)
     pipeline._schema = schema
     pipeline._schema_index = schema.by_name()
     pipeline._converter = _FakeConverter()
     pipeline._normalizer = None
+    pipeline._run_id_resolver = RunIdResolver()
 
     import uuid
 
@@ -142,11 +148,14 @@ def test_metadata_column_recorded_in_unmapped_with_reason():
 def test_measurement_column_unaffected():
     """Variables with canonical_unit set still produce observations as before."""
     schema = _schema()
+    from fermdocs.parsing.run_id_resolver import RunIdResolver
+
     pipeline = IngestionPipeline.__new__(IngestionPipeline)
     pipeline._schema = schema
     pipeline._schema_index = schema.by_name()
     pipeline._converter = _FakeConverter()
     pipeline._normalizer = None
+    pipeline._run_id_resolver = RunIdResolver()
 
     import uuid
 

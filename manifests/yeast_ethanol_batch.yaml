@@ -1,0 +1,23 @@
+# Identity manifest for the synthetic yeast ethanol batch fixture.
+#
+# Generalization regression target: tests the "registered process is unknown,
+# but observed organism is known" path (the yeast case from earlier in this
+# project). The diagnosis agent must use confidence_basis=schema_only and
+# avoid invoking penicillium-specific priors.
+
+organism: Saccharomyces cerevisiae
+product: ethanol
+process_family: aerobic-anaerobic batch fermentation
+# No process_id — yeast ethanol batch is not in the registry. The
+# RegisteredProcess layer should populate as UNKNOWN; ObservedFacts carries
+# organism/product. UNKNOWN_PROCESS flag will fire; UNKNOWN_ORGANISM should
+# not.
+
+scale:
+  volume_l: 5.0
+  vessel_type: stirred_tank_bioreactor
+
+confidence: 1.0
+rationale: >
+  Synthetic yeast ethanol batch fixture for generalization testing.
+  Operator-asserted from fixture metadata, not LLM-extracted.

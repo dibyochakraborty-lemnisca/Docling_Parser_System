@@ -1,9 +1,9 @@
-"""Tests for ingestion-side time + run_id auto-detection.
+"""Tests for ingestion-side time-column detection and run_id coercion.
 
-The characterization stage reads locator.run_id and locator.timestamp_h on
-every observation. Without ingestion stamping these from the CSV, the
-summary builder drops every row. These tests cover the heuristics that
-recover those fields from real CSVs.
+Run-id resolution itself moved to a strategy chain in
+parsing/run_id_resolver.py — see test_run_id_resolver.py for that. This
+file keeps the simple time-column header heuristic and the value-coercion
+helpers used by both the column-strategy path and the verbatim-strategy path.
 """
 
 from __future__ import annotations
@@ -15,58 +15,41 @@ import pytest
 from fermdocs.pipeline import (
     _coerce_run_id,
     _coerce_time_h,
-    _detect_time_and_run_columns,
+    _detect_time_column,
 )
 
 
-# ---------- _detect_time_and_run_columns ----------
+# ---------- _detect_time_column ----------
 
 
-def test_detects_indpensim_headers():
-    """Canonical IndPenSim CSV has 'Time (h)' and 'Batch_ref' columns."""
+def test_detects_indpensim_time_header():
+    """Canonical IndPenSim CSV uses 'Time (h)'."""
     headers = ["Time (h)", "Fg", "RPM", "Batch_ref", "Batch_ref.1"]
-    time_idx, run_idx = _detect_time_and_run_columns(headers)
-    assert time_idx == 0
-    assert run_idx == 3  # first match wins; .1 dup ignored
+    assert _detect_time_column(headers) == 0
 
 
 def test_detects_simple_time_column():
     headers = ["time", "biomass", "ph"]
-    time_idx, _ = _detect_time_and_run_columns(headers)
-    assert time_idx == 0
-
-
-def test_detects_run_id_column():
-    headers = ["t", "x", "run_id"]
-    _, run_idx = _detect_time_and_run_columns(headers)
-    assert run_idx == 2
+    assert _detect_time_column(headers) == 0
 
 
 def test_case_insensitive():
-    headers = ["TIME", "BATCH"]
-    t, r = _detect_time_and_run_columns(headers)
-    assert t == 0
-    assert r == 1
+    headers = ["TIME"]
+    assert _detect_time_column(headers) == 0
 
 
 def test_whitespace_trimmed():
-    headers = ["  Time (h)  ", " batch_ref "]
-    t, r = _detect_time_and_run_columns(headers)
-    assert t == 0
-    assert r == 1
+    headers = ["  Time (h)  "]
+    assert _detect_time_column(headers) == 0
 
 
 def test_no_match_returns_none():
     headers = ["x", "y", "z"]
-    t, r = _detect_time_and_run_columns(headers)
-    assert t is None
-    assert r is None
+    assert _detect_time_column(headers) is None
 
 
 def test_empty_headers():
-    t, r = _detect_time_and_run_columns([])
-    assert t is None
-    assert r is None
+    assert _detect_time_column([]) is None
 
 
 # ---------- _coerce_time_h ----------
@@ -108,8 +91,8 @@ def test_coerce_run_id_string_passthrough():
 
 
 def test_coerce_run_id_numeric_normalized():
-    """IndPenSim's Batch_ref column is numeric like '1', '1.0', '2'.
-    Normalize to RUN-NNNN so cohort comparisons are stable.
+    """Numeric ids like '1' or '1.0' normalize to RUN-NNNN so cohort
+    comparisons are stable.
     """
     assert _coerce_run_id("1") == "RUN-0001"
     assert _coerce_run_id("1.0") == "RUN-0001"
@@ -118,7 +101,6 @@ def test_coerce_run_id_numeric_normalized():
 
 
 def test_coerce_run_id_non_integer_float_kept_as_string():
-    """A non-integer float would be a weird run id; preserve verbatim."""
     assert _coerce_run_id("1.5") == "1.5"
 
 
