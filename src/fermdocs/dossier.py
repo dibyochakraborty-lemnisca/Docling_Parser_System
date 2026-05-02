@@ -12,7 +12,10 @@ from fermdocs.domain.models import (
     IdentityProvenance,
     NarrativeBlock,
     NarrativeBlockType,
+    ObservedFacts,
     ProcessIdentity,
+    RegisteredProcess,
+    ScaleInfo,
 )
 from fermdocs.mapping.identity_extractor import (
     IdentityExtractor,
@@ -27,18 +30,62 @@ _log = logging.getLogger(__name__)
 
 
 def load_process_manifest(path: str | Path) -> ProcessIdentity:
-    """Load an operator-supplied identity manifest YAML.
+    """Load an operator-supplied identity manifest YAML into a ProcessIdentity.
 
-    The manifest must validate against ProcessIdentity. We force
-    provenance=MANIFEST regardless of what the file says, so a manifest
-    can never disguise itself as LLM-extracted.
+    The manifest format is intentionally flat -- operators don't need to know
+    about the observed/registered split. We populate both layers from the
+    same source and force provenance=MANIFEST on both, so a manifest can
+    never disguise itself as LLM-extracted.
+
+    Accepted YAML keys:
+      organism, product, process_family (or process_family_hint),
+      scale: {volume_l, vessel_type},
+      process_id (registry id, optional),
+      confidence (default 1.0), rationale.
+
+    Examples are in /plans for the format.
     """
     with open(path) as f:
         data = yaml.safe_load(f) or {}
     if not isinstance(data, dict):
         raise ValueError(f"manifest {path!s} must be a YAML mapping")
-    data["provenance"] = IdentityProvenance.MANIFEST.value
-    return ProcessIdentity.model_validate(data)
+
+    confidence = float(data.get("confidence", 1.0))
+    confidence = max(0.0, min(1.0, confidence))
+
+    scale_data = data.get("scale")
+    scale: ScaleInfo | None = None
+    if isinstance(scale_data, dict):
+        scale = ScaleInfo(
+            volume_l=scale_data.get("volume_l"),
+            vessel_type=scale_data.get("vessel_type"),
+        )
+    elif "scale_volume_l" in data or "vessel_type" in data:
+        scale = ScaleInfo(
+            volume_l=data.get("scale_volume_l"),
+            vessel_type=data.get("vessel_type"),
+        )
+
+    family_hint = data.get("process_family_hint") or data.get("process_family")
+
+    observed = ObservedFacts(
+        organism=data.get("organism"),
+        product=data.get("product"),
+        process_family_hint=family_hint,
+        scale=scale,
+        confidence=confidence,
+        provenance=IdentityProvenance.MANIFEST,
+        rationale=data.get("rationale"),
+    )
+
+    registered = RegisteredProcess(
+        process_id=data.get("process_id"),
+        confidence=confidence,
+        provenance=IdentityProvenance.MANIFEST,
+        rationale=data.get("rationale"),
+    )
+
+    return ProcessIdentity(observed=observed, registered=registered)
 
 
 def _residual_narrative_blocks(residuals: list) -> list[NarrativeBlock]:

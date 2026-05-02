@@ -64,19 +64,22 @@ class ScaleInfo(BaseModel):
     vessel_type: str | None = None
 
 
-class ProcessIdentity(BaseModel):
-    """Per-experiment identity: organism, product, recipe, scale.
+class ObservedFacts(BaseModel):
+    """Surface facts extracted from prose. Populated whenever the LLM finds
+    them in the source documents, regardless of whether the process matches
+    the registry.
 
-    A dossier carries one of these. Downstream agents read it as the
-    primary prior on what's normal. Provenance is load-bearing: agents
-    treat MANIFEST as ground truth, LLM_WHITELISTED as a calibrated guess,
-    UNKNOWN as a signal to back off domain-specific reasoning.
+    Yeast experiment? `organism="Saccharomyces cerevisiae"` shows up here
+    even though no yeast process is registered. This layer carries what
+    the agents *can* know directly from the paper without a recipe match.
+
+    Substring-evidence verification applies to every populated field.
+    Confidence is capped at 0.85 (LLM_CONFIDENCE_CAP).
     """
 
-    process_id: str | None = None  # registry id, e.g. "penicillin_indpensim"
     organism: str | None = None
     product: str | None = None
-    process_family: str | None = None
+    process_family_hint: str | None = None  # "fed-batch" / "batch" / "perfusion"
     scale: ScaleInfo | None = None
     confidence: float = Field(ge=0.0, le=1.0, default=0.0)
     provenance: IdentityProvenance = IdentityProvenance.UNKNOWN
@@ -84,6 +87,32 @@ class ProcessIdentity(BaseModel):
         default_factory=list, max_length=5
     )
     rationale: str | None = None
+
+
+class RegisteredProcess(BaseModel):
+    """Registry classification. Only populated on registry hit + fingerprint
+    pass. Stays UNKNOWN for processes outside the registry.
+
+    Failure of this layer does NOT nullify ObservedFacts: agents still see
+    the organism even when the recipe is unknown.
+    """
+
+    process_id: str | None = None  # registry id, e.g. "penicillin_indpensim"
+    confidence: float = Field(ge=0.0, le=1.0, default=0.0)
+    provenance: IdentityProvenance = IdentityProvenance.UNKNOWN
+    rationale: str | None = None
+
+
+class ProcessIdentity(BaseModel):
+    """Per-experiment identity carrying both layers.
+
+    Downstream agents read both:
+      - process.observed.organism: usually present even on non-registered runs
+      - process.registered.process_id: only present on registry hit
+    """
+
+    observed: ObservedFacts = Field(default_factory=ObservedFacts)
+    registered: RegisteredProcess = Field(default_factory=RegisteredProcess)
 
 
 class GoldenColumnExample(BaseModel):
