@@ -136,7 +136,10 @@ def test_unknown_citation_dropped_in_drop_mode(caplog):
         cleaned = validate_diagnosis(out, upstream=upstream)
     assert len(cleaned.failures) == 1
     assert cleaned.failures[0].claim_id == "D-F-0001"
-    assert any("unknown finding_ids" in r.message for r in caplog.records)
+    assert any(
+        "unknown refs" in r.message and "F-9999" in r.message
+        for r in caplog.records
+    )
 
 
 def test_unknown_citation_raises_in_strict_mode():

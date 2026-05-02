@@ -135,6 +135,12 @@ class DiagnosisToolBundle:
             "process_priors_organisms": (
                 [o.name for o in self.priors.organisms] if self.priors is not None else []
             ),
+            # Plan B Stage 3: surface narrative count + tags so the agent
+            # knows whether to call get_narrative_observations.
+            "narrative_observations_count": len(self.upstream.narrative_observations),
+            "narrative_observation_tags": sorted(
+                {getattr(n.tag, "value", str(n.tag)) for n in self.upstream.narrative_observations}
+            ),
         }
 
     def get_findings(
@@ -181,6 +187,60 @@ class DiagnosisToolBundle:
             "findings": [_sanitize_json(f.model_dump(mode="json")) for f in sliced],
             "total": len(matched),
             "truncated": truncated,
+        }
+
+    def get_narrative_observations(
+        self,
+        *,
+        run_id: str | None = None,
+        tag: str | None = None,
+        variable: str | None = None,
+        limit: int = 50,
+    ) -> dict:
+        """Return prose insights extracted from the source document.
+
+        Cost: Low. Returns {"observations": [...], "total": N, "truncated": bool,
+        "tags_present": [...]}.
+
+        These are direct statements from the report author / operator —
+        closure events ("white cells observed"), interventions ("IPM added"),
+        deviations, conclusions. Treat them as primary evidence: if the report
+        says cells died, they died, regardless of what biomass numbers show.
+
+        Filter args:
+            run_id: only observations attributed to that run (e.g. "BATCH-01")
+            tag: closure_event | deviation | intervention | observation |
+                 conclusion | protocol_note
+            variable: only observations whose affected_variables include this name
+            limit: hard cap on returned items (default 50)
+
+        You SHOULD call this once at the start of analysis on any bundle that
+        has narrative observations. Cite narrative_ids in cited_narrative_ids
+        on any claim grounded in prose.
+        """
+        gated = self._gate("get_narrative_observations")
+        if gated:
+            return gated
+        all_obs = list(self.upstream.narrative_observations)
+
+        def _match(n: Any) -> bool:
+            if run_id and n.run_id != run_id:
+                return False
+            if tag and getattr(n.tag, "value", str(n.tag)) != tag:
+                return False
+            if variable and variable not in n.affected_variables:
+                return False
+            return True
+
+        matched = [n for n in all_obs if _match(n)]
+        truncated = len(matched) > limit
+        sliced = matched[:limit]
+        tags_present = sorted({getattr(n.tag, "value", str(n.tag)) for n in all_obs})
+        return {
+            "observations": [_sanitize_json(n.model_dump(mode="json")) for n in sliced],
+            "total": len(matched),
+            "truncated": truncated,
+            "tags_present": tags_present,
         }
 
     def get_specs(self, variable: str) -> dict:

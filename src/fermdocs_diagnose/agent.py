@@ -187,6 +187,12 @@ _BUNDLE_SYSTEM_PROMPT = (
     "    process-family expected ranges (literature-sourced). Each prior\n"
     "    carries a citation; cite the source in your claim summary when\n"
     "    you ground a finding on a prior.\n"
+    "  - get_narrative_observations(run_id?, tag?, variable?) [L] — prose\n"
+    "    insights extracted from the source document (closure events,\n"
+    "    interventions, deviations, observations stated by the operator).\n"
+    "    Tags: closure_event, deviation, intervention, observation,\n"
+    "    conclusion, protocol_note. get_meta() reports the count and which\n"
+    "    tags are present in this bundle.\n"
     "  - submit_diagnosis(payload) — terminator. Idempotent; second call\n"
     "    with a different payload is rejected.\n\n"
     "Tool budget: 20 calls / 7 min wall-clock. Spend them.\n\n"
@@ -209,6 +215,23 @@ _BUNDLE_SYSTEM_PROMPT = (
     "  backed by a loaded prior will be auto-downgraded to schema_only\n"
     "  with a provenance_downgraded flag — the runtime keeps the audit\n"
     "  trail honest.\n\n"
+    "NARRATIVE EVIDENCE (highest priority for WHAT HAPPENED):\n"
+    "  Reports often carry the actual diagnosis in prose, not numbers.\n"
+    "  If get_meta() reports narrative_observations_count > 0, you MUST\n"
+    "  call get_narrative_observations() before submit_diagnosis. These\n"
+    "  are direct statements from the people who ran the experiment:\n"
+    "  closure_event ('terminated at 82h, white cells observed'),\n"
+    "  intervention ('200 mL IPM added at 24h'), deviation, observation,\n"
+    "  conclusion. Treat them as primary evidence — if the report says\n"
+    "  cells died, they died, regardless of what biomass numbers show.\n\n"
+    "  When a narrative observation contradicts your numerical analysis,\n"
+    "  the narrative WINS for the OBSERVATION (e.g. 'pigment loss = yield\n"
+    "  failure') — but you should still report the numerical context\n"
+    "  ('biomass plateaued at 80 g/L when this happened').\n\n"
+    "  Cite narrative_ids in cited_narrative_ids on any claim grounded\n"
+    "  in prose. Closure events and operator interventions almost always\n"
+    "  belong in failures or analysis. Pure protocol notes belong in\n"
+    "  nothing — skip them.\n\n"
     "RESPONSE FORMAT:\n"
     "Each turn, emit a single JSON object:\n\n"
     "  Tool call:\n"
@@ -636,6 +659,8 @@ def _dispatch_tool_bundle(
         "submit_diagnosis": tools.submit_diagnosis,
         # Stage 2 (Plan A): organism-aware priors
         "get_priors": tools.get_priors,
+        # Stage 3 (Plan B): prose insights extracted from the source document
+        "get_narrative_observations": tools.get_narrative_observations,
         # Wave 1 aliases (agent prompt still names these). Best-effort: route
         # to bundle-aware equivalents so an unchanged system prompt keeps
         # working when --bundle is used.
@@ -721,6 +746,40 @@ def _build_output(
     # one claim is missing a citation field.
     upstream_traj_keys = {(t.run_id, t.variable) for t in output.trajectories}
 
+    # Same idea for narrative observations: if the claim names a variable
+    # that has narrative coverage but the agent forgot to cite the
+    # narrative_id, fall back to upstream narrative attribution. This
+    # rescues claims that are clearly grounded in extracted prose
+    # (e.g. an AnalysisClaim about an intervention) but emit
+    # cited_narrative_ids: null.
+    narrative_ids_by_variable: dict[str, list[str]] = {}
+    for n in output.narrative_observations:
+        for v in n.affected_variables:
+            narrative_ids_by_variable.setdefault(v, []).append(n.narrative_id)
+    all_narrative_ids = [n.narrative_id for n in output.narrative_observations]
+
+    def _backfill_narratives(
+        cited: list[str],
+        *,
+        affected: list[str],
+        also_have_other_citation: bool,
+    ) -> list[str]:
+        if cited:
+            return cited
+        if also_have_other_citation:
+            # Other citation form (finding or trajectory) is present; only
+            # backfill narratives if a variable directly attributes to one.
+            picked: list[str] = []
+            for v in affected:
+                picked.extend(narrative_ids_by_variable.get(v, []))
+            return list(dict.fromkeys(picked))
+        # No other citation: try variable match first
+        for v in affected:
+            if v in narrative_ids_by_variable:
+                return list(narrative_ids_by_variable[v])
+        # Last resort: any narrative is better than rejecting the whole emit
+        return list(all_narrative_ids) if all_narrative_ids else []
+
     failures = []
     for i, raw in enumerate(payload.get("failures") or []):
         f_trajs = [
@@ -730,6 +789,7 @@ def _build_output(
         ]
         cited_findings = list(raw.get("cited_finding_ids") or [])
         affected = list(raw.get("affected_variables") or [])
+        cited_narratives = list(raw.get("cited_narrative_ids") or [])
         # Backfill: if the claim has neither a finding nor a trajectory citation
         # but names a variable that has real upstream trajectories, auto-cite
         # those trajectories. This rescues claims the agent grounded via
@@ -740,13 +800,20 @@ def _build_output(
                 for (run_id, var) in upstream_traj_keys
                 if var in affected
             ]
+        # Narrative backfill — only when neither finding nor trajectory cite
+        # exists, since failures usually anchor on numerics.
+        cited_narratives = _backfill_narratives(
+            cited_narratives,
+            affected=affected,
+            also_have_other_citation=bool(cited_findings or f_trajs),
+        )
         failures.append(
             FailureClaim(
                 claim_id=f"D-F-{i+1:04d}",
                 summary=str(raw.get("summary", "")),
                 cited_finding_ids=cited_findings,
                 cited_trajectories=f_trajs,
-                cited_narrative_ids=list(raw.get("cited_narrative_ids") or []),
+                cited_narrative_ids=cited_narratives,
                 affected_variables=affected,
                 confidence=_clamp_conf(raw.get("confidence", 0.0)),
                 confidence_basis=_basis(raw.get("confidence_basis")),
@@ -763,14 +830,21 @@ def _build_output(
             for t in (raw.get("cited_trajectories") or [])
             if isinstance(t, dict) and "run_id" in t and "variable" in t
         ]
+        t_findings = list(raw.get("cited_finding_ids") or [])
+        t_affected = list(raw.get("affected_variables") or [])
+        t_narratives = _backfill_narratives(
+            list(raw.get("cited_narrative_ids") or []),
+            affected=t_affected,
+            also_have_other_citation=bool(t_findings or trajs),
+        )
         trends.append(
             TrendClaim(
                 claim_id=f"D-T-{i+1:04d}",
                 summary=str(raw.get("summary", "")),
-                cited_finding_ids=list(raw.get("cited_finding_ids") or []),
+                cited_finding_ids=t_findings,
                 cited_trajectories=trajs,
-                cited_narrative_ids=list(raw.get("cited_narrative_ids") or []),
-                affected_variables=list(raw.get("affected_variables") or []),
+                cited_narrative_ids=t_narratives,
+                affected_variables=t_affected,
                 confidence=_clamp_conf(raw.get("confidence", 0.0)),
                 confidence_basis=_basis(raw.get("confidence_basis")),
                 domain_tags=list(raw.get("domain_tags") or []),
@@ -781,13 +855,20 @@ def _build_output(
 
     analysis = []
     for i, raw in enumerate(payload.get("analysis") or []):
+        a_findings = list(raw.get("cited_finding_ids") or [])
+        a_affected = list(raw.get("affected_variables") or [])
+        a_narratives = _backfill_narratives(
+            list(raw.get("cited_narrative_ids") or []),
+            affected=a_affected,
+            also_have_other_citation=bool(a_findings),
+        )
         analysis.append(
             AnalysisClaim(
                 claim_id=f"D-A-{i+1:04d}",
                 summary=str(raw.get("summary", "")),
-                cited_finding_ids=list(raw.get("cited_finding_ids") or []),
-                cited_narrative_ids=list(raw.get("cited_narrative_ids") or []),
-                affected_variables=list(raw.get("affected_variables") or []),
+                cited_finding_ids=a_findings,
+                cited_narrative_ids=a_narratives,
+                affected_variables=a_affected,
                 confidence=_clamp_conf(raw.get("confidence", 0.0)),
                 confidence_basis=_basis(raw.get("confidence_basis")),
                 domain_tags=list(raw.get("domain_tags") or []),

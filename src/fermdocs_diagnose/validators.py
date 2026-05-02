@@ -91,6 +91,7 @@ def validate_diagnosis(
     """
     finding_ids = {f.finding_id for f in upstream.findings}
     trajectory_keys = {(t.run_id, t.variable) for t in upstream.trajectories}
+    narrative_ids = {n.narrative_id for n in upstream.narrative_observations}
     flags = frozenset(flags)
 
     # Build the set of variables that have priors loaded for this organism.
@@ -109,12 +110,14 @@ def validate_diagnosis(
     failures = list(_filter_claims(
         output.failures,
         finding_ids=finding_ids,
+        narrative_ids=narrative_ids,
         kind_label="failure",
         drop=drop_unknown_citations,
     ))
     analysis = list(_filter_claims(
         output.analysis,
         finding_ids=finding_ids,
+        narrative_ids=narrative_ids,
         kind_label="analysis",
         drop=drop_unknown_citations,
     ))
@@ -122,11 +125,13 @@ def validate_diagnosis(
         output.trends,
         finding_ids=finding_ids,
         trajectory_keys=trajectory_keys,
+        narrative_ids=narrative_ids,
         drop=drop_unknown_citations,
     ))
     open_questions = list(_filter_questions(
         output.open_questions,
         finding_ids=finding_ids,
+        narrative_ids=narrative_ids,
         drop=drop_unknown_citations,
     ))
 
@@ -148,15 +153,19 @@ def _filter_claims(
     claims: Iterable[FailureClaim | AnalysisClaim],
     *,
     finding_ids: set[str],
+    narrative_ids: set[str],
     kind_label: str,
     drop: bool,
 ):
     for claim in claims:
-        unknown = [fid for fid in claim.cited_finding_ids if fid not in finding_ids]
-        if unknown:
+        unknown_findings = [fid for fid in claim.cited_finding_ids if fid not in finding_ids]
+        unknown_narratives = [
+            nid for nid in claim.cited_narrative_ids if nid not in narrative_ids
+        ]
+        if unknown_findings or unknown_narratives:
             msg = (
-                f"{kind_label} claim {claim.claim_id} cites unknown finding_ids:"
-                f" {unknown}"
+                f"{kind_label} claim {claim.claim_id} cites unknown refs"
+                f" findings={unknown_findings} narratives={unknown_narratives}"
             )
             if drop:
                 _log.warning("%s — dropping claim", msg)
@@ -170,6 +179,7 @@ def _filter_trends(
     *,
     finding_ids: set[str],
     trajectory_keys: set[tuple[str, str]],
+    narrative_ids: set[str],
     drop: bool,
 ):
     for claim in claims:
@@ -179,10 +189,14 @@ def _filter_trends(
             for ref in claim.cited_trajectories
             if (ref.run_id, ref.variable) not in trajectory_keys
         ]
-        if bad_findings or bad_trajectories:
+        bad_narratives = [
+            nid for nid in claim.cited_narrative_ids if nid not in narrative_ids
+        ]
+        if bad_findings or bad_trajectories or bad_narratives:
             msg = (
                 f"trend claim {claim.claim_id} cites unknown refs"
                 f" findings={bad_findings} trajectories={bad_trajectories}"
+                f" narratives={bad_narratives}"
             )
             if drop:
                 _log.warning("%s — dropping claim", msg)
@@ -195,14 +209,18 @@ def _filter_questions(
     questions: Iterable[OpenQuestion],
     *,
     finding_ids: set[str],
+    narrative_ids: set[str],
     drop: bool,
 ):
     for q in questions:
-        unknown = [fid for fid in q.cited_finding_ids if fid not in finding_ids]
-        if unknown:
+        unknown_findings = [fid for fid in q.cited_finding_ids if fid not in finding_ids]
+        unknown_narratives = [
+            nid for nid in q.cited_narrative_ids if nid not in narrative_ids
+        ]
+        if unknown_findings or unknown_narratives:
             msg = (
-                f"open_question {q.question_id} cites unknown finding_ids:"
-                f" {unknown}"
+                f"open_question {q.question_id} cites unknown refs"
+                f" findings={unknown_findings} narratives={unknown_narratives}"
             )
             if drop:
                 _log.warning("%s — dropping question", msg)

@@ -164,6 +164,8 @@ _GEMINI_TOOL_CALL_FIELDS: dict[str, Any] = {
             "submit_diagnosis",
             # Plan A Stage 2: organism-aware priors
             "get_priors",
+            # Plan B Stage 3: prose insights from source document
+            "get_narrative_observations",
         ],
         "nullable": True,
     },
@@ -194,6 +196,8 @@ _GEMINI_TOOL_CALL_FIELDS: dict[str, Any] = {
             # get_priors
             "organism": {"type": "STRING", "nullable": True},
             "process_family": {"type": "STRING", "nullable": True},
+            # get_narrative_observations
+            "tag": {"type": "STRING", "nullable": True},
             # submit_diagnosis carries an opaque payload — Gemini structured
             # output can't model arbitrary recursive shapes, so we provide a
             # stringified payload escape hatch and parse it on receipt.
@@ -205,6 +209,7 @@ _GEMINI_TOOL_CALL_FIELDS: dict[str, Any] = {
 _GEMINI_CLAIM_BASE_FIELDS: dict[str, Any] = {
     "summary": {"type": "STRING"},
     "cited_finding_ids": {"type": "ARRAY", "items": {"type": "STRING"}},
+    "cited_narrative_ids": {"type": "ARRAY", "items": {"type": "STRING"}},
     "affected_variables": {"type": "ARRAY", "items": {"type": "STRING"}},
     "confidence": {"type": "NUMBER"},
     "confidence_basis": {
@@ -319,6 +324,10 @@ _GEMINI_DIAGNOSIS_SCHEMA: dict[str, Any] = {
                         "type": "ARRAY",
                         "items": {"type": "STRING"},
                     },
+                    "cited_narrative_ids": {
+                        "type": "ARRAY",
+                        "items": {"type": "STRING"},
+                    },
                     "answer_format_hint": {
                         "type": "STRING",
                         "enum": ["yes_no", "free_text", "numeric", "categorical"],
@@ -356,6 +365,8 @@ _ANTHROPIC_TOOL_CALL_SCHEMA: dict[str, Any] = {
                 "submit_diagnosis",
                 # Plan A Stage 2: organism-aware priors
                 "get_priors",
+                # Plan B Stage 3: prose insights from source document
+                "get_narrative_observations",
             ],
         },
         "args": {"type": "object"},
@@ -366,6 +377,7 @@ _ANTHROPIC_TOOL_CALL_SCHEMA: dict[str, Any] = {
 _ANTHROPIC_CLAIM_BASE: dict[str, Any] = {
     "summary": {"type": "string"},
     "cited_finding_ids": {"type": "array", "items": {"type": "string"}},
+    "cited_narrative_ids": {"type": "array", "items": {"type": "string"}},
     "affected_variables": {"type": "array", "items": {"type": "string"}},
     "confidence": {"type": "number"},
     "confidence_basis": {
@@ -457,6 +469,10 @@ _ANTHROPIC_EMIT_SCHEMA: dict[str, Any] = {
                     "question": {"type": "string"},
                     "why_it_matters": {"type": "string"},
                     "cited_finding_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "cited_narrative_ids": {
                         "type": "array",
                         "items": {"type": "string"},
                     },
