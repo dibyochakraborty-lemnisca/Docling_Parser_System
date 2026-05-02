@@ -31,6 +31,61 @@ class ConversionStatus(str, Enum):
     NOT_APPLICABLE = "not_applicable"
 
 
+class IdentityProvenance(str, Enum):
+    """How a ProcessIdentity was determined.
+
+    Downstream agents reason about a violation differently depending on
+    whether the identity came from an operator-supplied manifest (high
+    trust), an LLM extraction validated against a closed registry (medium
+    trust, capped at 0.85), or no identification at all.
+    """
+
+    MANIFEST = "manifest"
+    LLM_WHITELISTED = "llm_whitelisted"
+    UNKNOWN = "unknown"
+
+
+class EvidenceLocator(BaseModel):
+    """A pointer to the exact source span supporting a claim.
+
+    Carries enough information for a future facts_graph builder to create
+    a Source node and a `derived_from` edge from the cited Sample. Plain
+    strings would force every consumer to re-derive provenance.
+    """
+
+    file_id: str
+    paragraph_idx: int
+    span_text: str = Field(max_length=200)
+    span_start: int | None = None  # char offset within the paragraph; optional
+
+
+class ScaleInfo(BaseModel):
+    volume_l: float | None = None
+    vessel_type: str | None = None
+
+
+class ProcessIdentity(BaseModel):
+    """Per-experiment identity: organism, product, recipe, scale.
+
+    A dossier carries one of these. Downstream agents read it as the
+    primary prior on what's normal. Provenance is load-bearing: agents
+    treat MANIFEST as ground truth, LLM_WHITELISTED as a calibrated guess,
+    UNKNOWN as a signal to back off domain-specific reasoning.
+    """
+
+    process_id: str | None = None  # registry id, e.g. "penicillin_indpensim"
+    organism: str | None = None
+    product: str | None = None
+    process_family: str | None = None
+    scale: ScaleInfo | None = None
+    confidence: float = Field(ge=0.0, le=1.0, default=0.0)
+    provenance: IdentityProvenance = IdentityProvenance.UNKNOWN
+    evidence_locators: list[EvidenceLocator] = Field(
+        default_factory=list, max_length=5
+    )
+    rationale: str | None = None
+
+
 class GoldenColumnExample(BaseModel):
     raw_header: str
     confidence: float | None = None
