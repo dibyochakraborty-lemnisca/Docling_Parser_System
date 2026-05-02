@@ -23,6 +23,7 @@ import click
 
 from fermdocs_characterize.schema import CharacterizationOutput
 from fermdocs_diagnose.agent import DiagnosisAgent
+from fermdocs_diagnose.llm_clients import build_diagnosis_client
 from fermdocs_diagnose.renderers import (
     render_analysis_md,
     render_diagnosis_md,
@@ -72,16 +73,20 @@ def cli() -> None:
 )
 @click.option(
     "--provider",
-    type=click.Choice(["anthropic", "gemini"]),
-    default="anthropic",
-    show_default=True,
+    type=click.Choice(["anthropic", "gemini", "fake", "none"], case_sensitive=False),
+    default=None,
+    help=(
+        "LLM provider for the diagnosis ReAct loop. Defaults to "
+        "FERMDOCS_DIAGNOSIS_PROVIDER, then FERMDOCS_MAPPER_PROVIDER, then 'gemini'. "
+        "Use 'fake' or 'none' to skip the LLM call (meta.error path)."
+    ),
 )
 def run(
     dossier: Path,
     characterization: Path,
     output: Path,
     emit_markdown: Path | None,
-    provider: str,
+    provider: str | None,
 ) -> None:
     """Run the diagnosis agent on a (dossier, characterization) pair."""
     try:
@@ -93,12 +98,13 @@ def run(
 
     char_output = CharacterizationOutput.model_validate(char_data)
 
-    # No live LLM client wired here — production CLI uses the same provider
-    # factory pattern as identity_extractor (TBD when first real diagnosis
-    # run goes through). For now the CLI runs in error-output mode (no
-    # client → meta.error="no_llm_client_configured"), which is still useful
-    # for verifying schema round-trip and renderer output.
-    agent = DiagnosisAgent(client=None, provider=provider)
+    client = build_diagnosis_client(provider)
+    # Resolve the provider label that ends up on meta.provider. The factory
+    # may have used a fallback chain; pass through for audit.
+    resolved_provider = (provider or "gemini").lower()
+    if resolved_provider not in ("anthropic", "gemini"):
+        resolved_provider = "gemini"  # meta.provider only accepts those two
+    agent = DiagnosisAgent(client=client, provider=resolved_provider)
     result = agent.diagnose(dossier_data, char_output)
 
     output.parent.mkdir(parents=True, exist_ok=True)

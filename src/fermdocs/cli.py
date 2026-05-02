@@ -11,7 +11,11 @@ from sqlalchemy import create_engine
 from fermdocs.dossier import build_dossier
 from fermdocs.file_store.local import LocalFileStore
 from fermdocs.mapping.client import dump_response_schema
-from fermdocs.mapping.factory import build_mapper, build_narrative_extractor
+from fermdocs.mapping.factory import (
+    build_identity_client,
+    build_mapper,
+    build_narrative_extractor,
+)
 from fermdocs.units.normalizer import build_default_normalizer
 from fermdocs.parsing.csv_parser import CsvParser
 from fermdocs.parsing.excel_parser import ExcelParser
@@ -171,8 +175,18 @@ def ingest(
     click.echo(result.model_dump_json(indent=2))
 
     if out:
+        # Manifest takes priority; LLM identity client only fires when no
+        # manifest. fake_mapper short-circuits to no client (offline runs).
+        identity_client = (
+            None
+            if (fake_mapper or process_manifest is not None)
+            else build_identity_client(provider)
+        )
         dossier = build_dossier(
-            experiment_id, repo, manifest_path=process_manifest
+            experiment_id,
+            repo,
+            manifest_path=process_manifest,
+            identity_llm_client=identity_client,
         )
         out.write_text(json.dumps(dossier, indent=2, default=str))
         click.echo(f"dossier written: {out}", err=True)
@@ -192,8 +206,21 @@ def ingest(
     default=None,
     help="Optional YAML manifest pinning process identity (skips LLM extractor).",
 )
+@click.option(
+    "--provider",
+    type=click.Choice(["gemini", "anthropic", "fake", "none"], case_sensitive=False),
+    default=None,
+    help=(
+        "LLM provider for the identity extractor. Defaults to "
+        "FERMDOCS_IDENTITY_PROVIDER, then FERMDOCS_MAPPER_PROVIDER, then 'gemini'. "
+        "Use 'fake' or 'none' to skip the LLM call (identity stays UNKNOWN)."
+    ),
+)
 def dossier(
-    experiment_id: str, out: Path | None, process_manifest: Path | None
+    experiment_id: str,
+    out: Path | None,
+    process_manifest: Path | None,
+    provider: str | None,
 ) -> None:
     """Build the dossier for an already-ingested experiment."""
     db_url = os.environ.get("DATABASE_URL")
@@ -202,7 +229,15 @@ def dossier(
         sys.exit(EXIT_USAGE)
     engine = create_engine(db_url)
     repo = Repository(engine)
-    payload = build_dossier(experiment_id, repo, manifest_path=process_manifest)
+    identity_client = (
+        None if process_manifest is not None else build_identity_client(provider)
+    )
+    payload = build_dossier(
+        experiment_id,
+        repo,
+        manifest_path=process_manifest,
+        identity_llm_client=identity_client,
+    )
     text = json.dumps(payload, indent=2, default=str)
     if out:
         out.write_text(text)

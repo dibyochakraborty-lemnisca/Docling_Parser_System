@@ -64,6 +64,9 @@ def fixture_paths(tmp_path: Path) -> tuple[Path, Path, Path]:
 
 
 def test_cli_run_writes_diagnosis_json(fixture_paths):
+    """Provider=none short-circuits to error-output; verifies plumbing
+    without needing API keys. Live-LLM smoke tests are gated separately.
+    """
     dossier, char, output = fixture_paths
     runner = CliRunner()
     result = runner.invoke(
@@ -73,9 +76,9 @@ def test_cli_run_writes_diagnosis_json(fixture_paths):
             "--dossier", str(dossier),
             "--characterization", str(char),
             "--output", str(output),
+            "--provider", "none",
         ],
     )
-    # No LLM client wired in CLI today → error output, exit code 3 (EXIT_LLM)
     assert result.exit_code == 3
     assert output.exists()
     written = json.loads(output.read_text())
@@ -94,6 +97,7 @@ def test_cli_emit_markdown_writes_five_files(fixture_paths, tmp_path: Path):
             "--characterization", str(char),
             "--output", str(output),
             "--emit-markdown", str(md_dir),
+            "--provider", "none",
         ],
     )
     assert result.exit_code == 3  # error output, but markdown still emitted
@@ -110,7 +114,25 @@ def test_cli_invalid_dossier_path_errors(tmp_path: Path):
             "--dossier", str(tmp_path / "missing.json"),
             "--characterization", str(tmp_path / "missing.json"),
             "--output", str(tmp_path / "out.json"),
+            "--provider", "none",
         ],
     )
     # Click handles missing file via path validator, exit_code != 0
+    assert result.exit_code != 0
+
+
+def test_cli_provider_choice_validation(fixture_paths):
+    """Unknown provider value rejected by Click before any work runs."""
+    dossier, char, output = fixture_paths
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "run",
+            "--dossier", str(dossier),
+            "--characterization", str(char),
+            "--output", str(output),
+            "--provider", "openai",
+        ],
+    )
     assert result.exit_code != 0
