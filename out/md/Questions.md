@@ -2,9 +2,9 @@
 
 ## D-Q-0001
 
-**Is the nominal specification of 0.5 g/L for biomass_g_l accurate for this 100,000 L Penicillium chrysogenum fed-batch process?**
+**Are the schema specifications for volume, weight, biomass, and substrate intended to represent initial batch setpoints rather than dynamic trajectory bounds?**
 
-- why_it_matters: Validating the specification ensures that critical range violation alerts are meaningful and actionable.
-- cites: `cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0001`
+- why_it_matters: Clarifying spec semantics is necessary to distinguish true process deviations from expected fed-batch accumulation.
+- cites: `cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0081`
 - answer_format: yes_no
-- domain_tags: data_quality, growth
+- domain_tags: data_quality

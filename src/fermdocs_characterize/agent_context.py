@@ -87,10 +87,20 @@ def build_agent_context(
 ) -> AgentContext:
     """Project (dossier, output) into an AgentContext.
 
-    Pure function. specs_provider defaults to DictSpecsProvider.from_dossier
-    so existing fixtures keep working without changes.
+    Pure function. specs_provider defaults match the CharacterizationPipeline's
+    resolution: schema-with-overrides when the schema is loadable, falling
+    back to dossier-only specs for offline tests / fixtures.
     """
-    specs = specs_provider or DictSpecsProvider.from_dossier(dossier)
+    if specs_provider is not None:
+        specs = specs_provider
+    else:
+        try:
+            from fermdocs.domain.golden_schema import load_schema
+
+            schema = load_schema()
+            specs = DictSpecsProvider.from_schema_with_overrides(schema, dossier)
+        except Exception:
+            specs = DictSpecsProvider.from_dossier(dossier)
     summary = build_summary(dossier, specs)
     trajectories = build_trajectories(summary, dossier)
 
@@ -204,20 +214,30 @@ def _severity_rank(s: Severity) -> int:
 def _rank_finding_ids(
     finding_ids: list[str], by_id: dict[str, Finding]
 ) -> list[str]:
-    """Sort findings by severity desc, then by their natural id order.
+    """Sort findings for the agent prefix.
 
-    The pipeline already assigns ids deterministically (sorted by sigmas /
-    severity), so secondary sort by id is stable.
+    Order:
+      1. Severity desc (critical > major > minor > info).
+      2. Within severity: aggregated rollups before per-row findings.
+         A rollup carrying N=2242 violations covers more variables and
+         carries strictly more information density than a per-row finding
+         that flags one timestep. Without this nudge, a single high-sigma
+         per-row finding crowds out N rollups for other variables.
+      3. Tiebreaker: natural id order (the pipeline already pre-sorted by
+         sigma desc / severity, so this is stable).
     """
-    return sorted(
-        finding_ids,
-        key=lambda fid: (
-            -_severity_rank(by_id[fid].severity)
-            if fid in by_id
-            else 0,
+    def _key(fid: str) -> tuple:
+        if fid not in by_id:
+            return (0, 1, fid)  # missing → lowest priority
+        f = by_id[fid]
+        is_aggregated = bool(f.statistics.get("aggregated"))
+        return (
+            -_severity_rank(f.severity),
+            0 if is_aggregated else 1,  # aggregated wins within severity
             fid,
-        ),
-    )
+        )
+
+    return sorted(finding_ids, key=_key)
 
 
 def _severity_rollup(
