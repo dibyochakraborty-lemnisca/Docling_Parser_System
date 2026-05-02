@@ -183,9 +183,32 @@ _BUNDLE_SYSTEM_PROMPT = (
     "  - get_findings(finding_id?, run_id?, variable?, severity?, tier?) [L]\n"
     "  - get_timecourse(run_id, variable, time_range_h?, max_points?) [L]\n"
     "  - get_specs(variable) [L] — schema spec (nominal/std_dev/unit).\n"
+    "  - get_priors(organism?, process_family?, variable?) [L] — organism ×\n"
+    "    process-family expected ranges (literature-sourced). Each prior\n"
+    "    carries a citation; cite the source in your claim summary when\n"
+    "    you ground a finding on a prior.\n"
     "  - submit_diagnosis(payload) — terminator. Idempotent; second call\n"
     "    with a different payload is rejected.\n\n"
     "Tool budget: 20 calls / 7 min wall-clock. Spend them.\n\n"
+    "GROUNDING HIERARCHY (use this order for every failure claim):\n"
+    "  1. process_priors (preferred). Call get_priors(organism=...) early.\n"
+    "     If a matching prior exists for the variable, set\n"
+    "     confidence_basis='process_priors' and quote the source\n"
+    "     (e.g. 'below typical 120 g/L per Verduyn 1991'). Pass the\n"
+    "     organism string from get_meta() / dossier — substring matching\n"
+    "     handles messy fields.\n"
+    "  2. cross_run (secondary). With >=2 runs, compare across runs and\n"
+    "     set confidence_basis='cross_run'. Quote the magnitude delta\n"
+    "     ('RUN-A=43 g/L vs RUN-B=2 g/L').\n"
+    "  3. schema_only (last resort). Neither priors nor cohort exist:\n"
+    "     confidence_basis='schema_only', cap confidence at 0.6, and\n"
+    "     state explicitly that recipe-specific priors are unavailable.\n\n"
+    "  On single-run dossiers, you MUST call get_priors() before emitting\n"
+    "  any failure claim. Skipping it is the leading cause of weak,\n"
+    "  ungrounded diagnoses. Claims marked 'process_priors' that are NOT\n"
+    "  backed by a loaded prior will be auto-downgraded to schema_only\n"
+    "  with a provenance_downgraded flag — the runtime keeps the audit\n"
+    "  trail honest.\n\n"
     "RESPONSE FORMAT:\n"
     "Each turn, emit a single JSON object:\n\n"
     "  Tool call:\n"
@@ -473,10 +496,19 @@ class DiagnosisAgent:
                 error=f"emit_invalid:{exc.__class__.__name__}",
             )
 
+        # Plan A Stage 3: hand the validator the priors set + organism so it
+        # can downgrade process_priors claims that aren't actually grounded.
+        priors_for_validator = (
+            tool_bundle.priors if tool_bundle is not None else None
+        )
+        organism_for_validator = _extract_organism(dossier) if priors_for_validator else None
+
         return validate_diagnosis(
             built,
             upstream=output,
             flags=ctx.flags,
+            priors=priors_for_validator,
+            organism=organism_for_validator,
         )
 
     def _meta(
@@ -525,6 +557,29 @@ def _initial_user_prompt(prefix: str) -> str:
         " detail you need.\n\n"
         f"AGENT_CONTEXT:\n{prefix}"
     )
+
+
+def _extract_organism(dossier: dict[str, Any]) -> str | None:
+    """Pull the organism string from a dossier for priors lookup.
+
+    Tries several common locations; returns None if nothing is found.
+    Substring matching in resolve_priors handles messy values, so a
+    rough match here is fine.
+    """
+    if not isinstance(dossier, dict):
+        return None
+    exp = dossier.get("experiment") or {}
+    process = exp.get("process") or {}
+    observed = process.get("observed") or {}
+    registered = process.get("registered") or {}
+    for src in (observed, registered, process, exp):
+        if not isinstance(src, dict):
+            continue
+        for key in ("organism", "host_organism", "species", "host"):
+            value = src.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+    return None
 
 
 def _record_trace(trace_writer: TraceWriter | None, **fields: Any) -> None:
@@ -660,6 +715,12 @@ def _build_output(
     LLM never sees IDs; the runtime owns them so reruns are stable across
     model output churn.
     """
+    # Build a trajectory-key set so we can backfill citations on claims where
+    # the LLM named affected_variables but forgot to cite. Without this, a
+    # legitimate execute_python-derived finding drops an entire emit because
+    # one claim is missing a citation field.
+    upstream_traj_keys = {(t.run_id, t.variable) for t in output.trajectories}
+
     failures = []
     for i, raw in enumerate(payload.get("failures") or []):
         f_trajs = [
@@ -667,13 +728,25 @@ def _build_output(
             for t in (raw.get("cited_trajectories") or [])
             if isinstance(t, dict) and "run_id" in t and "variable" in t
         ]
+        cited_findings = list(raw.get("cited_finding_ids") or [])
+        affected = list(raw.get("affected_variables") or [])
+        # Backfill: if the claim has neither a finding nor a trajectory citation
+        # but names a variable that has real upstream trajectories, auto-cite
+        # those trajectories. This rescues claims the agent grounded via
+        # execute_python on the observations.csv but forgot to formally link.
+        if not cited_findings and not f_trajs and affected:
+            f_trajs = [
+                TrajectoryRef(run_id=run_id, variable=var)
+                for (run_id, var) in upstream_traj_keys
+                if var in affected
+            ]
         failures.append(
             FailureClaim(
                 claim_id=f"D-F-{i+1:04d}",
                 summary=str(raw.get("summary", "")),
-                cited_finding_ids=list(raw.get("cited_finding_ids") or []),
+                cited_finding_ids=cited_findings,
                 cited_trajectories=f_trajs,
-                affected_variables=list(raw.get("affected_variables") or []),
+                affected_variables=affected,
                 confidence=_clamp_conf(raw.get("confidence", 0.0)),
                 confidence_basis=_basis(raw.get("confidence_basis")),
                 domain_tags=list(raw.get("domain_tags") or []),
