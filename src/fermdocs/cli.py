@@ -128,6 +128,17 @@ def cli(ctx: click.Context, print_schema: str | None) -> None:
         "Tier 1 narrative residual capture is unconditional regardless."
     ),
 )
+@click.option(
+    "--process-manifest",
+    "process_manifest",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help=(
+        "Optional YAML manifest with operator-supplied process identity. "
+        "When present, the dossier records provenance=manifest and the "
+        "LLM identity extractor is skipped."
+    ),
+)
 def ingest(
     experiment_id: str,
     files: tuple[Path, ...],
@@ -137,6 +148,7 @@ def ingest(
     provider: str | None,
     llm_normalizer: bool | None,
     extract_narrative: bool | None,
+    process_manifest: Path | None,
 ) -> None:
     """Ingest files for an experiment, then optionally write a dossier JSON."""
     try:
@@ -159,7 +171,9 @@ def ingest(
     click.echo(result.model_dump_json(indent=2))
 
     if out:
-        dossier = build_dossier(experiment_id, repo)
+        dossier = build_dossier(
+            experiment_id, repo, manifest_path=process_manifest
+        )
         out.write_text(json.dumps(dossier, indent=2, default=str))
         click.echo(f"dossier written: {out}", err=True)
 
@@ -171,7 +185,16 @@ def ingest(
 @cli.command()
 @click.option("--experiment-id", required=True)
 @click.option("--out", type=click.Path(dir_okay=False, path_type=Path))
-def dossier(experiment_id: str, out: Path | None) -> None:
+@click.option(
+    "--process-manifest",
+    "process_manifest",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Optional YAML manifest pinning process identity (skips LLM extractor).",
+)
+def dossier(
+    experiment_id: str, out: Path | None, process_manifest: Path | None
+) -> None:
     """Build the dossier for an already-ingested experiment."""
     db_url = os.environ.get("DATABASE_URL")
     if not db_url:
@@ -179,7 +202,7 @@ def dossier(experiment_id: str, out: Path | None) -> None:
         sys.exit(EXIT_USAGE)
     engine = create_engine(db_url)
     repo = Repository(engine)
-    payload = build_dossier(experiment_id, repo)
+    payload = build_dossier(experiment_id, repo, manifest_path=process_manifest)
     text = json.dumps(payload, indent=2, default=str)
     if out:
         out.write_text(text)
