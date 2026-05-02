@@ -97,6 +97,14 @@ class BaseClaim(BaseModel):
     claim_id: str
     summary: str = Field(min_length=1)
     cited_finding_ids: list[str] = Field(default_factory=list)
+    cited_narrative_ids: list[str] = Field(
+        default_factory=list,
+        description=(
+            "References to NarrativeObservation IDs (shape '<char_id>:N-NNNN')"
+            " when the claim is grounded in prose extracted from the source"
+            " document. Empty when the claim is purely numerics-based."
+        ),
+    )
     affected_variables: list[str] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=LLM_CONFIDENCE_CAP)
     confidence_basis: ConfidenceBasis
@@ -142,10 +150,14 @@ class FailureClaim(BaseClaim):
 
     @model_validator(mode="after")
     def _has_citation(self) -> FailureClaim:
-        if not self.cited_finding_ids and not self.cited_trajectories:
+        if (
+            not self.cited_finding_ids
+            and not self.cited_trajectories
+            and not self.cited_narrative_ids
+        ):
             raise ValueError(
-                f"{self.claim_id}: FailureClaim must cite ≥1 finding_id"
-                " or trajectory (run_id, variable)"
+                f"{self.claim_id}: FailureClaim must cite ≥1 finding_id,"
+                " trajectory (run_id, variable), or narrative_id"
             )
         return self
 
@@ -168,9 +180,14 @@ class TrendClaim(BaseClaim):
 
     @model_validator(mode="after")
     def _has_citation(self) -> TrendClaim:
-        if not self.cited_finding_ids and not self.cited_trajectories:
+        if (
+            not self.cited_finding_ids
+            and not self.cited_trajectories
+            and not self.cited_narrative_ids
+        ):
             raise ValueError(
-                f"{self.claim_id}: TrendClaim must cite ≥1 finding or trajectory"
+                f"{self.claim_id}: TrendClaim must cite ≥1 finding, trajectory,"
+                " or narrative_id"
             )
         return self
 
@@ -196,9 +213,10 @@ class AnalysisClaim(BaseClaim):
 
     @model_validator(mode="after")
     def _has_citation(self) -> AnalysisClaim:
-        if not self.cited_finding_ids:
+        if not self.cited_finding_ids and not self.cited_narrative_ids:
             raise ValueError(
                 f"{self.claim_id}: AnalysisClaim must cite ≥1 finding_id"
+                " or narrative_id"
             )
         return self
 
@@ -213,7 +231,15 @@ class OpenQuestion(BaseModel):
     question_id: str
     question: str = Field(min_length=1)
     why_it_matters: str = Field(min_length=1)
-    cited_finding_ids: list[str] = Field(min_length=1)
+    cited_finding_ids: list[str] = Field(default_factory=list)
+    cited_narrative_ids: list[str] = Field(
+        default_factory=list,
+        description=(
+            "References to NarrativeObservation IDs when the question is"
+            " grounded in prose. At least one of cited_finding_ids or"
+            " cited_narrative_ids must be non-empty."
+        ),
+    )
     answer_format_hint: Literal["yes_no", "free_text", "numeric", "categorical"]
     domain_tags: list[str] = Field(default_factory=list)
 
@@ -225,6 +251,15 @@ class OpenQuestion(BaseModel):
                 f"question_id must match D-Q-NNNN, got {v!r}"
             )
         return v
+
+    @model_validator(mode="after")
+    def _has_citation(self) -> OpenQuestion:
+        if not self.cited_finding_ids and not self.cited_narrative_ids:
+            raise ValueError(
+                f"{self.question_id}: OpenQuestion must cite ≥1 finding_id"
+                " or narrative_id"
+            )
+        return self
 
 
 class DiagnosisOutput(BaseModel):

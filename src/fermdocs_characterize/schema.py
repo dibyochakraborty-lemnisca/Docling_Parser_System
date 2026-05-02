@@ -102,6 +102,23 @@ class Tier(str, Enum):
     C = "C"
 
 
+class NarrativeTag(str, Enum):
+    """Closed vocabulary for narrative-extracted observations.
+
+    Adding a tag is a code change + eval. Each tag covers one kind of
+    operator/scientist statement in a fermentation report. The diagnosis
+    agent weights tags differently — closure_event and observation are
+    almost always actionable; protocol_note rarely is.
+    """
+
+    CLOSURE_EVENT = "closure_event"      # "terminated at 82h, white cells observed"
+    DEVIATION = "deviation"              # "DO dropped to 20% during late phase"
+    INTERVENTION = "intervention"        # "200 mL IPM added at 24h"
+    OBSERVATION = "observation"          # "white cells visible during centrifugation"
+    CONCLUSION = "conclusion"            # "yield 30% below target"
+    PROTOCOL_NOTE = "protocol_note"      # method-section detail, low-action
+
+
 # -----------------------------------------------------------------------------
 # Provenance and evidence
 # -----------------------------------------------------------------------------
@@ -255,6 +272,80 @@ class Finding(BaseModel):
                 f"LLM-judged findings must have confidence ≤ 0.85, got {self.confidence}"
             )
         return self
+
+
+# -----------------------------------------------------------------------------
+# Narrative observations
+#
+# Pre-structured prose insights extracted from the source document during
+# ingestion. The diagnosis agent treats these as direct operator/scientist
+# statements (different evidence class than range_violation findings, which
+# are deterministic detections over numerics).
+#
+# A document with no extractable prose insights produces an empty list and
+# downstream behavior is identical to today. Plan B Stage 1 lands the
+# schema; Stage 2 wires the extractor.
+# -----------------------------------------------------------------------------
+
+
+class NarrativeSourceLocator(BaseModel):
+    """Where in the source document a narrative observation came from.
+
+    All fields optional because real reports vary — some have page numbers,
+    some have section names, some have neither. The locator is for human
+    audit, not runtime routing.
+    """
+
+    page: int | None = Field(default=None, ge=1, description="1-indexed PDF page.")
+    section: str | None = Field(default=None, description="e.g. 'Results', 'Procedure'.")
+    paragraph_index: int | None = Field(default=None, ge=0)
+    char_offset: int | None = Field(default=None, ge=0)
+
+
+class NarrativeObservation(BaseModel):
+    """A prose-derived insight from the source document.
+
+    These bypass the deterministic finding pipeline — they are pre-structured
+    statements from operators, scientists, or report authors. The agent
+    treats them as direct evidence rather than something to be re-inferred
+    from numbers.
+    """
+
+    narrative_id: str = Field(
+        description=(
+            "Globally unique: '<characterization_id>:N-NNNN'. Never renumbered."
+        ),
+    )
+    tag: NarrativeTag
+    text: str = Field(
+        min_length=1,
+        description="Verbatim or near-verbatim quote from the source. No paraphrase.",
+    )
+    source_locator: NarrativeSourceLocator = Field(default_factory=NarrativeSourceLocator)
+    run_id: str | None = Field(
+        default=None, description="When attributable to a single run."
+    )
+    time_h: float | None = Field(
+        default=None, description="When attributable to a time point."
+    )
+    affected_variables: list[str] = Field(default_factory=list)
+    confidence: float = Field(
+        ge=0.0,
+        le=0.85,
+        description="Extractor's confidence in the tag + content. Capped at 0.85"
+        " (LLM-judged, same posture as Finding.confidence).",
+    )
+    extraction_model: str = Field(
+        min_length=1,
+        description="Model+version that emitted this (e.g. 'gemini-3.1-pro-preview').",
+    )
+
+    @field_validator("narrative_id")
+    @classmethod
+    def _validate_id_shape(cls, v: str) -> str:
+        if ":N-" not in v:
+            raise ValueError(f"narrative_id must contain ':N-', got {v!r}")
+        return v
 
 
 # -----------------------------------------------------------------------------
@@ -441,6 +532,14 @@ class CharacterizationOutput(BaseModel):
         description="Empty in v1–v2; populated in v3.",
     )
     open_questions: list[OpenQuestion] = Field(default_factory=list)
+    narrative_observations: list[NarrativeObservation] = Field(
+        default_factory=list,
+        description=(
+            "Prose insights extracted from the source document during ingestion."
+            " Empty list when no document text was available or extraction was"
+            " disabled. See plans/2026-05-03-narrative-insight-extraction.md."
+        ),
+    )
 
     @model_validator(mode="after")
     def _finding_ids_namespaced(self) -> CharacterizationOutput:
@@ -450,6 +549,18 @@ class CharacterizationOutput(BaseModel):
                 raise ValueError(
                     f"finding_id {f.finding_id!r} not namespaced to characterization"
                     f" {self.meta.characterization_id} (expected prefix {prefix!r})"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _narrative_ids_namespaced(self) -> CharacterizationOutput:
+        prefix = f"{self.meta.characterization_id}:N-"
+        for n in self.narrative_observations:
+            if not n.narrative_id.startswith(prefix):
+                raise ValueError(
+                    f"narrative_id {n.narrative_id!r} not namespaced to"
+                    f" characterization {self.meta.characterization_id}"
+                    f" (expected prefix {prefix!r})"
                 )
         return self
 
@@ -465,6 +576,7 @@ class CharacterizationOutput(BaseModel):
             ("kinetic_estimates", self.kinetic_estimates, "fit_id"),
             ("facts_graph_nodes", self.facts_graph.nodes, "node_id"),
             ("facts_graph_edges", self.facts_graph.edges, "edge_id"),
+            ("narrative_observations", self.narrative_observations, "narrative_id"),
         ):
             for item in items:
                 key = getattr(item, attr)

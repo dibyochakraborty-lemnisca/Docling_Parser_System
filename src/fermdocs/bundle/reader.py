@@ -134,6 +134,21 @@ class BundleReader:
     def has_diagnosis(self) -> bool:
         return (self._dir / "diagnosis" / "diagnosis.json").exists()
 
+    def has_narrative_observations(self) -> bool:
+        return (self._dir / "characterization" / "narrative_observations.json").exists()
+
+    def get_narrative_observations_json(self) -> str:
+        """Raw JSON text for the NarrativeObservation list.
+
+        Returns "[]" when the bundle was produced without prose extraction.
+        Backward-compatible: old bundles missing the file behave as
+        narrative-empty rather than raising.
+        """
+        path = self._dir / "characterization" / "narrative_observations.json"
+        if not path.exists():
+            return "[]"
+        return path.read_text()
+
     def get_diagnosis_json(self) -> str:
         path = self._dir / "diagnosis" / "diagnosis.json"
         if not path.exists():

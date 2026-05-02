@@ -144,6 +144,19 @@ class BundleWriter:
         path.write_text(characterization_json)
         return path
 
+    def write_narrative_observations(self, observations_json: str) -> Path:
+        """Persist NarrativeObservation list at
+        `characterization/narrative_observations.json`.
+
+        Caller passes pre-serialized JSON. Optional file — bundles produced
+        without prose extraction skip this entirely. BundleReader's
+        get_narrative_observations_json() returns "[]" when missing.
+        """
+        self._check_open()
+        path = self._temp_dir / "characterization" / "narrative_observations.json"
+        path.write_text(observations_json)
+        return path
+
     def write_observations_csv(self, rows: list[dict]) -> Path:
         """Persist a long-format observations CSV at
         `characterization/observations.csv`.
