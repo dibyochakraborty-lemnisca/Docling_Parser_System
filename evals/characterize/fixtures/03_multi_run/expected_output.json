@@ -6,24 +6,46 @@
     "characterization_id": "c3000003-0000-0000-0000-000000000003",
     "generation_timestamp": "2026-01-01T00:00:00",
     "supersedes": null,
-    "source_dossier_ids": ["FIX-03-MULTIRUN"]
+    "source_dossier_ids": [
+      "FIX-03-MULTIRUN"
+    ]
   },
   "findings": [
     {
       "finding_id": "c3000003-0000-0000-0000-000000000003:F-0001",
       "type": "range_violation",
       "severity": "major",
-      "summary": "Temperature 299 is 4.0σ above nominal 297.0 ± 0.5 in run RUN-C004 at 24.0h",
+      "tier": "A",
+      "summary": "Temperature 299 is 4.0\u03c3 above nominal 297.0 \u00b1 0.5 in run RUN-C004 at 24.0h",
       "confidence": 0.95,
       "extracted_via": "deterministic",
       "caveats": [],
       "competing_explanations": [],
-      "evidence_strength": {"n_observations": 1, "n_independent_runs": 1, "statistical_power": null},
-      "evidence_observation_ids": ["a0000003-0000-0000-0000-000000000004"],
-      "variables_involved": ["Temperature"],
-      "time_window": {"start": 24.0, "end": 24.0},
-      "run_ids": ["RUN-C004"],
-      "statistics": {"nominal": 297.0, "std_dev": 0.5, "observed": 299.0, "sigmas": 4.0, "residual": 2.0}
+      "evidence_strength": {
+        "n_observations": 1,
+        "n_independent_runs": 1,
+        "statistical_power": null
+      },
+      "evidence_observation_ids": [
+        "a0000003-0000-0000-0000-000000000004"
+      ],
+      "variables_involved": [
+        "Temperature"
+      ],
+      "time_window": {
+        "start": 24.0,
+        "end": 24.0
+      },
+      "run_ids": [
+        "RUN-C004"
+      ],
+      "statistics": {
+        "nominal": 297.0,
+        "std_dev": 0.5,
+        "observed": 299.0,
+        "sigmas": 4.0,
+        "residual": 2.0
+      }
     }
   ],
   "timeline": [
@@ -32,7 +54,7 @@
       "run_id": "RUN-C004",
       "time": 24.0,
       "finding_id": "c3000003-0000-0000-0000-000000000003:F-0001",
-      "summary": "Temperature 299 is 4.0σ above nominal 297.0 ± 0.5 in run RUN-C004 at 24.0h",
+      "summary": "Temperature 299 is 4.0\u03c3 above nominal 297.0 \u00b1 0.5 in run RUN-C004 at 24.0h",
       "severity": "major",
       "lag_to_next_seconds": null
     }
@@ -48,7 +70,9 @@
       "observed": 297.1,
       "residual": 0.1,
       "sigmas": 0.2,
-      "source_observation_ids": ["a0000003-0000-0000-0000-000000000001"]
+      "source_observation_ids": [
+        "a0000003-0000-0000-0000-000000000001"
+      ]
     },
     {
       "deviation_id": "D-0002",
@@ -60,7 +84,9 @@
       "observed": 296.9,
       "residual": -0.1,
       "sigmas": -0.2,
-      "source_observation_ids": ["a0000003-0000-0000-0000-000000000002"]
+      "source_observation_ids": [
+        "a0000003-0000-0000-0000-000000000002"
+      ]
     },
     {
       "deviation_id": "D-0003",
@@ -72,7 +98,9 @@
       "observed": 297.0,
       "residual": 0.0,
       "sigmas": 0.0,
-      "source_observation_ids": ["a0000003-0000-0000-0000-000000000003"]
+      "source_observation_ids": [
+        "a0000003-0000-0000-0000-000000000003"
+      ]
     },
     {
       "deviation_id": "D-0004",
@@ -84,7 +112,9 @@
       "observed": 299.0,
       "residual": 2.0,
       "sigmas": 4.0,
-      "source_observation_ids": ["a0000003-0000-0000-0000-000000000004"]
+      "source_observation_ids": [
+        "a0000003-0000-0000-0000-000000000004"
+      ]
     }
   ],
   "trajectories": [
@@ -92,56 +122,107 @@
       "trajectory_id": "T-0001",
       "run_id": "RUN-C001",
       "variable": "Temperature",
-      "time_grid": [24.0],
-      "values": [297.1],
-      "imputation_flags": [false],
+      "time_grid": [
+        24.0
+      ],
+      "values": [
+        297.1
+      ],
+      "imputation_flags": [
+        false
+      ],
       "imputation_method": null,
-      "source_observation_ids": ["a0000003-0000-0000-0000-000000000001"],
+      "source_observation_ids": [
+        "a0000003-0000-0000-0000-000000000001"
+      ],
       "unit": "K",
       "quality": 1.0,
-      "data_quality": {"pct_missing": 0.0, "pct_imputed": 0.0, "pct_real": 1.0}
+      "data_quality": {
+        "pct_missing": 0.0,
+        "pct_imputed": 0.0,
+        "pct_real": 1.0
+      }
     },
     {
       "trajectory_id": "T-0002",
       "run_id": "RUN-C002",
       "variable": "Temperature",
-      "time_grid": [24.0],
-      "values": [296.9],
-      "imputation_flags": [false],
+      "time_grid": [
+        24.0
+      ],
+      "values": [
+        296.9
+      ],
+      "imputation_flags": [
+        false
+      ],
       "imputation_method": null,
-      "source_observation_ids": ["a0000003-0000-0000-0000-000000000002"],
+      "source_observation_ids": [
+        "a0000003-0000-0000-0000-000000000002"
+      ],
       "unit": "K",
       "quality": 1.0,
-      "data_quality": {"pct_missing": 0.0, "pct_imputed": 0.0, "pct_real": 1.0}
+      "data_quality": {
+        "pct_missing": 0.0,
+        "pct_imputed": 0.0,
+        "pct_real": 1.0
+      }
     },
     {
       "trajectory_id": "T-0003",
       "run_id": "RUN-C003",
       "variable": "Temperature",
-      "time_grid": [24.0],
-      "values": [297.0],
-      "imputation_flags": [false],
+      "time_grid": [
+        24.0
+      ],
+      "values": [
+        297.0
+      ],
+      "imputation_flags": [
+        false
+      ],
       "imputation_method": null,
-      "source_observation_ids": ["a0000003-0000-0000-0000-000000000003"],
+      "source_observation_ids": [
+        "a0000003-0000-0000-0000-000000000003"
+      ],
       "unit": "K",
       "quality": 1.0,
-      "data_quality": {"pct_missing": 0.0, "pct_imputed": 0.0, "pct_real": 1.0}
+      "data_quality": {
+        "pct_missing": 0.0,
+        "pct_imputed": 0.0,
+        "pct_real": 1.0
+      }
     },
     {
       "trajectory_id": "T-0004",
       "run_id": "RUN-C004",
       "variable": "Temperature",
-      "time_grid": [24.0],
-      "values": [299.0],
-      "imputation_flags": [false],
+      "time_grid": [
+        24.0
+      ],
+      "values": [
+        299.0
+      ],
+      "imputation_flags": [
+        false
+      ],
       "imputation_method": null,
-      "source_observation_ids": ["a0000003-0000-0000-0000-000000000004"],
+      "source_observation_ids": [
+        "a0000003-0000-0000-0000-000000000004"
+      ],
       "unit": "K",
       "quality": 1.0,
-      "data_quality": {"pct_missing": 0.0, "pct_imputed": 0.0, "pct_real": 1.0}
+      "data_quality": {
+        "pct_missing": 0.0,
+        "pct_imputed": 0.0,
+        "pct_real": 1.0
+      }
     }
   ],
-  "facts_graph": {"nodes": [], "edges": []},
+  "facts_graph": {
+    "nodes": [],
+    "edges": []
+  },
   "kinetic_estimates": [],
   "open_questions": []
 }

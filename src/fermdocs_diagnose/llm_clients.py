@@ -149,10 +149,52 @@ def build_diagnosis_client(provider: str | None = None):
 _GEMINI_TOOL_CALL_FIELDS: dict[str, Any] = {
     "tool": {
         "type": "STRING",
-        "enum": ["get_finding", "get_trajectory", "get_spec"],
+        "enum": [
+            # Wave 1 surface
+            "get_finding",
+            "get_trajectory",
+            "get_spec",
+            # Stage 2 / 3 bundle surface
+            "list_runs",
+            "get_meta",
+            "get_findings",
+            "get_specs",
+            "get_timecourse",
+            "execute_python",
+            "submit_diagnosis",
+        ],
         "nullable": True,
     },
-    "args": {"type": "OBJECT", "nullable": True},
+    # Gemini structured output requires explicit properties on args. We
+    # union every tool's possible arg keys here. The dispatcher already
+    # passes args via **kwargs, so unused keys are tolerated by the tool
+    # methods. Fields are nullable so the model can leave them out.
+    "args": {
+        "type": "OBJECT",
+        "nullable": True,
+        "properties": {
+            # execute_python
+            "code": {"type": "STRING", "nullable": True},
+            "timeout": {"type": "INTEGER", "nullable": True},
+            # get_finding(s) / filtering
+            "finding_id": {"type": "STRING", "nullable": True},
+            "run_id": {"type": "STRING", "nullable": True},
+            "variable": {"type": "STRING", "nullable": True},
+            "severity": {"type": "STRING", "nullable": True},
+            "tier": {"type": "STRING", "nullable": True},
+            "limit": {"type": "INTEGER", "nullable": True},
+            "max_points": {"type": "INTEGER", "nullable": True},
+            "time_range_h": {
+                "type": "ARRAY",
+                "items": {"type": "NUMBER"},
+                "nullable": True,
+            },
+            # submit_diagnosis carries an opaque payload — Gemini structured
+            # output can't model arbitrary recursive shapes, so we provide a
+            # stringified payload escape hatch and parse it on receipt.
+            "payload_json": {"type": "STRING", "nullable": True},
+        },
+    },
 }
 
 _GEMINI_CLAIM_BASE_FIELDS: dict[str, Any] = {
@@ -183,6 +225,17 @@ _GEMINI_DIAGNOSIS_SCHEMA: dict[str, Any] = {
                     "severity": {
                         "type": "STRING",
                         "enum": ["info", "minor", "major", "critical"],
+                    },
+                    "cited_trajectories": {
+                        "type": "ARRAY",
+                        "items": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "run_id": {"type": "STRING"},
+                                "variable": {"type": "STRING"},
+                            },
+                            "required": ["run_id", "variable"],
+                        },
                     },
                     "time_window": {
                         "type": "OBJECT",
@@ -283,7 +336,20 @@ _ANTHROPIC_TOOL_CALL_SCHEMA: dict[str, Any] = {
     "properties": {
         "tool": {
             "type": "string",
-            "enum": ["get_finding", "get_trajectory", "get_spec"],
+            "enum": [
+                # Wave 1 surface
+                "get_finding",
+                "get_trajectory",
+                "get_spec",
+                # Stage 2 / 3 bundle surface
+                "list_runs",
+                "get_meta",
+                "get_findings",
+                "get_specs",
+                "get_timecourse",
+                "execute_python",
+                "submit_diagnosis",
+            ],
         },
         "args": {"type": "object"},
     },
@@ -314,6 +380,17 @@ _ANTHROPIC_EMIT_SCHEMA: dict[str, Any] = {
                     "severity": {
                         "type": "string",
                         "enum": ["info", "minor", "major", "critical"],
+                    },
+                    "cited_trajectories": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "run_id": {"type": "string"},
+                                "variable": {"type": "string"},
+                            },
+                            "required": ["run_id", "variable"],
+                        },
                     },
                 },
             },

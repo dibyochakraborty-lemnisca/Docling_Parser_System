@@ -286,3 +286,122 @@ columns:
       - {raw_header: "Fs"}
       - {raw_header: "Feed rate"}
       - {raw_header: "Substrate Feed (L/h)"}
+
+  # ---------------------------------------------------------------------------
+  # Tier A organism vocabulary (Penicillium, S. cerevisiae, E. coli).
+  #
+  # Variables here are well-established across the three covered organisms.
+  # nominal/std_dev intentionally left null — organism-specific normal ranges
+  # come from process_priors (deferred), not from a single shared schema number.
+  # range_violation against null specs is a no-op, which is the correct
+  # behavior for "schema knows the variable but priors aren't loaded yet."
+  # ---------------------------------------------------------------------------
+
+  # Shared microbial process measurements
+  - name: od600_au
+    description: Optical density at 600 nm. Universal proxy for biomass; converts to g/L only with strain-specific calibration.
+    data_type: float
+    canonical_unit: au
+    nominal: null
+    std_dev: null
+    synonyms: [OD600, OD_600, OD, optical_density, OD600nm]
+    examples:
+      - {raw_header: "OD600"}
+      - {raw_header: "OD (600 nm)"}
+      - {raw_header: "Optical Density"}
+
+  - name: do_pct_saturation
+    description: Dissolved oxygen as percent of air saturation. Distinct from dissolved_o2_mg_l (absolute concentration); industrial probes typically report this.
+    data_type: float
+    canonical_unit: "%"
+    nominal: null
+    std_dev: null
+    synonyms: [pO2, pO2_pct, DO_pct, DO_percent, dissolved_oxygen_pct]
+    examples:
+      - {raw_header: "pO2"}
+      - {raw_header: "DO (%)"}
+      - {raw_header: "DO % saturation"}
+
+  - name: viability_pct
+    description: Viable cell fraction as percent. Drops in late phase indicate cell death; pigment loss in carotenoid yeast manifests here too.
+    data_type: float
+    canonical_unit: "%"
+    nominal: null
+    std_dev: null
+    synonyms: [viability, viable_pct, viable_fraction, cell_viability]
+    examples:
+      - {raw_header: "Viability"}
+      - {raw_header: "Viable %"}
+      - {raw_header: "Cell viability (%)"}
+
+  # Yeast-specific
+  - name: ethanol_g_l
+    description: Ethanol concentration. Crabtree-positive yeast overflow metabolism marker; the primary diagnostic signal for S. cerevisiae overfeeding.
+    data_type: float
+    canonical_unit: g/L
+    nominal: null
+    std_dev: null
+    synonyms: [ethanol, EtOH, ethanol_conc]
+    examples:
+      - {raw_header: "Ethanol"}
+      - {raw_header: "EtOH (g/L)"}
+      - {raw_header: "Ethanol [g L^-1]"}
+
+  - name: glycerol_g_l
+    description: Glycerol concentration. Common alternative carbon source for yeast (especially Pichia) and a byproduct/intermediate in some processes.
+    data_type: float
+    canonical_unit: g/L
+    nominal: null
+    std_dev: null
+    synonyms: [glycerol, Gly, glycerol_conc]
+    examples:
+      - {raw_header: "Glycerol"}
+      - {raw_header: "Glycerol (g/L)"}
+
+  - name: wcw_g_l
+    description: Wet cell weight. Distinct from biomass_g_l (dry); WCW ≈ 4-5x DCW for yeast and bacteria. Industrial reports often use this.
+    data_type: float
+    canonical_unit: g/L
+    nominal: null
+    std_dev: null
+    synonyms: [WCW, wet_cell_weight, wet_weight, wet_biomass]
+    examples:
+      - {raw_header: "WCW"}
+      - {raw_header: "WCW (g/L)"}
+      - {raw_header: "Wet cell weight"}
+
+  # E. coli-specific
+  - name: acetate_g_l
+    description: Acetate concentration. Acetate overflow is the E. coli equivalent of ethanol overflow; >5 g/L typically inhibits growth.
+    data_type: float
+    canonical_unit: g/L
+    nominal: null
+    std_dev: null
+    synonyms: [acetate, acetic_acid, AcOH, acetate_conc]
+    examples:
+      - {raw_header: "Acetate"}
+      - {raw_header: "Acetate (g/L)"}
+      - {raw_header: "Acetic acid"}
+
+  - name: iptg_mm
+    description: IPTG inducer concentration. Trajectory shape pre/post induction is the E. coli protein-production diagnostic anchor.
+    data_type: float
+    canonical_unit: mM
+    nominal: null
+    std_dev: null
+    synonyms: [IPTG, IPTG_conc, isopropyl_thiogalactoside]
+    examples:
+      - {raw_header: "IPTG"}
+      - {raw_header: "IPTG (mM)"}
+      - {raw_header: "IPTG conc."}
+
+  - name: lactose_g_l
+    description: Lactose inducer / carbon source. Auto-induction systems use lactose; trajectory complements IPTG diagnostics.
+    data_type: float
+    canonical_unit: g/L
+    nominal: null
+    std_dev: null
+    synonyms: [lactose, Lac, lactose_conc]
+    examples:
+      - {raw_header: "Lactose"}
+      - {raw_header: "Lactose (g/L)"}

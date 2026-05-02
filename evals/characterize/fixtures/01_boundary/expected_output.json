@@ -6,56 +6,118 @@
     "characterization_id": "c1000001-0000-0000-0000-000000000001",
     "generation_timestamp": "2026-01-01T00:00:00",
     "supersedes": null,
-    "source_dossier_ids": ["FIX-01-BOUNDARY"]
+    "source_dossier_ids": [
+      "FIX-01-BOUNDARY"
+    ]
   },
   "findings": [
     {
       "finding_id": "c1000001-0000-0000-0000-000000000001:F-0001",
       "type": "range_violation",
       "severity": "critical",
-      "summary": "Biomass (X) 0.75 is 5.0σ above nominal 0.5 ± 0.05 in run RUN-A001 at 24.0h",
+      "tier": "A",
+      "summary": "Biomass (X) 0.75 is 5.0\u03c3 above nominal 0.5 \u00b1 0.05 in run RUN-A001 at 24.0h",
       "confidence": 0.99,
       "extracted_via": "deterministic",
       "caveats": [],
       "competing_explanations": [],
-      "evidence_strength": {"n_observations": 1, "n_independent_runs": 1, "statistical_power": null},
-      "evidence_observation_ids": ["a0000001-0000-0000-0000-000000000003"],
-      "variables_involved": ["Biomass (X)"],
-      "time_window": {"start": 24.0, "end": 24.0},
-      "run_ids": ["RUN-A001"],
-      "statistics": {"nominal": 0.5, "std_dev": 0.05, "observed": 0.75, "sigmas": 5.0, "residual": 0.25}
+      "evidence_strength": {
+        "n_observations": 1,
+        "n_independent_runs": 1,
+        "statistical_power": null
+      },
+      "evidence_observation_ids": [
+        "a0000001-0000-0000-0000-000000000003"
+      ],
+      "variables_involved": [
+        "Biomass (X)"
+      ],
+      "time_window": {
+        "start": 24.0,
+        "end": 24.0
+      },
+      "run_ids": [
+        "RUN-A001"
+      ],
+      "statistics": {
+        "nominal": 0.5,
+        "std_dev": 0.05,
+        "observed": 0.75,
+        "sigmas": 5.0,
+        "residual": 0.25
+      }
     },
     {
       "finding_id": "c1000001-0000-0000-0000-000000000001:F-0002",
       "type": "range_violation",
       "severity": "major",
-      "summary": "Temperature 298.5 is 3.0σ above nominal 297.0 ± 0.5 in run RUN-A001 at 24.0h",
+      "tier": "A",
+      "summary": "Temperature 298.5 is 3.0\u03c3 above nominal 297.0 \u00b1 0.5 in run RUN-A001 at 24.0h",
       "confidence": 0.95,
       "extracted_via": "deterministic",
       "caveats": [],
       "competing_explanations": [],
-      "evidence_strength": {"n_observations": 1, "n_independent_runs": 1, "statistical_power": null},
-      "evidence_observation_ids": ["a0000001-0000-0000-0000-000000000002"],
-      "variables_involved": ["Temperature"],
-      "time_window": {"start": 24.0, "end": 24.0},
-      "run_ids": ["RUN-A001"],
-      "statistics": {"nominal": 297.0, "std_dev": 0.5, "observed": 298.5, "sigmas": 3.0, "residual": 1.5}
+      "evidence_strength": {
+        "n_observations": 1,
+        "n_independent_runs": 1,
+        "statistical_power": null
+      },
+      "evidence_observation_ids": [
+        "a0000001-0000-0000-0000-000000000002"
+      ],
+      "variables_involved": [
+        "Temperature"
+      ],
+      "time_window": {
+        "start": 24.0,
+        "end": 24.0
+      },
+      "run_ids": [
+        "RUN-A001"
+      ],
+      "statistics": {
+        "nominal": 297.0,
+        "std_dev": 0.5,
+        "observed": 298.5,
+        "sigmas": 3.0,
+        "residual": 1.5
+      }
     },
     {
       "finding_id": "c1000001-0000-0000-0000-000000000001:F-0003",
       "type": "range_violation",
       "severity": "minor",
-      "summary": "pH 6.7 is 2.0σ above nominal 6.5 ± 0.1 in run RUN-A001 at 24.0h",
+      "tier": "A",
+      "summary": "pH 6.7 is 2.0\u03c3 above nominal 6.5 \u00b1 0.1 in run RUN-A001 at 24.0h",
       "confidence": 0.85,
       "extracted_via": "deterministic",
       "caveats": [],
       "competing_explanations": [],
-      "evidence_strength": {"n_observations": 1, "n_independent_runs": 1, "statistical_power": null},
-      "evidence_observation_ids": ["a0000001-0000-0000-0000-000000000001"],
-      "variables_involved": ["pH"],
-      "time_window": {"start": 24.0, "end": 24.0},
-      "run_ids": ["RUN-A001"],
-      "statistics": {"nominal": 6.5, "std_dev": 0.1, "observed": 6.7, "sigmas": 2.0, "residual": 0.2}
+      "evidence_strength": {
+        "n_observations": 1,
+        "n_independent_runs": 1,
+        "statistical_power": null
+      },
+      "evidence_observation_ids": [
+        "a0000001-0000-0000-0000-000000000001"
+      ],
+      "variables_involved": [
+        "pH"
+      ],
+      "time_window": {
+        "start": 24.0,
+        "end": 24.0
+      },
+      "run_ids": [
+        "RUN-A001"
+      ],
+      "statistics": {
+        "nominal": 6.5,
+        "std_dev": 0.1,
+        "observed": 6.7,
+        "sigmas": 2.0,
+        "residual": 0.2
+      }
     }
   ],
   "timeline": [
@@ -64,7 +126,7 @@
       "run_id": "RUN-A001",
       "time": 24.0,
       "finding_id": "c1000001-0000-0000-0000-000000000001:F-0001",
-      "summary": "Biomass (X) 0.75 is 5.0σ above nominal 0.5 ± 0.05 in run RUN-A001 at 24.0h",
+      "summary": "Biomass (X) 0.75 is 5.0\u03c3 above nominal 0.5 \u00b1 0.05 in run RUN-A001 at 24.0h",
       "severity": "critical",
       "lag_to_next_seconds": null
     },
@@ -73,7 +135,7 @@
       "run_id": "RUN-A001",
       "time": 24.0,
       "finding_id": "c1000001-0000-0000-0000-000000000001:F-0002",
-      "summary": "Temperature 298.5 is 3.0σ above nominal 297.0 ± 0.5 in run RUN-A001 at 24.0h",
+      "summary": "Temperature 298.5 is 3.0\u03c3 above nominal 297.0 \u00b1 0.5 in run RUN-A001 at 24.0h",
       "severity": "major",
       "lag_to_next_seconds": null
     },
@@ -82,7 +144,7 @@
       "run_id": "RUN-A001",
       "time": 24.0,
       "finding_id": "c1000001-0000-0000-0000-000000000001:F-0003",
-      "summary": "pH 6.7 is 2.0σ above nominal 6.5 ± 0.1 in run RUN-A001 at 24.0h",
+      "summary": "pH 6.7 is 2.0\u03c3 above nominal 6.5 \u00b1 0.1 in run RUN-A001 at 24.0h",
       "severity": "minor",
       "lag_to_next_seconds": null
     }
@@ -98,7 +160,9 @@
       "observed": 0.75,
       "residual": 0.25,
       "sigmas": 5.0,
-      "source_observation_ids": ["a0000001-0000-0000-0000-000000000003"]
+      "source_observation_ids": [
+        "a0000001-0000-0000-0000-000000000003"
+      ]
     },
     {
       "deviation_id": "D-0002",
@@ -110,7 +174,9 @@
       "observed": 15.0,
       "residual": 0.0,
       "sigmas": 0.0,
-      "source_observation_ids": ["a0000001-0000-0000-0000-000000000004"]
+      "source_observation_ids": [
+        "a0000001-0000-0000-0000-000000000004"
+      ]
     },
     {
       "deviation_id": "D-0003",
@@ -122,7 +188,9 @@
       "observed": 298.5,
       "residual": 1.5,
       "sigmas": 3.0,
-      "source_observation_ids": ["a0000001-0000-0000-0000-000000000002"]
+      "source_observation_ids": [
+        "a0000001-0000-0000-0000-000000000002"
+      ]
     },
     {
       "deviation_id": "D-0004",
@@ -134,7 +202,9 @@
       "observed": 6.7,
       "residual": 0.2,
       "sigmas": 2.0,
-      "source_observation_ids": ["a0000001-0000-0000-0000-000000000001"]
+      "source_observation_ids": [
+        "a0000001-0000-0000-0000-000000000001"
+      ]
     }
   ],
   "trajectories": [
@@ -142,56 +212,107 @@
       "trajectory_id": "T-0001",
       "run_id": "RUN-A001",
       "variable": "Biomass (X)",
-      "time_grid": [24.0],
-      "values": [0.75],
-      "imputation_flags": [false],
+      "time_grid": [
+        24.0
+      ],
+      "values": [
+        0.75
+      ],
+      "imputation_flags": [
+        false
+      ],
       "imputation_method": null,
-      "source_observation_ids": ["a0000001-0000-0000-0000-000000000003"],
+      "source_observation_ids": [
+        "a0000001-0000-0000-0000-000000000003"
+      ],
       "unit": "g/L",
       "quality": 1.0,
-      "data_quality": {"pct_missing": 0.0, "pct_imputed": 0.0, "pct_real": 1.0}
+      "data_quality": {
+        "pct_missing": 0.0,
+        "pct_imputed": 0.0,
+        "pct_real": 1.0
+      }
     },
     {
       "trajectory_id": "T-0002",
       "run_id": "RUN-A001",
       "variable": "Dissolved O2",
-      "time_grid": [24.0],
-      "values": [15.0],
-      "imputation_flags": [false],
+      "time_grid": [
+        24.0
+      ],
+      "values": [
+        15.0
+      ],
+      "imputation_flags": [
+        false
+      ],
       "imputation_method": null,
-      "source_observation_ids": ["a0000001-0000-0000-0000-000000000004"],
+      "source_observation_ids": [
+        "a0000001-0000-0000-0000-000000000004"
+      ],
       "unit": "mg/L",
       "quality": 1.0,
-      "data_quality": {"pct_missing": 0.0, "pct_imputed": 0.0, "pct_real": 1.0}
+      "data_quality": {
+        "pct_missing": 0.0,
+        "pct_imputed": 0.0,
+        "pct_real": 1.0
+      }
     },
     {
       "trajectory_id": "T-0003",
       "run_id": "RUN-A001",
       "variable": "Temperature",
-      "time_grid": [24.0],
-      "values": [298.5],
-      "imputation_flags": [false],
+      "time_grid": [
+        24.0
+      ],
+      "values": [
+        298.5
+      ],
+      "imputation_flags": [
+        false
+      ],
       "imputation_method": null,
-      "source_observation_ids": ["a0000001-0000-0000-0000-000000000002"],
+      "source_observation_ids": [
+        "a0000001-0000-0000-0000-000000000002"
+      ],
       "unit": "K",
       "quality": 1.0,
-      "data_quality": {"pct_missing": 0.0, "pct_imputed": 0.0, "pct_real": 1.0}
+      "data_quality": {
+        "pct_missing": 0.0,
+        "pct_imputed": 0.0,
+        "pct_real": 1.0
+      }
     },
     {
       "trajectory_id": "T-0004",
       "run_id": "RUN-A001",
       "variable": "pH",
-      "time_grid": [24.0],
-      "values": [6.7],
-      "imputation_flags": [false],
+      "time_grid": [
+        24.0
+      ],
+      "values": [
+        6.7
+      ],
+      "imputation_flags": [
+        false
+      ],
       "imputation_method": null,
-      "source_observation_ids": ["a0000001-0000-0000-0000-000000000001"],
+      "source_observation_ids": [
+        "a0000001-0000-0000-0000-000000000001"
+      ],
       "unit": "-",
       "quality": 1.0,
-      "data_quality": {"pct_missing": 0.0, "pct_imputed": 0.0, "pct_real": 1.0}
+      "data_quality": {
+        "pct_missing": 0.0,
+        "pct_imputed": 0.0,
+        "pct_real": 1.0
+      }
     }
   ],
-  "facts_graph": {"nodes": [], "edges": []},
+  "facts_graph": {
+    "nodes": [],
+    "edges": []
+  },
   "kinetic_estimates": [],
   "open_questions": []
 }

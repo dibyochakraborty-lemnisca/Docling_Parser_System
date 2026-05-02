@@ -21,6 +21,17 @@ from pathlib import Path
 
 import click
 
+# Load .env so GEMINI_API_KEY / ANTHROPIC_API_KEY are available without the
+# user having to source the file in their shell. Best-effort: missing dotenv
+# or missing .env is not fatal — env vars set elsewhere still win.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass
+
+from fermdocs.bundle import BundleNotReady, BundleReader, BundleSchemaMismatch
 from fermdocs_characterize.schema import CharacterizationOutput
 from fermdocs_diagnose.agent import DiagnosisAgent
 from fermdocs_diagnose.llm_clients import build_diagnosis_client
@@ -47,20 +58,34 @@ def cli() -> None:
 @click.option(
     "--dossier",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    required=True,
-    help="Path to dossier JSON.",
+    default=None,
+    help="Path to dossier JSON. Required unless --bundle is given.",
 )
 @click.option(
     "--characterization",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    required=True,
-    help="Path to upstream CharacterizationOutput JSON.",
+    default=None,
+    help="Path to upstream CharacterizationOutput JSON. Required unless --bundle is given.",
+)
+@click.option(
+    "--bundle",
+    "bundle_dir",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=None,
+    help=(
+        "Bundle directory written by characterize (e.g. out/bundle_<...>/)."
+        " Loads dossier+characterization from the bundle and writes diagnosis back into it."
+        " Mutually exclusive with --dossier/--characterization."
+    ),
 )
 @click.option(
     "--output",
     type=click.Path(dir_okay=False, path_type=Path),
-    required=True,
-    help="Path to write DiagnosisOutput JSON.",
+    default=None,
+    help=(
+        "Path to write DiagnosisOutput JSON. Required when not using --bundle."
+        " With --bundle, defaults to <bundle>/diagnosis/diagnosis.json."
+    ),
 )
 @click.option(
     "--emit-markdown",
@@ -82,19 +107,49 @@ def cli() -> None:
     ),
 )
 def run(
-    dossier: Path,
-    characterization: Path,
-    output: Path,
+    dossier: Path | None,
+    characterization: Path | None,
+    bundle_dir: Path | None,
+    output: Path | None,
     emit_markdown: Path | None,
     provider: str | None,
 ) -> None:
-    """Run the diagnosis agent on a (dossier, characterization) pair."""
+    """Run the diagnosis agent on a (dossier, characterization) pair or a bundle."""
+    if bundle_dir is not None and (dossier is not None or characterization is not None):
+        click.echo(
+            "error: --bundle is mutually exclusive with --dossier/--characterization",
+            err=True,
+        )
+        sys.exit(EXIT_USAGE)
+    if bundle_dir is None and (dossier is None or characterization is None):
+        click.echo(
+            "error: provide either --bundle, or both --dossier and --characterization",
+            err=True,
+        )
+        sys.exit(EXIT_USAGE)
+
+    reader = None
     try:
-        dossier_data = json.loads(dossier.read_text())
-        char_data = json.loads(characterization.read_text())
+        if bundle_dir is not None:
+            try:
+                reader = BundleReader(bundle_dir)
+            except (BundleNotReady, BundleSchemaMismatch) as exc:
+                click.echo(f"error: bundle unusable: {exc}", err=True)
+                sys.exit(EXIT_INPUT)
+            dossier_data = reader.get_dossier()
+            char_data = json.loads(reader.get_characterization_json())
+            if output is None:
+                output = reader.dir / "diagnosis" / "diagnosis.json"
+        else:
+            dossier_data = json.loads(dossier.read_text())  # type: ignore[union-attr]
+            char_data = json.loads(characterization.read_text())  # type: ignore[union-attr]
     except (json.JSONDecodeError, OSError) as exc:
         click.echo(f"error: failed to read inputs: {exc}", err=True)
         sys.exit(EXIT_INPUT)
+
+    if output is None:
+        click.echo("error: --output is required when not using --bundle", err=True)
+        sys.exit(EXIT_USAGE)
 
     char_output = CharacterizationOutput.model_validate(char_data)
 
@@ -105,7 +160,7 @@ def run(
     if resolved_provider not in ("anthropic", "gemini"):
         resolved_provider = "gemini"  # meta.provider only accepts those two
     agent = DiagnosisAgent(client=client, provider=resolved_provider)
-    result = agent.diagnose(dossier_data, char_output)
+    result = agent.diagnose(dossier_data, char_output, bundle=reader)
 
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(result.model_dump(mode="json"), indent=2))

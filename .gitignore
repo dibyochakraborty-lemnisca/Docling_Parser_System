@@ -17,3 +17,7 @@ data/
 .DS_Store
 tests/fixtures/*.pdf
 !tests/fixtures/.gitkeep
+
+# Runtime bundle directories produced by --bundle CLI flag.
+out/bundle_*
+out/.bundle_*.tmp

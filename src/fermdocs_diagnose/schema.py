@@ -121,9 +121,16 @@ class BaseClaim(BaseModel):
 
 
 class FailureClaim(BaseClaim):
-    """An observable thing went wrong. Always cites ≥1 finding."""
+    """An observable thing went wrong.
+
+    Must cite at least one finding_id OR a (run_id, variable) trajectory pair.
+    The trajectory citation is the spine-flip path: when the agent finds an
+    anomaly via execute_python that the deterministic detectors missed, it
+    cites the trajectory it computed against, not a non-existent finding.
+    """
 
     severity: Severity
+    cited_trajectories: list[TrajectoryRef] = Field(default_factory=list)
     time_window: TimeWindow | None = None
 
     @field_validator("claim_id")
@@ -135,9 +142,10 @@ class FailureClaim(BaseClaim):
 
     @model_validator(mode="after")
     def _has_citation(self) -> FailureClaim:
-        if not self.cited_finding_ids:
+        if not self.cited_finding_ids and not self.cited_trajectories:
             raise ValueError(
                 f"{self.claim_id}: FailureClaim must cite ≥1 finding_id"
+                " or trajectory (run_id, variable)"
             )
         return self
 

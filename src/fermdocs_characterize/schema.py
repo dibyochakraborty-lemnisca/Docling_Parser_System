@@ -87,6 +87,21 @@ class ExtractedVia(str, Enum):
     LLM_JUDGED = "llm_judged"  # Confidence capped at 0.85
 
 
+class Tier(str, Enum):
+    """Trust tier for a finding's evidence chain.
+
+    A: direct measurement violation (range_violation against measured nominal+std_dev)
+    B: derived from measurements (rates, yields, ratios)
+    C: modeled / process-priors-derived (back-calculated from priors)
+
+    Hypothesis-stage agents weight evidence by tier; downgrade C in early debate.
+    """
+
+    A = "A"
+    B = "B"
+    C = "C"
+
+
 # -----------------------------------------------------------------------------
 # Provenance and evidence
 # -----------------------------------------------------------------------------
@@ -200,6 +215,11 @@ class Finding(BaseModel):
     )
     type: FindingType
     severity: Severity
+    tier: Tier = Field(
+        default=Tier.A,
+        description="Trust tier (A=measured, B=derived, C=modeled). Default A so"
+        " pre-tier findings backfill cleanly. range_violation always emits A.",
+    )
     summary: str = Field(min_length=1, description="One-line description for human readers.")
     confidence: float = Field(ge=0.0, le=1.0)
     extracted_via: ExtractedVia
