@@ -130,6 +130,16 @@ def main(
             writer.write_dossier(dossier)
             writer.write_characterization(payload)
             writer.write_observations_csv(_flatten_trajectories(output))
+            if output.narrative_observations:
+                writer.write_narrative_observations(
+                    json.dumps(
+                        [
+                            n.model_dump(mode="json")
+                            for n in output.narrative_observations
+                        ],
+                        indent=2,
+                    )
+                )
             bundle_path = writer.finalize()
         except Exception:
             writer.abort()

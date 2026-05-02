@@ -20,6 +20,8 @@ IDs are stable across re-runs of the same input when `characterization_id` and
 
 from __future__ import annotations
 
+import logging
+import re
 from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
@@ -37,6 +39,7 @@ from fermdocs_characterize.schema import (
     CharacterizationOutput,
     Finding,
     Meta,
+    NarrativeObservation,
 )
 from fermdocs.domain.golden_schema import load_schema
 from fermdocs_characterize.specs import DictSpecsProvider, SpecsProvider
@@ -140,6 +143,16 @@ class CharacterizationPipeline:
         open_questions = build_open_questions(findings, trajectories, dt_hours=dt_hours)
         facts_graph = build_facts_graph(summary)
 
+        # 5b. Plan B Stage 2.2: materialize narrative observations from the
+        # dossier. The dossier-side extractor minted narrative_ids under a
+        # transient UUID; we renamespace each to char_id so
+        # CharacterizationOutput's namespace validator accepts them. Bad
+        # entries are dropped with a warning — extraction is additive.
+        narrative_observations: list[NarrativeObservation] = _materialize_narratives(
+            dossier.get("narrative_observations") or [],
+            char_id=char_id,
+        )
+
         # 6. Assemble
         experiment_id = (dossier.get("experiment") or {}).get("experiment_id")
         source_dossier_ids = [experiment_id] if experiment_id else []
@@ -161,6 +174,7 @@ class CharacterizationPipeline:
             facts_graph=facts_graph,
             kinetic_estimates=[],
             open_questions=open_questions,
+            narrative_observations=narrative_observations,
         )
 
         # 7. Validate
@@ -175,3 +189,44 @@ class CharacterizationPipeline:
                 raise ValidationError(errors)
 
         return output
+
+
+_log = logging.getLogger(__name__)
+_NARRATIVE_ID_TAIL_RE = re.compile(r":(N-\d{4,})$")
+
+
+def _materialize_narratives(
+    raw_items: list[Any],
+    *,
+    char_id: UUID,
+) -> list[NarrativeObservation]:
+    """Coerce dossier-side narrative dicts into NarrativeObservation models.
+
+    Plan B Stage 2.2: the dossier-side extractor namespaced narrative_ids
+    under a transient UUID to keep them unique within the dossier. We
+    renamespace each to the active char_id so the CharacterizationOutput
+    namespace validator accepts them. Malformed entries are dropped with
+    a warning — extraction is additive, never blocks the pipeline.
+    """
+    out: list[NarrativeObservation] = []
+    for i, raw in enumerate(raw_items, start=1):
+        if not isinstance(raw, dict):
+            _log.info("narrative_observations[%d] is not a dict; skipping", i)
+            continue
+        # Replace the namespace prefix with the active char_id. Tail
+        # (e.g. 'N-0001') is preserved if shaped right; else assigned
+        # by position.
+        original_id = str(raw.get("narrative_id", ""))
+        m = _NARRATIVE_ID_TAIL_RE.search(original_id)
+        tail = m.group(1) if m else f"N-{i:04d}"
+        clone = dict(raw)
+        clone["narrative_id"] = f"{char_id}:{tail}"
+        try:
+            out.append(NarrativeObservation.model_validate(clone))
+        except Exception as exc:
+            _log.info(
+                "narrative_observations[%d] failed validation (%s); skipping",
+                i,
+                exc.__class__.__name__,
+            )
+    return out

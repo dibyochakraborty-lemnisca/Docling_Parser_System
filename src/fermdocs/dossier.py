@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import uuid
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -22,6 +24,8 @@ from fermdocs.mapping.identity_extractor import (
     IdentityLLMClient,
 )
 from fermdocs.mapping.process_registry import cached_registry
+from fermdocs.narrative import NarrativeExtractor as InsightExtractor
+from fermdocs.narrative.extractor import NarrativeLLMClient as InsightLLMClient
 from fermdocs.storage.repository import Repository
 
 DOSSIER_SCHEMA_VERSION = "1.1"
@@ -130,12 +134,52 @@ def _resolve_identity(
     )
 
 
+def _truthy_env(name: str) -> bool:
+    return (os.environ.get(name) or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _extract_narrative_insights(
+    blocks: list[NarrativeBlock],
+    *,
+    enabled: bool,
+    insight_client: InsightLLMClient | None,
+) -> tuple[list[dict[str, Any]], uuid.UUID | None]:
+    """Run the narrative-insight extractor over rehydrated blocks.
+
+    Returns (serialized observations, namespace_uuid). The namespace is the
+    UUID we used to mint narrative_ids in the dossier; characterization
+    re-namespaces these to its own characterization_id when it materializes
+    the observations into CharacterizationOutput.
+    """
+    if not enabled or not blocks:
+        return [], None
+    namespace = uuid.uuid4()
+    try:
+        extractor = InsightExtractor(client=insight_client)
+        observations = extractor.extract(blocks, characterization_id=namespace)
+    except Exception as exc:  # extractor is meant to swallow, but belt-and-braces
+        _log.warning(
+            "narrative-insight extractor failed (%s: %s); proceeding with empty list",
+            exc.__class__.__name__,
+            str(exc)[:200],
+        )
+        return [], namespace
+    return [o.model_dump(mode="json") for o in observations], namespace
+
+
 def build_dossier(
     experiment_id: str,
     repository: Repository,
     *,
     manifest_path: str | Path | None = None,
     identity_llm_client: IdentityLLMClient | None = None,
+    extract_narrative_insights: bool | None = None,
+    narrative_insight_client: InsightLLMClient | None = None,
 ) -> dict[str, Any]:
     schema = load_schema()
     schema_index = schema.by_name()
@@ -198,11 +242,28 @@ def build_dossier(
         if row.source_locator and row.source_locator.get("section") == "narrative":
             narrative_kept += 1
 
+    rehydrated_blocks = _residual_narrative_blocks(residuals)
+
     identity = _resolve_identity(
         manifest_path=manifest_path,
         llm_client=identity_llm_client,
-        narrative_blocks=_residual_narrative_blocks(residuals),
+        narrative_blocks=rehydrated_blocks,
         present_variables=_present_variables(by_column),
+    )
+
+    # Plan B Stage 2.2: opt-in narrative-insight extraction. The diagnose-side
+    # extractor (fermdocs.narrative) reads the same NarrativeBlocks that the
+    # mapping-side narrative_extractor does, but emits typed prose insights
+    # (closure_event / intervention / observation / etc.) for downstream.
+    # Resolution: explicit arg > FERMDOCS_EXTRACT_NARRATIVE_INSIGHTS env > false.
+    if extract_narrative_insights is None:
+        extract_narrative_insights = _truthy_env(
+            "FERMDOCS_EXTRACT_NARRATIVE_INSIGHTS"
+        )
+    narrative_observations, _narrative_namespace = _extract_narrative_insights(
+        rehydrated_blocks,
+        enabled=bool(extract_narrative_insights),
+        insight_client=narrative_insight_client,
     )
 
     return {
@@ -258,5 +319,12 @@ def build_dossier(
             "stale_schema_versions": sorted(stale_versions),
             "narrative_blocks_captured": narrative_blocks_total,
             "narrative_observations": narrative_kept,
+            "narrative_insights_extracted": len(narrative_observations),
         },
+        # Plan B Stage 2.2: prose insights (closure_events, interventions,
+        # observations, etc.) extracted from the source document. Empty list
+        # when extraction was disabled or yielded nothing.
+        # CharacterizationPipeline re-namespaces the IDs to its own
+        # characterization_id when materializing.
+        "narrative_observations": narrative_observations,
     }
