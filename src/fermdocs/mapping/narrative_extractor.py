@@ -25,11 +25,20 @@ from fermdocs.domain.models import (
     NarrativeExtraction,
     Observation,
 )
+from fermdocs.mapping.evidence_gated_llm import (
+    LLM_CONFIDENCE_CAP,
+    MAX_EVIDENCE_LEN,
+    MAX_SENTENCE_BREAKS,
+    value_string_forms,
+    verify_substring_evidence,
+)
 
-NARRATIVE_CONFIDENCE_CAP = 0.85
+# Re-export under the name the rest of the codebase imports.
+NARRATIVE_CONFIDENCE_CAP = LLM_CONFIDENCE_CAP
+verify_evidence = verify_substring_evidence
+_value_string_forms = value_string_forms
+
 MAX_PARAGRAPHS_PER_CALL = 20
-MAX_EVIDENCE_LEN = 200
-MAX_SENTENCE_BREAKS = 2
 
 
 class NarrativeExtractor(Protocol):
@@ -44,51 +53,6 @@ def chunk_blocks(
     """Yield blocks in chunks of up to `size`. Cross-chunk associations are intentionally lost."""
     for i in range(0, len(blocks), size):
         yield blocks[i : i + size]
-
-
-def verify_evidence(
-    evidence: str, source_text: str, value: Any
-) -> tuple[bool, str | None]:
-    """Hallucination guard. Returns (ok, reason_if_rejected).
-
-    Rules:
-      1. Evidence must be non-empty and short (<= MAX_EVIDENCE_LEN chars).
-      2. Evidence must be a verbatim substring of source_text.
-      3. Value's string form must appear inside the evidence (not just the source).
-      4. Evidence must span <= MAX_SENTENCE_BREAKS sentence terminators.
-    """
-    if not evidence:
-        return False, "evidence empty"
-    if len(evidence) > MAX_EVIDENCE_LEN:
-        return False, f"evidence too long ({len(evidence)} chars)"
-    if evidence not in source_text:
-        return False, "evidence not in source"
-    candidates = _value_string_forms(value)
-    if not any(c in evidence for c in candidates if c):
-        return False, f"value {value!r} not within evidence span"
-    breaks = sum(1 for c in evidence if c in ".!?")
-    if breaks > MAX_SENTENCE_BREAKS:
-        return False, f"evidence spans too many sentences ({breaks})"
-    return True, None
-
-
-def _value_string_forms(value: Any) -> set[str]:
-    """Common rendering variants of a value. We accept any of these inside evidence."""
-    forms: set[str] = set()
-    if value is None:
-        return forms
-    forms.add(str(value).strip())
-    try:
-        f = float(value)
-        forms.add(str(f))
-        if f == int(f):
-            forms.add(str(int(f)))
-        forms.add(f"{f:.1f}")
-        forms.add(f"{f:.2f}")
-        forms.add(f"{f:.3f}")
-    except (TypeError, ValueError):
-        pass
-    return {f for f in forms if f}
 
 
 def is_dup_of_table_observations(
