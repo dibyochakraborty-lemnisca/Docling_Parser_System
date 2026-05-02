@@ -1,0 +1,131 @@
+# Process priors — organism × process_family → variable bounds
+#
+# Used by the diagnosis agent (via get_priors() tool) to ground claims on
+# single-run dossiers where cross_run reasoning isn't available. Each prior
+# carries a `source` citation; downstream claims that cite a prior should
+# include the source in their summary.
+#
+# Adding a new organism or process family is intentional — every entry is
+# operator-curated. Aliases are matched case-insensitively as substrings of
+# the dossier's organism field.
+#
+# See plans/2026-05-03-process-priors.md for the full design.
+
+version: "1.0"
+
+organisms:
+  # ---------------------------------------------------------------------------
+  - name: "Saccharomyces cerevisiae"
+    aliases: ["S. cerevisiae", "Saccharomyces", "yeast", "baker's yeast", "bakers yeast"]
+    process_families:
+      - name: "aerobic_fed_batch_glucose"
+        description: >
+          Crabtree-controlled glucose-limited fed-batch. Glucose feed rate
+          held below the critical specific uptake rate to suppress ethanol
+          overflow.
+        priors:
+          mu_x_max_per_h:
+            range: [0.10, 0.30]
+            typical: 0.20
+            source: "Verduyn 1991; Hensing 1995"
+          qs_glucose_g_per_g_per_h:
+            range: [0.10, 0.40]
+            typical: 0.25
+            source: "Sonnleitner 1986"
+          yxs_g_per_g:
+            range: [0.45, 0.55]
+            typical: 0.50
+            source: "Verduyn 1991"
+          ethanol_g_l:
+            range: [0.0, 2.0]
+            typical: 0.5
+            note: "Ethanol > 5 g/L indicates Crabtree overflow / overfeeding"
+            source: "Operator heuristic; van Hoek 1998"
+          biomass_endpoint_g_l:
+            range: [80.0, 180.0]
+            typical: 120.0
+            source: "Industrial fed-batch range; Lemnisca operator survey"
+          do_pct_saturation:
+            range: [20.0, 80.0]
+            typical: 30.0
+            note: "DO < 20% sustained suggests oxygen limitation; DO > 80% suggests over-aeration or stalled metabolism"
+            source: "Operator heuristic"
+
+  # ---------------------------------------------------------------------------
+  - name: "Escherichia coli"
+    aliases: ["E. coli", "E.coli", "BL21", "DH5a", "DH5alpha", "K12"]
+    process_families:
+      - name: "aerobic_fed_batch_iptg_induction"
+        description: >
+          Glucose-limited fed-batch with IPTG-induced recombinant protein
+          production. Pre-induction phase grows biomass; post-induction
+          shifts metabolism toward target protein.
+        priors:
+          mu_x_max_per_h:
+            range: [0.40, 0.70]
+            typical: 0.55
+            source: "Korz 1995; Shiloach 2005"
+          qs_glucose_g_per_g_per_h:
+            range: [0.30, 0.70]
+            typical: 0.50
+            source: "Shiloach 2005"
+          yxs_g_per_g:
+            range: [0.40, 0.50]
+            typical: 0.45
+            source: "Korz 1995"
+          acetate_g_l:
+            range: [0.0, 2.0]
+            typical: 0.5
+            note: "Acetate > 5 g/L typically inhibits growth and protein production"
+            source: "Eiteman 2006"
+          biomass_endpoint_g_l:
+            range: [60.0, 100.0]
+            typical: 80.0
+            source: "Shiloach 2005"
+          iptg_mm:
+            range: [0.1, 1.0]
+            typical: 0.5
+            note: "Induction concentration; values outside this range are non-standard"
+            source: "Operator heuristic"
+          do_pct_saturation:
+            range: [20.0, 60.0]
+            typical: 30.0
+            note: "DO < 20% triggers acetate overflow; DO > 60% post-induction may indicate stalled metabolism"
+            source: "Eiteman 2006; operator heuristic"
+
+  # ---------------------------------------------------------------------------
+  - name: "Penicillium chrysogenum"
+    aliases: ["P. chrysogenum", "Penicillium", "P.chrysogenum"]
+    process_families:
+      - name: "submerged_fed_batch_paa"
+        description: >
+          Submerged fed-batch with phenylacetic acid (PAA) precursor feed
+          for penicillin biosynthesis. Mycelial morphology drives
+          viscosity and oxygen-transfer constraints.
+        priors:
+          mu_x_max_per_h:
+            range: [0.05, 0.15]
+            typical: 0.10
+            source: "Nielsen 1995"
+          mu_p_max_per_h:
+            range: [0.020, 0.050]
+            typical: 0.035
+            source: "Nielsen 1995"
+          qs_glucose_g_per_g_per_h:
+            range: [0.03, 0.10]
+            typical: 0.06
+            source: "Nielsen 1995"
+          paa_mg_l:
+            range: [800.0, 2000.0]
+            typical: 1400.0
+            note: "PAA > 5000 mg/L indicates cessation of biosynthesis (precursor pooling — cells stopped consuming)"
+            source: "IndPenSim cohort observation; van Gulik 2001"
+          biomass_endpoint_g_l:
+            range: [30.0, 50.0]
+            typical: 40.0
+            source: "Industrial fed-batch range"
+          dissolved_o2_mg_l:
+            range: [3.0, 8.0]
+            typical: 5.0
+            note: "Mycelial cultures are oxygen-transfer limited; sustained DO < 2 mg/L impairs penicillin synthesis"
+            source: "Nielsen 1995"
