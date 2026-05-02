@@ -38,6 +38,7 @@ from fermdocs_characterize.schema import (
     Finding,
     Meta,
 )
+from fermdocs.domain.golden_schema import load_schema
 from fermdocs_characterize.specs import DictSpecsProvider, SpecsProvider
 from fermdocs_characterize.validators.output_validator import (
     ValidationError,
@@ -75,7 +76,24 @@ class CharacterizationPipeline:
         generation_timestamp: datetime | None = None,
         supersedes: UUID | None = None,
     ) -> CharacterizationOutput:
-        specs = self._specs_provider or DictSpecsProvider.from_dossier(dossier)
+        # Specs precedence:
+        #   1. Explicitly injected provider wins (production / tests).
+        #   2. Otherwise merge schema defaults with dossier `_specs` overrides
+        #      via from_schema_with_overrides. This is what real ingestion
+        #      dossiers want: golden_schema.yaml carries default
+        #      nominal/std_dev per variable; the dossier may override any
+        #      field per run.
+        if self._specs_provider is not None:
+            specs = self._specs_provider
+        else:
+            try:
+                schema = load_schema()
+                specs = DictSpecsProvider.from_schema_with_overrides(schema, dossier)
+            except Exception:
+                # Schema unavailable (offline tests, missing file): fall back
+                # to dossier-only specs so existing fixture-based tests keep
+                # working.
+                specs = DictSpecsProvider.from_dossier(dossier)
 
         char_id = characterization_id or uuid4()
         gen_ts = generation_timestamp or datetime.utcnow()

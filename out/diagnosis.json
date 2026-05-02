@@ -1,0 +1,82 @@
+{
+  "meta": {
+    "schema_version": "1.0",
+    "diagnosis_version": "v1.0.0",
+    "diagnosis_id": "f2fd761b-5877-4547-ab95-e396d237ee8f",
+    "supersedes_characterization_id": "cca8939e-bd44-47d4-8c49-2d10c39acd38",
+    "generation_timestamp": "2026-05-02T12:54:36.904987",
+    "model": "claude-opus-4-7",
+    "provider": "gemini",
+    "error": null
+  },
+  "failures": [
+    {
+      "claim_id": "D-F-0001",
+      "summary": "biomass_g_l exceeded the nominal value of 0.5 g/L by over 460 sigma, with observed values ranging from 23.5 g/L to 24.7 g/L.",
+      "cited_finding_ids": [
+        "cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0001",
+        "cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0002",
+        "cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0003",
+        "cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0004",
+        "cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0005",
+        "cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0006",
+        "cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0007",
+        "cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0008",
+        "cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0009",
+        "cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0010"
+      ],
+      "affected_variables": [
+        "biomass_g_l"
+      ],
+      "confidence": 0.85,
+      "confidence_basis": "process_priors",
+      "domain_tags": [
+        "growth"
+      ],
+      "provenance_downgraded": false,
+      "severity": "critical",
+      "time_window": {
+        "start": 108.0,
+        "end": 168.0
+      }
+    }
+  ],
+  "trends": [],
+  "analysis": [
+    {
+      "claim_id": "D-A-0001",
+      "summary": "The nominal specification for biomass_g_l is set to 0.5 \u00b1 0.05 g/L, while observed values are consistently above 23 g/L.",
+      "cited_finding_ids": [
+        "cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0001",
+        "cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0010"
+      ],
+      "affected_variables": [
+        "biomass_g_l"
+      ],
+      "confidence": 0.85,
+      "confidence_basis": "process_priors",
+      "domain_tags": [
+        "data_quality",
+        "growth"
+      ],
+      "provenance_downgraded": false,
+      "kind": "spec_alignment"
+    }
+  ],
+  "open_questions": [
+    {
+      "question_id": "D-Q-0001",
+      "question": "Is the nominal specification of 0.5 g/L for biomass_g_l accurate for this 100,000 L Penicillium chrysogenum fed-batch process?",
+      "why_it_matters": "Validating the specification ensures that critical range violation alerts are meaningful and actionable.",
+      "cited_finding_ids": [
+        "cca8939e-bd44-47d4-8c49-2d10c39acd38:F-0001"
+      ],
+      "answer_format_hint": "yes_no",
+      "domain_tags": [
+        "data_quality",
+        "growth"
+      ]
+    }
+  ],
+  "narrative": "During the run, biomass_g_l values were observed between 23.5 g/L and 24.7 g/L in the 108.0h to 168.0h time window. These values exceeded the configured nominal specification of 0.5 \u00b1 0.05 g/L by over 460 sigma, triggering numerous critical range violations. The process is flagged as having mostly missing specifications."
+}

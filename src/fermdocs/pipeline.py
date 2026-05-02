@@ -263,6 +263,7 @@ class IngestionPipeline:
         observations: list[Observation] = []
         unmapped_columns: list[dict] = []
         col_index = {h: i for i, h in enumerate(table.headers)}
+        time_col_idx, run_col_idx = _detect_time_and_run_columns(table.headers)
 
         for entry in mapping.entries:
             decision = band(entry.confidence)
@@ -279,6 +280,20 @@ class IngestionPipeline:
             if golden is None:
                 unmapped_columns.append(
                     {"raw_header": entry.raw_header, "reason": "unknown_canonical"}
+                )
+                continue
+            # Metadata-only golden columns (experiment_id, strain_id, organism,
+            # product) carry canonical_unit=None and describe experiment
+            # identity, not per-row measurements. Mappers occasionally route
+            # batch-id columns here — refuse to write per-row observations
+            # against them. Identity belongs in the dossier's process layer.
+            if golden.canonical_unit is None:
+                unmapped_columns.append(
+                    {
+                        "raw_header": entry.raw_header,
+                        "reason": "metadata_column_not_observation",
+                        "mapped_to": entry.mapped_to,
+                    }
                 )
                 continue
             col_idx = col_index.get(entry.raw_header)
@@ -300,6 +315,16 @@ class IngestionPipeline:
                     continue
                 if isinstance(raw_value, float) and math.isnan(raw_value):
                     continue
+                row_run_id = (
+                    _coerce_run_id(row[run_col_idx])
+                    if run_col_idx is not None and run_col_idx < len(row)
+                    else None
+                )
+                row_time_h = (
+                    _coerce_time_h(row[time_col_idx])
+                    if time_col_idx is not None and time_col_idx < len(row)
+                    else None
+                )
                 observations.append(
                     self._build_observation(
                         experiment_id=experiment_id,
@@ -311,6 +336,8 @@ class IngestionPipeline:
                         raw_value=raw_value,
                         row_idx=row_idx,
                         col_idx=col_idx,
+                        run_id=row_run_id,
+                        time_h=row_time_h,
                         decision=decision,
                     )
                 )
@@ -329,6 +356,8 @@ class IngestionPipeline:
         row_idx: int,
         col_idx: int,
         decision: ConfidenceBand,
+        run_id: str | None = None,
+        time_h: float | None = None,
     ) -> Observation:
         conversion = self._converter.convert(
             raw_value, entry.raw_unit, golden_unit, normalizer=self._normalizer
@@ -350,6 +379,10 @@ class IngestionPipeline:
                     "source": conversion.hint.source,
                 }
         locator = {**table.locator, "row": row_idx, "col": col_idx, "section": "table"}
+        if run_id is not None:
+            locator["run_id"] = run_id
+        if time_h is not None:
+            locator["timestamp_h"] = time_h
         return Observation(
             observation_id=uuid.uuid4(),
             experiment_id=experiment_id,
@@ -370,6 +403,87 @@ class IngestionPipeline:
             schema_version=self._schema.version,
             extracted_at=datetime.utcnow(),
         )
+
+
+# -----------------------------------------------------------------------------
+# Time / run-id auto-detection
+#
+# Real fermentation CSVs almost always carry one column for elapsed time and
+# one for the batch / run identifier. The characterization stage reads
+# locator.run_id and locator.timestamp_h off every observation; without those
+# fields, every row is dropped from the summary. We auto-detect once per
+# table by matching the headers against a small allow-list. CLI overrides
+# come later if a real file ever needs disambiguation.
+# -----------------------------------------------------------------------------
+
+_TIME_HEADER_PATTERNS = (
+    "time",
+    "time (h)",
+    "time(h)",
+    "time_h",
+    "time [h]",
+    "elapsed_time",
+    "elapsed time",
+    "t",
+)
+_RUN_HEADER_PATTERNS = (
+    "batch_ref",
+    "batch",
+    "batch_id",
+    "run",
+    "run_id",
+    "run_ref",
+)
+
+
+def _detect_time_and_run_columns(
+    headers: list[str],
+) -> tuple[int | None, int | None]:
+    """Return (time_col_idx, run_col_idx) by matching header strings.
+
+    Case-insensitive, whitespace-trimmed. First match wins; duplicate columns
+    (e.g. IndPenSim's 'Batch_ref' / 'Batch_ref.1') resolve to the first hit.
+    """
+    time_idx: int | None = None
+    run_idx: int | None = None
+    for i, h in enumerate(headers):
+        norm = (h or "").strip().lower()
+        if time_idx is None and norm in _TIME_HEADER_PATTERNS:
+            time_idx = i
+        if run_idx is None and norm in _RUN_HEADER_PATTERNS:
+            run_idx = i
+    return time_idx, run_idx
+
+
+def _coerce_time_h(value: object) -> float | None:
+    """CSV cells arrive as strings; the parser already filtered None / ""."""
+    if value is None or value == "":
+        return None
+    try:
+        f = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(f) or math.isinf(f):
+        return None
+    return f
+
+
+def _coerce_run_id(value: object) -> str | None:
+    if value is None or value == "":
+        return None
+    s = str(value).strip()
+    if not s or s.lower() == "nan":
+        return None
+    # Common case: numeric run id like "1" or "1.0" — normalize to int form.
+    try:
+        f = float(s)
+        if math.isnan(f):
+            return None
+        if f.is_integer():
+            return f"RUN-{int(f):04d}"
+    except (TypeError, ValueError):
+        pass
+    return s
 
 
 def _coerce(value: object, data_type: str) -> object:

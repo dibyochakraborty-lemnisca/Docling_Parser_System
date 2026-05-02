@@ -6,10 +6,18 @@ vocabularies/finding_types.md.
 
 v1 trajectory caveat: if the row's trajectory has quality < 0.8, attach a
 caveat naming the imputation level. Surfaces uncertainty for the Critic.
+
+Aggregation circuit breaker: if a single (variable, run_id) pair produces
+more than AGGREGATE_THRESHOLD per-row violations, the per-row findings are
+collapsed into one rollup finding. This protects downstream agents from
+prompt-budget explosions when schema specs have setpoint semantics but the
+real signal is a trajectory (e.g. biomass growing 50x over a fed-batch
+fermentation).
 """
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -25,6 +33,7 @@ from fermdocs_characterize.views.summary import Summary, SummaryRow
 from fermdocs_characterize.views.trajectories import get_trajectory
 
 LOW_QUALITY_THRESHOLD = 0.8
+AGGREGATE_THRESHOLD = 100  # per (variable, run_id) — above this we roll up
 
 
 @dataclass(frozen=True)
@@ -150,4 +159,124 @@ def find_range_violations(
                 },
             )
         )
-    return candidates
+    return _aggregate_runaways(candidates)
+
+
+def _aggregate_runaways(
+    candidates: list[CandidateFinding],
+) -> list[CandidateFinding]:
+    """Collapse runaway (variable, run_id) groups into single rollup findings.
+
+    Why: when schema specs have setpoint semantics (one nominal at inoculation)
+    but the real signal is a trajectory (biomass grows 50x over 230h), every
+    timestep flags a violation. 9000+ findings explode the diagnosis-agent
+    prompt budget. One rollup carries the same information density and frees
+    the budget for other signals.
+
+    Aggregation preserves: max |sigmas|, observed range, time window, all
+    contributing observation_ids. Severity is the highest seen in the group.
+    """
+    by_group: dict[tuple[str, str], list[CandidateFinding]] = defaultdict(list)
+    others: list[CandidateFinding] = []
+    for c in candidates:
+        var = c.variables_involved[0] if c.variables_involved else None
+        run = c.run_ids[0] if c.run_ids else None
+        if var is None or run is None:
+            others.append(c)
+            continue
+        by_group[(var, run)].append(c)
+
+    out: list[CandidateFinding] = list(others)
+    for (var, run), group in by_group.items():
+        if len(group) <= AGGREGATE_THRESHOLD:
+            out.extend(group)
+            continue
+        out.append(_make_rollup(var, run, group))
+    return out
+
+
+_SEVERITY_RANK = {
+    Severity.INFO: 1,
+    Severity.MINOR: 2,
+    Severity.MAJOR: 3,
+    Severity.CRITICAL: 4,
+}
+
+
+def _make_rollup(
+    variable: str, run_id: str, group: list[CandidateFinding]
+) -> CandidateFinding:
+    n = len(group)
+    max_sev = max(group, key=lambda c: _SEVERITY_RANK[c.severity]).severity
+    sigmas_list = [
+        c.statistics.get("sigmas", 0.0) for c in group if "sigmas" in c.statistics
+    ]
+    observed_list = [
+        c.statistics.get("observed") for c in group if c.statistics.get("observed") is not None
+    ]
+    times = [
+        c.time_window.start
+        for c in group
+        if c.time_window and c.time_window.start is not None
+    ]
+    nominal = group[0].statistics.get("nominal")
+    std_dev = group[0].statistics.get("std_dev")
+
+    max_abs_sigmas = max((abs(s) for s in sigmas_list), default=0.0)
+    obs_min = min(observed_list, default=None)
+    obs_max = max(observed_list, default=None)
+    t_start = min(times, default=None)
+    t_end = max(times, default=None)
+
+    obs_range = (
+        f"{obs_min:g}-{obs_max:g}"
+        if obs_min is not None and obs_max is not None and obs_min != obs_max
+        else (f"{obs_min:g}" if obs_min is not None else "?")
+    )
+    summary_text = (
+        f"{variable} violates spec across {n} observations in run {run_id}"
+        f" (range {obs_range}, max {max_abs_sigmas:.1f}σ"
+        f" vs nominal {nominal:g} ± {std_dev:g})"
+        if nominal is not None and std_dev is not None
+        else (
+            f"{variable} violates spec across {n} observations in run {run_id}"
+            f" (range {obs_range}, max {max_abs_sigmas:.1f}σ)"
+        )
+    )
+
+    # Carry every contributing observation_id so the diagnosis agent can drill
+    # down via get_finding / get_trajectory if it wants to. Bounded by group
+    # size; the AgentContext's top_findings cap keeps prompt budget safe.
+    evidence_ids = [
+        oid for c in group for oid in c.evidence_observation_ids
+    ]
+
+    return CandidateFinding(
+        type=FindingType.RANGE_VIOLATION,
+        severity=max_sev,
+        summary=summary_text,
+        confidence=_CONFIDENCE_BY_SEVERITY[max_sev],
+        extracted_via=ExtractedVia.DETERMINISTIC,
+        caveats=[
+            f"aggregated from {n} per-row range_violation candidates;"
+            " schema spec likely carries setpoint semantics rather than"
+            " trajectory bounds"
+        ],
+        competing_explanations=[],
+        evidence_strength=EvidenceStrength(
+            n_observations=n, n_independent_runs=1, statistical_power=None
+        ),
+        evidence_observation_ids=evidence_ids,
+        variables_involved=[variable],
+        time_window=TimeWindow(start=t_start, end=t_end),
+        run_ids=[run_id],
+        statistics={
+            "nominal": nominal,
+            "std_dev": std_dev,
+            "observed_min": obs_min,
+            "observed_max": obs_max,
+            "max_abs_sigmas": max_abs_sigmas,
+            "n_violations": n,
+            "aggregated": True,
+        },
+    )
