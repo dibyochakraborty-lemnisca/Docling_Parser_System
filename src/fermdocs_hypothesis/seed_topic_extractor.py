@@ -38,10 +38,28 @@ _SEV_WEIGHT = {
 }
 
 
+_SUPPRESSED_ANALYSIS_KINDS: frozenset[str] = frozenset({"data_quality_caveat"})
+"""Analysis kinds that describe meta-properties of the data rather than
+hypothesizable claims. These should not become debate topics — they bias
+specialists toward arguing about data plumbing instead of biology.
+
+`cross_run_observation` and `phase_characterization` are still
+hypothesizable (cross-run variation is a real engineering question) so
+they're allowed through.
+"""
+
+
 def extract_seed_topics(diag: DiagnosisOutput) -> list[SeedTopic]:
     """Project every claim/question into a SeedTopic. Topic IDs are
     assigned in deterministic order: failures, then analyses, then trends,
     then open questions.
+
+    Filters out analysis claims whose kind is in _SUPPRESSED_ANALYSIS_KINDS
+    (data_quality_caveat) — these are meta-observations about the data
+    itself, not candidates for hypothesis-debate. Letting them seed topics
+    derails specialists into framing "the registry doesn't match" or "the
+    data is sparse" as the central question, when the actual document
+    is asking biological questions.
     """
     topics: list[SeedTopic] = []
     counter = 0
@@ -50,6 +68,8 @@ def extract_seed_topics(diag: DiagnosisOutput) -> list[SeedTopic]:
         counter += 1
         topics.append(_from_failure(f, counter))
     for a in diag.analysis:
+        if a.kind in _SUPPRESSED_ANALYSIS_KINDS:
+            continue
         counter += 1
         topics.append(_from_analysis(a, counter))
     for t in diag.trends:
