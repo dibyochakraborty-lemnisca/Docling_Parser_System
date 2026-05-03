@@ -1,7 +1,6 @@
 "use client";
 
 import { Badge } from "@/components/ui/badge";
-import { truncate } from "@/lib/utils";
 
 interface Event {
   type: string;
@@ -65,20 +64,39 @@ function eventLabel(ev: Event): string {
 function eventBody(ev: Event): React.ReactNode {
   switch (ev.type) {
     case "topic_selected":
-      return ev.summary && <span>{truncate(ev.summary, 200)}</span>;
+      // Full text — operators need to read the topic to evaluate the
+      // debate. Truncating here was hiding agent reasoning. Cards
+      // grow vertically instead; that's the right trade-off for a
+      // research / debug UI. Use whitespace-pre-wrap so newlines and
+      // long lines render readably.
+      return (
+        ev.summary && (
+          <span className="whitespace-pre-wrap">{ev.summary}</span>
+        )
+      );
     case "facet_contributed":
     case "hypothesis_synthesized":
-      return ev.summary && <span>{truncate(ev.summary, 220)}</span>;
+      return (
+        ev.summary && (
+          <span className="whitespace-pre-wrap">{ev.summary}</span>
+        )
+      );
     case "critique_filed":
       return ev.reasons?.length > 0 ? (
         <ul className="list-disc pl-4 space-y-1">
           {ev.reasons.map((r: string, i: number) => (
-            <li key={i}>{truncate(r, 180)}</li>
+            <li key={i} className="whitespace-pre-wrap">
+              {r}
+            </li>
           ))}
         </ul>
       ) : null;
     case "judge_ruling":
-      return ev.rationale && <span>{truncate(ev.rationale, 220)}</span>;
+      return (
+        ev.rationale && (
+          <span className="whitespace-pre-wrap">{ev.rationale}</span>
+        )
+      );
     case "question_added":
       return ev.question && <span>{ev.question}</span>;
     case "question_resolved":

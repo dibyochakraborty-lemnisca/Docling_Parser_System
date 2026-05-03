@@ -11,7 +11,6 @@ import {
   submitAnswers,
   type RunDetail,
 } from "@/lib/api";
-import { truncate } from "@/lib/utils";
 import { Timeline } from "@/components/Timeline";
 
 export default function RunPage({ params }: { params: { id: string } }) {
@@ -198,7 +197,7 @@ export default function RunPage({ params }: { params: { id: string } }) {
                 <div className="font-mono text-xs text-muted-foreground">
                   {r.hyp_id}
                 </div>
-                <div className="mt-1">{truncate(r.summary, 200)}</div>
+                <div className="mt-1 whitespace-pre-wrap">{r.summary}</div>
                 <div className="mt-2 text-xs text-destructive">
                   Rejected: {r.rejection_reason}
                 </div>
