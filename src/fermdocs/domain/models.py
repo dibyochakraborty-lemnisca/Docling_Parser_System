@@ -324,3 +324,130 @@ class IngestionResult(BaseModel):
     @property
     def any_ok(self) -> bool:
         return any(f.parse_status == "ok" for f in self.files)
+
+
+# -----------------------------------------------------------------------------
+# Document segmentation (PDF only)
+#
+# Plan ref: docs/design/2026-05-03-pdf-document-segmentation.md
+#
+# A DocumentMap labels each TableItem in a PDF with the experimental run it
+# belongs to. Produced by an LLM segmenter that reads the document outline
+# (headings, first-line previews of text blocks, table positions). Consumed
+# by IngestionPipeline as a per-table manifest_run_id override.
+#
+# CSV / Excel inputs do not produce DocumentMaps — the existing column /
+# filename / synthetic resolver chain stays unchanged for those paths.
+# -----------------------------------------------------------------------------
+
+
+class RunSegmentSource(str, Enum):
+    """How the LLM identified a run boundary.
+
+    Tracked for debugging and confidence calibration. A run grounded in a
+    SectionHeaderItem (`section_header`) is more trustworthy than one
+    inferred from prose patterns (`text_pattern`) or pure positional
+    inference (`inferred`).
+    """
+
+    SECTION_HEADER = "section_header"
+    TEXT_PATTERN = "text_pattern"
+    INFERRED = "inferred"
+
+
+class RunSegment(BaseModel):
+    """One experimental run identified by the document segmenter.
+
+    `table_indices` are the `table_idx` values (0-based, matching
+    ParsedTable.locator["table_idx"]) of TableItems belonging to this run.
+    Composition tables, feed-plan tables, and any table the LLM declines
+    to assign are NOT listed here — they end up in DocumentMap.
+    unassigned_table_indices.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    run_id: str = Field(min_length=1)
+    display_name: str = Field(min_length=1)
+    table_indices: list[int]
+    source_signal: RunSegmentSource
+    confidence: float = Field(ge=0.0, le=1.0)
+    rationale: str = ""
+
+    @field_validator("table_indices")
+    @classmethod
+    def _table_indices_unique_nonneg(cls, v: list[int]) -> list[int]:
+        if any(i < 0 for i in v):
+            raise ValueError("table_indices must be non-negative")
+        if len(v) != len(set(v)):
+            raise ValueError("table_indices must be unique within a run")
+        return v
+
+
+class DocumentMap(BaseModel):
+    """LLM-produced map from a PDF's TableItems to experimental runs.
+
+    Validation invariant: a given table_idx appears in at most one run's
+    `table_indices`, AND is never simultaneously in `unassigned_table_indices`.
+    Violation indicates an LLM bug or a malformed structured-output response;
+    the DocumentSegmenter rejects such maps and falls through to the
+    existing resolver chain.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    schema_version: Literal["1.0"] = "1.0"
+    file_id: str = Field(min_length=1)
+    runs: list[RunSegment]
+    unassigned_table_indices: list[int] = Field(default_factory=list)
+    overall_confidence: float = Field(ge=0.0, le=1.0)
+    llm_model: str
+    llm_provider: str
+
+    @field_validator("unassigned_table_indices")
+    @classmethod
+    def _unassigned_unique_nonneg(cls, v: list[int]) -> list[int]:
+        if any(i < 0 for i in v):
+            raise ValueError("unassigned_table_indices must be non-negative")
+        if len(v) != len(set(v)):
+            raise ValueError("unassigned_table_indices must be unique")
+        return v
+
+    @field_validator("runs")
+    @classmethod
+    def _runs_have_unique_run_ids(cls, v: list[RunSegment]) -> list[RunSegment]:
+        ids = [r.run_id for r in v]
+        if len(ids) != len(set(ids)):
+            raise ValueError("DocumentMap runs must have unique run_ids")
+        return v
+
+    def model_post_init(self, __context: Any) -> None:
+        # Cross-field invariant: no table_idx appears in two runs OR in both
+        # an assigned run and the unassigned list. Pydantic v2 cross-field
+        # validation lives here (field validators only see one field at a time).
+        seen: set[int] = set()
+        for run in self.runs:
+            for idx in run.table_indices:
+                if idx in seen:
+                    raise ValueError(
+                        f"table_idx {idx} appears in multiple runs;"
+                        " each table belongs to exactly one run"
+                    )
+                seen.add(idx)
+        for idx in self.unassigned_table_indices:
+            if idx in seen:
+                raise ValueError(
+                    f"table_idx {idx} is both assigned to a run AND listed"
+                    f" as unassigned; document map is contradictory"
+                )
+
+    def run_for_table(self, table_idx: int) -> RunSegment | None:
+        """Return the RunSegment containing this table_idx, or None.
+
+        Used by IngestionPipeline to look up the run for each parsed table.
+        Linear in number of runs; that's fine — typical PDFs have <20 runs.
+        """
+        for run in self.runs:
+            if table_idx in run.table_indices:
+                return run
+        return None
