@@ -186,6 +186,19 @@ def cli(ctx: click.Context, print_schema: str | None) -> None:
         "contains exactly one run."
     ),
 )
+@click.option(
+    "--extract-narrative-insights/--no-extract-narrative-insights",
+    "extract_narrative_insights",
+    default=None,
+    help=(
+        "Typed prose insights from PDF narrative (closure_event, deviation, "
+        "intervention, observation, conclusion, protocol_note). Stored as "
+        "narrative_observations on the dossier and shipped to the diagnose "
+        "bundle so the agent can ground claims in operator prose like "
+        "'white cells observed at 82h'. Defaults to "
+        "FERMDOCS_EXTRACT_NARRATIVE_INSIGHTS (on)."
+    ),
+)
 def ingest(
     experiment_id: str,
     files: tuple[Path, ...],
@@ -198,6 +211,7 @@ def ingest(
     process_manifest: Path | None,
     segment_pdfs: bool | None,
     manifest_run_id: str | None,
+    extract_narrative_insights: bool | None,
 ) -> None:
     """Ingest files for an experiment, then optionally write a dossier JSON."""
     try:
@@ -234,11 +248,25 @@ def ingest(
             if (fake_mapper or process_manifest is not None)
             else build_identity_client(provider)
         )
+        # Closure-event extractor (white cells / pigment loss / interventions
+        # etc.). Default ON per design — the closure-event prose IS the
+        # primary signal for many fermentation reports. Off when fake_mapper
+        # (offline runs).
+        extract_insights = (
+            extract_narrative_insights
+            if extract_narrative_insights is not None
+            else os.environ.get(
+                "FERMDOCS_EXTRACT_NARRATIVE_INSIGHTS", "true"
+            ).lower() == "true"
+        )
+        if fake_mapper:
+            extract_insights = False
         dossier = build_dossier(
             experiment_id,
             repo,
             manifest_path=process_manifest,
             identity_llm_client=identity_client,
+            extract_narrative_insights=extract_insights,
         )
         out.write_text(json.dumps(dossier, indent=2, default=str))
         click.echo(f"dossier written: {out}", err=True)
