@@ -58,6 +58,12 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# Default test runs deselect live_llm so CI / pre-commit don't burn API
+# tokens. Run explicitly with: pytest -m live_llm
+addopts = "-m 'not live_llm'"
+markers = [
+    "live_llm: hits a real LLM API (Gemini/Anthropic). Requires API key, costs tokens. Deselected by default.",
+]
 
 [tool.mypy]
 python_version = "3.11"
