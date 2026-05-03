@@ -307,6 +307,16 @@ class ResidualPayload(BaseModel):
     figures: list[dict[str, Any]] = Field(default_factory=list)
     lists: list[dict[str, Any]] = Field(default_factory=list)
     raw_blocks: list[dict[str, Any]] = Field(default_factory=list)
+    # Operator-supplied feeding-schedule tables filtered out of the
+    # observation stream (PDF-only). Populated by Commit 2's _is_feed_plan
+    # filter, persisted here for later diagnose context (e.g. "the planned
+    # feed at hour 64 was 40.5 mL/h").
+    process_recipe: list[dict[str, Any]] = Field(default_factory=list)
+    # DocumentMap from the LLM segmenter (PDF-only). Persisted for debugging
+    # and for downstream agents that want to know "how was this PDF split
+    # into runs?" — e.g. diagnose can cite "BATCH-04 REPORT (page 9)" when
+    # surfacing a finding.
+    document_map: dict[str, Any] | None = None
 
 
 class IngestionFileResult(BaseModel):
