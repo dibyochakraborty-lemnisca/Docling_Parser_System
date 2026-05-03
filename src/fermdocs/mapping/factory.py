@@ -77,3 +77,34 @@ def build_narrative_extractor(
     from fermdocs.mapping.narrative_extractor import LLMNarrativeExtractor
 
     return LLMNarrativeExtractor(provider=provider)
+
+
+def build_segmenter(provider: str | None = None):
+    """Build a DocumentSegmenter for PDF run-id assignment.
+
+    Returns DocumentSegmenter (with a None client when 'fake'/'none', so
+    .segment() returns None and the pipeline falls through). Resolution:
+    explicit arg > FERMDOCS_SEGMENTER_PROVIDER > FERMDOCS_MAPPER_PROVIDER >
+    'gemini'.
+
+    Plan ref: docs/design/2026-05-03-pdf-document-segmentation.md
+    """
+    from fermdocs.parsing.document_segmenter import DocumentSegmenter
+
+    name = (
+        provider
+        or os.environ.get("FERMDOCS_SEGMENTER_PROVIDER")
+        or os.environ.get("FERMDOCS_MAPPER_PROVIDER", "gemini")
+    ).lower()
+    if name in ("fake", "none"):
+        return DocumentSegmenter(client=None, model_name="none", provider="none")
+    if name == "gemini":
+        from fermdocs.parsing.gemini_segmenter_client import GeminiSegmenterClient
+
+        client = GeminiSegmenterClient()
+        return DocumentSegmenter(
+            client=client, model_name=client.model_name, provider="gemini"
+        )
+    raise UnknownProviderError(
+        f"unknown segmenter provider: {name!r} (expected 'gemini', 'fake', or 'none')"
+    )
