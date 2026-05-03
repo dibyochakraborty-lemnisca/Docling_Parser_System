@@ -404,3 +404,117 @@ def test_user_prompt_includes_outline_and_table_count():
     assert "file-xyz" in prompt
     assert "0..2" in prompt  # valid index range hint
     assert "Outline:" in prompt
+
+
+# ---------- manifest loud-warning ----------
+
+
+def test_manifest_disagreement_emits_loud_warning(caplog):
+    """When the manifest pins 1 run but the segmenter detects multiple,
+    a WARN log fires naming the count and the run display names. Manifest
+    still wins downstream — this is the operator's signal that the
+    pinning may be wrong.
+    """
+    parse_result = ParseResult(tables=[_table(0), _table(1)])
+    client = _ScriptedClient(
+        response={
+            "runs": [
+                {
+                    "run_id": "RUN-0001",
+                    "display_name": "BATCH-01 REPORT",
+                    "table_indices": [0],
+                    "source_signal": "section_header",
+                    "confidence": 0.9,
+                },
+                {
+                    "run_id": "RUN-0002",
+                    "display_name": "BATCH-02 REPORT",
+                    "table_indices": [1],
+                    "source_signal": "section_header",
+                    "confidence": 0.9,
+                },
+            ],
+            "overall_confidence": 0.9,
+        }
+    )
+    with caplog.at_level("WARNING"):
+        dm = _segmenter(client).segment(
+            parse_result,
+            file_id="file-abc",
+            manifest_run_id="OPERATOR-RUN-42",
+        )
+    assert dm is not None  # segmenter still returns its map
+    matching = [
+        r for r in caplog.records
+        if "manifest pinned" in r.getMessage().lower()
+    ]
+    assert matching, f"expected loud warning, got: {[r.getMessage() for r in caplog.records]}"
+    msg = matching[0].getMessage()
+    assert "OPERATOR-RUN-42" in msg
+    assert "BATCH-01 REPORT" in msg
+    assert "BATCH-02 REPORT" in msg
+    assert "2 runs" in msg
+
+
+def test_no_warning_when_manifest_and_segmenter_agree_single_run(caplog):
+    """Manifest pins 1 run, segmenter also detects 1 run — no warning needed."""
+    parse_result = ParseResult(tables=[_table(0)])
+    client = _ScriptedClient(
+        response={
+            "runs": [
+                {
+                    "run_id": "RUN-0001",
+                    "display_name": "BATCH-01 REPORT",
+                    "table_indices": [0],
+                    "source_signal": "section_header",
+                    "confidence": 0.9,
+                }
+            ],
+            "overall_confidence": 0.9,
+        }
+    )
+    with caplog.at_level("WARNING"):
+        _segmenter(client).segment(
+            parse_result,
+            file_id="file-abc",
+            manifest_run_id="OPERATOR-RUN-42",
+        )
+    matching = [
+        r for r in caplog.records
+        if "manifest pinned" in r.getMessage().lower()
+    ]
+    assert not matching, "no warning expected when both detect single run"
+
+
+def test_no_warning_when_no_manifest_supplied(caplog):
+    """Multi-run detection is fine when no manifest is pinned (the default
+    happy path). No warning."""
+    parse_result = ParseResult(tables=[_table(0), _table(1)])
+    client = _ScriptedClient(
+        response={
+            "runs": [
+                {
+                    "run_id": "RUN-0001",
+                    "display_name": "BATCH-01",
+                    "table_indices": [0],
+                    "source_signal": "section_header",
+                    "confidence": 0.9,
+                },
+                {
+                    "run_id": "RUN-0002",
+                    "display_name": "BATCH-02",
+                    "table_indices": [1],
+                    "source_signal": "section_header",
+                    "confidence": 0.9,
+                },
+            ],
+            "overall_confidence": 0.9,
+        }
+    )
+    with caplog.at_level("WARNING"):
+        _segmenter(client).segment(parse_result, file_id="file-abc")
+    matching = [
+        r for r in caplog.records
+        if "manifest pinned" in r.getMessage().lower()
+    ]
+    assert not matching

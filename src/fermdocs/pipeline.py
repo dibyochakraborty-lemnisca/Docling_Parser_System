@@ -83,14 +83,38 @@ class IngestionPipeline:
         # regardless of this setting.
         self._segmenter = document_segmenter
 
-    def ingest(self, experiment_id: str, files: list[Path]) -> IngestionResult:
+    def ingest(
+        self,
+        experiment_id: str,
+        files: list[Path],
+        *,
+        manifest_run_id: str | None = None,
+    ) -> IngestionResult:
+        """Ingest files for an experiment.
+
+        `manifest_run_id`, when supplied, pins every observation in every
+        file to that run-id. The segmenter still runs (its output is
+        recorded for inspection) and emits a WARN if it disagrees with the
+        manifest. CLI plumbing for this parameter lands in a follow-up
+        commit; for now it defaults to None to preserve existing behavior.
+        """
         self._repo.upsert_experiment(experiment_id)
         results: list[IngestionFileResult] = []
         for path in files:
-            results.append(self._ingest_one(experiment_id, path))
+            results.append(
+                self._ingest_one(
+                    experiment_id, path, manifest_run_id=manifest_run_id
+                )
+            )
         return IngestionResult(experiment_id=experiment_id, files=results)
 
-    def _ingest_one(self, experiment_id: str, path: Path) -> IngestionFileResult:
+    def _ingest_one(
+        self,
+        experiment_id: str,
+        path: Path,
+        *,
+        manifest_run_id: str | None = None,
+    ) -> IngestionFileResult:
         stored = self._files.put(path)
         mime, _ = mimetypes.guess_type(path.name)
         record = FileRecord(
@@ -123,12 +147,19 @@ class IngestionPipeline:
         # column-heuristic chain works fine for tabular files with real
         # run-id columns). The segmenter is best-effort; on any failure
         # it returns None and the existing chain handles every table.
+        # When manifest_run_id is pinned, segmenter still runs and logs a
+        # disagreement warning if it detects multiple distinct runs —
+        # operator's signal that the manifest may be wrong.
         doc_map = None
         if (
             self._segmenter is not None
             and path.suffix.lower() in _PDF_SUFFIXES
         ):
-            doc_map = self._segmenter.segment(parsed, file_id=str(file_id))
+            doc_map = self._segmenter.segment(
+                parsed,
+                file_id=str(file_id),
+                manifest_run_id=manifest_run_id,
+            )
 
         mapping = self._mapper.map(tables, self._schema)
         mapping_by_table = {tm.table_id: tm for tm in mapping.tables}
@@ -163,7 +194,12 @@ class IngestionPipeline:
                 _add_unmapped(residual, table, reason="no_mapping_returned")
                 continue
             obs, partial = self._observations_for_table(
-                experiment_id, file_id, table, tm, doc_map=doc_map
+                experiment_id,
+                file_id,
+                table,
+                tm,
+                doc_map=doc_map,
+                manifest_run_id=manifest_run_id,
             )
             table_observations.extend(obs)
             if partial:
@@ -313,18 +349,23 @@ class IngestionPipeline:
         mapping: TableMapping,
         *,
         doc_map: Any | None = None,
+        manifest_run_id: str | None = None,
     ) -> tuple[list[Observation], list[dict]]:
         observations: list[Observation] = []
         unmapped_columns: list[dict] = []
         col_index = {h: i for i, h in enumerate(table.headers)}
         time_col_idx = _detect_time_column(table.headers)
-        # If the LLM segmenter produced a DocumentMap and assigned this
-        # table to a specific run, inject that run_id as manifest_run_id.
-        # ManifestStrategy then wins over ColumnStrategy and we get
-        # consistent per-table run-ids derived from document structure
-        # rather than per-row from the time column.
-        seg_manifest_run_id: str | None = None
-        if doc_map is not None and isinstance(table.locator, dict):
+        # Run-id precedence (highest first):
+        #   1. Operator manifest (manifest_run_id)
+        #   2. DocumentMap.run_for_table(idx)        — LLM segmenter output
+        #   3. RunIdResolver chain                   — column / filename / synthetic
+        # Manifest wins; segmenter output is the next-best signal; resolver
+        # chain handles the fallthrough. The disagreement warning between
+        # (1) and (2) is emitted by DocumentSegmenter.segment().
+        seg_manifest_run_id: str | None = manifest_run_id
+        if seg_manifest_run_id is None and doc_map is not None and isinstance(
+            table.locator, dict
+        ):
             table_idx = table.locator.get("table_idx")
             if isinstance(table_idx, int):
                 run_segment = doc_map.run_for_table(table_idx)

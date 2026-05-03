@@ -276,3 +276,52 @@ def test_pipeline_pdf_suffix_constant_is_lowercase():
     for suffix in _PDF_SUFFIXES:
         assert suffix == suffix.lower(), f"non-lowercase suffix in set: {suffix!r}"
         assert suffix.startswith("."), f"suffix missing dot: {suffix!r}"
+
+
+# ---------- manifest precedence over doc_map ----------
+
+
+def test_manifest_run_id_beats_doc_map():
+    """Per design: manifest wins. Even when doc_map assigns table 1 to
+    RUN-0001, an operator-supplied manifest_run_id pins it to the manifest
+    value instead.
+    """
+    from fermdocs.domain.models import TableMapping
+
+    resolver = _RecordingResolver()
+    pipeline = _make_pipeline_with(resolver)
+    table = _table(idx=1)
+    mapping = TableMapping(table_id=table.table_id, entries=[])
+    doc_map = _doc_map_with_two_runs()  # would assign idx=1 → RUN-0001
+
+    pipeline._observations_for_table(  # type: ignore[attr-defined]
+        experiment_id="exp-x",
+        file_id=uuid.uuid4(),
+        table=table,
+        mapping=mapping,
+        doc_map=doc_map,
+        manifest_run_id="OPERATOR-RUN-42",
+    )
+
+    assert resolver.calls[0]["manifest_run_id"] == "OPERATOR-RUN-42"
+
+
+def test_manifest_run_id_applies_even_without_doc_map():
+    """Manifest works even when no segmenter ran (e.g. CSV path with manifest)."""
+    from fermdocs.domain.models import TableMapping
+
+    resolver = _RecordingResolver()
+    pipeline = _make_pipeline_with(resolver)
+    table = _table(idx=0)
+    mapping = TableMapping(table_id=table.table_id, entries=[])
+
+    pipeline._observations_for_table(  # type: ignore[attr-defined]
+        experiment_id="exp-x",
+        file_id=uuid.uuid4(),
+        table=table,
+        mapping=mapping,
+        doc_map=None,
+        manifest_run_id="OPERATOR-RUN-99",
+    )
+
+    assert resolver.calls[0]["manifest_run_id"] == "OPERATOR-RUN-99"

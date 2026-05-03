@@ -190,7 +190,18 @@ class DocumentSegmenter:
         parse_result: ParseResult,
         *,
         file_id: str,
+        manifest_run_id: str | None = None,
     ) -> DocumentMap | None:
+        """Segment a parsed PDF into runs.
+
+        `manifest_run_id`, when supplied, indicates the operator pinned a
+        single run-id for the entire file. The segmenter still runs (its
+        output is recorded for inspection) but if the LLM disagrees with
+        the manifest — i.e. detects multiple distinct runs — a loud WARN
+        is emitted naming both. Per design doc: manifest wins, loudly.
+        Pipeline still applies the manifest to every table; the WARN is
+        the operator's signal that the manifest may be wrong.
+        """
         if self._client is None:
             _log.info("segmenter: no LLM client configured; skipping")
             return None
@@ -241,6 +252,22 @@ class DocumentSegmenter:
                 n_tables,
             )
             return None
+
+        # Manifest disagreement check: if the operator pinned a single
+        # run-id but the LLM detected multiple runs, log loudly. Manifest
+        # still wins (downstream pipeline applies it); this is the
+        # operator's signal that the pinning may be wrong.
+        if manifest_run_id is not None and len(doc_map.runs) > 1:
+            display_names = [r.display_name for r in doc_map.runs]
+            _log.warning(
+                "segmenter: manifest pinned 1 run (%r) for file %s, but"
+                " segmenter detected %d runs: %s. Manifest wins. If the"
+                " segmenter is right, omit the manifest from this ingest.",
+                manifest_run_id,
+                file_id,
+                len(doc_map.runs),
+                display_names,
+            )
 
         return doc_map
 
