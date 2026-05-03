@@ -105,6 +105,7 @@ def build_agent_context(
     trajectories = build_trajectories(summary, dossier)
 
     process = (dossier.get("experiment") or {}).get("process") or {}
+    process = _strip_unmatched_registered_rationale(process)
     ingestion_summary = dossier.get("ingestion_summary") or {}
 
     schema_version = (
@@ -191,6 +192,40 @@ def serialize_for_agent(
 # -----------------------------------------------------------------------------
 # Internal helpers
 # -----------------------------------------------------------------------------
+
+
+def _strip_unmatched_registered_rationale(process: dict[str, Any]) -> dict[str, Any]:
+    """Drop the LLM-written rationale when no registered process matched.
+
+    When the identity extractor finds no registry entry that matches the
+    observed organism, it still writes a rationale string into
+    `process.registered.rationale` explaining what it compared against
+    (e.g. "S. cerevisiae does not match the registry entry for
+    Penicillium chrysogenum"). That string then travels into every
+    downstream agent's prompt prefix as part of AgentContext.process,
+    where it hijacks salience — agents read it as "the reference frame
+    for this experiment is Penicillium" rather than "no useful reference
+    in registry."
+
+    The UNKNOWN_PROCESS flag is the routing signal; the rationale text
+    is what biases the agent's framing. We strip the rationale (and the
+    null process_id stays — downstream code that reads .get("process_id")
+    keeps working) so the agent gets the routing signal without the
+    misleading comparison string.
+
+    No-op when registered.process_id is non-null (a real match exists,
+    rationale is informative).
+    """
+    if not isinstance(process, dict):
+        return process
+    registered = process.get("registered")
+    if not isinstance(registered, dict):
+        return process
+    if registered.get("process_id"):
+        return process
+    # Unmatched. Strip the rationale, keep everything else.
+    cleaned_registered = {k: v for k, v in registered.items() if k != "rationale"}
+    return {**process, "registered": cleaned_registered}
 
 
 def _time_range(summary: Summary) -> tuple[float, float] | None:
