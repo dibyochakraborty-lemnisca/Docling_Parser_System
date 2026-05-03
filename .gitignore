@@ -22,3 +22,8 @@ tests/fixtures/*.pdf
 out/bundle_*
 out/.bundle_*.tmp
 .claude/
+out/api/
+out/hypothesis/
+out/api
+node_modules/
+.next/

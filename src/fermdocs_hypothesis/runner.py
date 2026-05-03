@@ -798,6 +798,240 @@ def run_stage(
     return RunResult(output=output, state=state, events=events)
 
 
+def resume_stage(
+    *,
+    hyp_input: HypothesisInput,
+    hooks: RunnerHooks,
+    global_md_path: Path,
+    diagnosis_id: UUID,
+    answers: list[tuple[str, str]],
+    hypothesis_version: str = "v0.1.0",
+    model_name: str = "stub",
+    provider: Literal["anthropic", "gemini", "stub"] = "stub",
+    budget: BudgetSnapshot | None = None,
+    past_insights: PastInsightStore | None = None,
+    now_factory=lambda: datetime.now(timezone.utc),
+    validate: bool = False,
+) -> RunResult:
+    """Resume a paused hypothesis stage with human answers to open questions.
+
+    Reads existing events from `global_md_path`, emits HumanInputReceivedEvent
+    + QuestionResolvedEvent for each (qid, resolution) in `answers`, then
+    drives one more round of debate. The new round inherits prior finalized
+    finals + rejected, prior used_topic_ids, prior counters; budget is fresh
+    (caller can pass a tighter cap to bound the resume).
+
+    HITL contract: this is the v0.1 minimal-mode resume. Each call runs ONE
+    additional debate round (the hard turn cap is respected within budget).
+    Multi-round HITL (re-prompt for more questions) is left to the CLI loop.
+    """
+    from fermdocs_hypothesis.events import (
+        HumanInputReceivedEvent,
+        HypothesisAcceptedEvent,
+        HypothesisRejectedEvent,
+        QuestionResolvedEvent,
+        StageStartedEvent,
+    )
+    from fermdocs_hypothesis.event_log import read_events
+
+    past_insights = past_insights or NullPastInsightStore()
+    seed_topics_tuple = tuple(hyp_input.seed_topics)
+    initial_budget = budget or BudgetSnapshot()
+
+    # Read prior events
+    prior_events: list[Event] = read_events(global_md_path) if global_md_path.exists() else []
+
+    # Reconstruct counters + finalized lists from prior events
+    prior_finals: list[FinalHypothesis] = []
+    prior_rejected: list[RejectedHypothesis] = []
+    used_topic_ids: list[str] = []
+    facet_counter = 0
+    hyp_counter = 0
+    qid_counter = 0
+    accepted_ids: set[str] = set()
+    rejected_id_with_topic: list[tuple[str, str]] = []
+
+    # Build hyp_id -> HypothesisSynthesizedEvent map for reconstructing finals
+    hyp_synth: dict[str, HypothesisSynthesizedEvent] = {}
+    crit_for_hyp: dict[str, CritiqueFiledEvent] = {}
+    judge_for_hyp: dict[str, JudgeRulingEvent] = {}
+    rejection_event_for_hyp: dict[str, HypothesisRejectedEvent] = {}
+
+    for ev in prior_events:
+        if isinstance(ev, FacetContributedEvent):
+            n = int(ev.facet_id.removeprefix("FCT-"))
+            facet_counter = max(facet_counter, n)
+        elif isinstance(ev, HypothesisSynthesizedEvent):
+            n = int(ev.hyp_id.removeprefix("H-"))
+            hyp_counter = max(hyp_counter, n)
+            hyp_synth[ev.hyp_id] = ev
+        elif isinstance(ev, CritiqueFiledEvent):
+            crit_for_hyp[ev.hyp_id] = ev
+        elif isinstance(ev, JudgeRulingEvent):
+            judge_for_hyp[ev.hyp_id] = ev
+        elif isinstance(ev, HypothesisAcceptedEvent):
+            accepted_ids.add(ev.hyp_id)
+        elif isinstance(ev, HypothesisRejectedEvent):
+            rejection_event_for_hyp[ev.hyp_id] = ev
+        elif isinstance(ev, TopicSelectedEvent):
+            if ev.topic_id not in used_topic_ids:
+                used_topic_ids.append(ev.topic_id)
+        elif isinstance(ev, QuestionAddedEvent):
+            n = int(ev.qid.removeprefix("Q-"))
+            qid_counter = max(qid_counter, n)
+
+    # Rebuild prior_finals
+    for hyp_id in accepted_ids:
+        synth = hyp_synth.get(hyp_id)
+        crit = crit_for_hyp.get(hyp_id)
+        judge = judge_for_hyp.get(hyp_id)
+        if synth is None or crit is None:
+            continue
+        synth_hyp = HypothesisFull(
+            hyp_id=synth.hyp_id,
+            summary=synth.summary,
+            facet_ids=list(synth.facet_ids),
+            cited_finding_ids=list(synth.cited_finding_ids),
+            cited_narrative_ids=list(synth.cited_narrative_ids),
+            cited_trajectories=list(synth.cited_trajectories),
+            affected_variables=list(synth.affected_variables),
+            confidence=synth.confidence,
+            confidence_basis=synth.confidence_basis,
+        )
+        crit_full = CritiqueFull(
+            hyp_id=crit.hyp_id,
+            flag=crit.flag,
+            reasons=list(crit.reasons),
+            tool_calls_used=crit.tool_calls_used,
+        )
+        judge_valid = judge.criticism_valid if judge else False
+        prior_finals.append(_build_final(synth_hyp, crit_full, judge_valid))
+
+    # Rebuild prior_rejected
+    for hyp_id, rej in rejection_event_for_hyp.items():
+        synth = hyp_synth.get(hyp_id)
+        crit = crit_for_hyp.get(hyp_id)
+        if synth is None:
+            continue
+        prior_rejected.append(
+            RejectedHypothesis(
+                hyp_id=hyp_id,
+                summary=synth.summary,
+                rejection_reason=rej.reason,
+                critic_reasons=list(crit.reasons) if crit else [],
+                judge_rationale=judge_for_hyp[hyp_id].rationale if hyp_id in judge_for_hyp else "",
+            )
+        )
+
+    # Build state for resume
+    state = RunnerState(
+        phase="init",
+        budget=initial_budget,
+        seed_topics=seed_topics_tuple,
+        finalized_finals=tuple(prior_finals),
+        finalized_rejected=tuple(prior_rejected),
+        used_topic_ids=tuple(used_topic_ids),
+        facet_counter=facet_counter,
+        hyp_counter=hyp_counter,
+        qid_counter=qid_counter,
+    )
+
+    observer = Observer(global_md_path)
+    meter = TokenMeter()
+    events: list[Event] = list(prior_events)
+
+    # Emit a fresh stage_started so resume rounds are visually distinct in
+    # the event log.
+    started = StageStartedEvent(
+        ts=now_factory(),
+        turn=0,
+        input_diagnosis_id=str(diagnosis_id),
+        budget=initial_budget,
+    )
+    new_events: list[Event] = [started]
+
+    # Emit human_input_received + question_resolved for each answer
+    for qid, resolution in answers:
+        if not resolution.strip():
+            continue
+        new_events.append(
+            HumanInputReceivedEvent(
+                ts=now_factory(),
+                turn=0,
+                input_type="answer",
+                payload={"qid": qid, "resolution": resolution},
+            )
+        )
+        new_events.append(
+            QuestionResolvedEvent(
+                ts=now_factory(),
+                turn=0,
+                qid=qid,
+                resolution=resolution,
+            )
+        )
+
+    observer.write_many(new_events)
+    events.extend(new_events)
+
+    # Loop
+    safety_counter = 0
+    SAFETY_MAX = 1000
+    while state.phase != "done":
+        safety_counter += 1
+        if safety_counter > SAFETY_MAX:
+            state = replace(state, phase="exit", exit_reason="budget_exhausted")
+            continue
+        next_state, more_events = step(
+            state,
+            hooks,
+            events_so_far=events,
+            meter=meter,
+            now=now_factory(),
+        )
+        if more_events:
+            observer.write_many(more_events)
+            events.extend(more_events)
+        state = next_state
+
+    meta = HypothesisMeta(
+        schema_version="1.0",
+        hypothesis_version=hypothesis_version,
+        hypothesis_id=uuid4(),
+        supersedes_diagnosis_id=diagnosis_id,
+        generation_timestamp=now_factory(),
+        model=model_name,
+        provider=provider,
+        budget_used=state.budget,
+    )
+    output = HypothesisOutput(
+        meta=meta,
+        final_hypotheses=list(state.finalized_finals),
+        rejected_hypotheses=list(state.finalized_rejected),
+        open_questions=open_questions(events),
+        debate_summary=_render_debate_summary(events, state),
+        global_md_path=str(global_md_path),
+        token_report=meter.report,
+    )
+
+    if validate and hyp_input.characterization is not None:
+        from fermdocs_hypothesis.validators import validate_hypothesis_output
+        try:
+            from fermdocs.domain.process_priors import cached_priors
+            priors = cached_priors()
+        except Exception:
+            priors = None
+        output = validate_hypothesis_output(
+            output,
+            upstream=hyp_input.characterization,
+            drop_unknown_citations=True,
+            priors=priors,
+            organism=hyp_input.organism,
+        )
+
+    return RunResult(output=output, state=state, events=events)
+
+
 def _render_debate_summary(events: list[Event], state: RunnerState) -> str:
     """One-paragraph render of what happened. Stage 2 may upgrade to LLM."""
     n_topics = sum(1 for ev in events if isinstance(ev, TopicSelectedEvent))
