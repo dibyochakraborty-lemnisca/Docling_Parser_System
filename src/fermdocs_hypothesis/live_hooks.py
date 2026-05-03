@@ -1,31 +1,36 @@
 """LiveHooks — RunnerHooks impl backed by real LLM agents.
 
-Plan ref: plans/2026-05-03-hypothesis-debate-v0.md §11 Stage 2 / Stage 3.
+Plan ref: plans/2026-05-03-hypothesis-debate-v0.md §11 Stage 3.
 
-Stage 2 ships: orchestrator + kinetics specialist + synthesizer.
-Mass-transfer and metabolic specialists are stubbed (return a minimal
-no-op facet) until Stage 3.
+Stage 3 ships ALL agents real:
+  - orchestrator (deterministic ranker + LLM topic-pick over top-K)
+  - specialist_kinetics, specialist_mass_transfer, specialist_metabolic
+  - synthesizer (single-call merge)
+  - critic (ReAct loop with execute_python; max 6 tool calls)
+  - judge (single-call structured output; no debate history)
 
-Critic and judge are also stubbed (always green-flag, judge says
-"not valid" so accept-path runs). Stage 3 will wire real critic+judge.
-
-This split keeps the Stage 2 deliverable narrow (one specialist works
-end-to-end on real data) while leaving the runner contract unchanged
-when Stage 3 swaps stubs for real agents.
+The runner contract (RunnerHooks Protocol) is unchanged from Stage 1
+stubs and Stage 2 partial-LLM hooks. Forward-compat seams (LangGraph,
+HITL, SuperMemory) are still intact.
 """
 
 from __future__ import annotations
 
-from fermdocs_diagnose.schema import ConfidenceBasis
+from fermdocs_hypothesis.agents.critic import CriticAgent, build_critic
+from fermdocs_hypothesis.agents.judge import JudgeAgent, build_judge
 from fermdocs_hypothesis.agents.orchestrator import OrchestratorAgent
-from fermdocs_hypothesis.agents.specialist_kinetics import (
-    SpecialistAgent,
-    build_kinetics_specialist,
+from fermdocs_hypothesis.agents.specialist_base import SpecialistAgent
+from fermdocs_hypothesis.agents.specialist_kinetics import build_kinetics_specialist
+from fermdocs_hypothesis.agents.specialist_mass_transfer import (
+    build_mass_transfer_specialist,
 )
+from fermdocs_hypothesis.agents.specialist_metabolic import build_metabolic_specialist
 from fermdocs_hypothesis.agents.synthesizer import SynthesizerAgent, build_synthesizer
 from fermdocs_hypothesis.bundle_loader import LoadedBundle
 from fermdocs_hypothesis.llm_clients import GeminiHypothesisClient
 from fermdocs_hypothesis.projector import (
+    project_critic,
+    project_judge,
     project_orchestrator,
     project_specialist,
     project_synthesizer,
@@ -41,8 +46,7 @@ from fermdocs_hypothesis.tools_bundle.factory import HypothesisToolBundle, make_
 
 
 class LiveHooks:
-    """Stage 2 RunnerHooks: real orchestrator + kinetics + synthesizer;
-    stubbed mass_transfer + metabolic + critic + judge."""
+    """Stage 3 RunnerHooks: every agent is real."""
 
     def __init__(
         self,
@@ -55,19 +59,26 @@ class LiveHooks:
         self._tools: HypothesisToolBundle = make_tool_bundle(bundle)
         self._orchestrator = OrchestratorAgent(self._client)
         self._kinetics = build_kinetics_specialist(self._client, self._tools)
+        self._mass_transfer = build_mass_transfer_specialist(self._client, self._tools)
+        self._metabolic = build_metabolic_specialist(self._client, self._tools)
         self._synthesizer = build_synthesizer(self._client)
+        self._critic = build_critic(self._client, self._tools)
+        self._judge = build_judge(self._client)
+        self._specialists: dict[SpecialistRole, SpecialistAgent] = {
+            "kinetics": self._kinetics,
+            "mass_transfer": self._mass_transfer,
+            "metabolic": self._metabolic,
+        }
 
     # ---- orchestrator ----
 
     def pick_topic(self, state: RunnerState) -> str | None:
         view = project_orchestrator(
-            events=(),  # ranker doesn't need event history for topic-picking decision-quality in v0
+            events=(),
             seed_topics=list(state.seed_topics),
             budget=state.budget,
             current_turn=state.current_turn + 1,
         )
-        # Filter out used topics from view's top_topics so the LLM never
-        # picks a topic the runner would reject.
         used = set(state.used_topic_ids)
         view = view.model_copy(
             update={"top_topics": [t for t in view.top_topics if t.topic_id not in used]}
@@ -85,48 +96,20 @@ class LiveHooks:
         self, state: RunnerState, role: SpecialistRole, facet_id: str
     ) -> tuple[FacetFull, int, int]:
         assert state.current_topic is not None
-        if role == "kinetics":
-            view = project_specialist(
-                events=(),
-                role=role,
-                current_topic=state.current_topic,
-                available_findings=self._bundle.findings_pool,
-                available_narratives=self._bundle.narratives_pool,
-                available_trajectories=self._bundle.trajectories_pool,
-                available_priors=self._bundle.priors_pool,
-            )
-            result = self._kinetics.contribute(view, facet_id=facet_id)
-            return result.facet, result.input_tokens, result.output_tokens
-        # Stage 2 stub for other specialists — minimal facet using topic citations
-        return self._stub_facet(state, role, facet_id), 0, 0
-
-    def _stub_facet(
-        self, state: RunnerState, role: SpecialistRole, facet_id: str
-    ) -> FacetFull:
-        topic = state.current_topic
-        assert topic is not None
-        # Emit a minimal facet citing whatever the topic already cites, so it
-        # passes citation discipline. Stage 3 replaces this with real agents.
-        cited_findings = list(topic.cited_finding_ids)
-        cited_narratives = list(topic.cited_narrative_ids)
-        cited_trajs = list(topic.cited_trajectories)
-        if not cited_findings and not cited_narratives and not cited_trajs:
-            # Emergency: pull anything from the pools so validation passes
-            if self._bundle.narratives_pool:
-                cited_narratives = [self._bundle.narratives_pool[0].narrative_id]
-            elif self._bundle.findings_pool:
-                cited_findings = [self._bundle.findings_pool[0].finding_id]
-        return FacetFull(
-            facet_id=facet_id,
-            specialist=role,
-            summary=f"[stub-{role}] no real specialist in Stage 2; pass-through citation",
-            cited_finding_ids=cited_findings,
-            cited_narrative_ids=cited_narratives,
-            cited_trajectories=cited_trajs,
-            affected_variables=list(topic.affected_variables),
-            confidence=0.4,
-            confidence_basis=ConfidenceBasis.SCHEMA_ONLY,
+        agent = self._specialists.get(role)
+        if agent is None:
+            raise RuntimeError(f"no specialist registered for role {role!r}")
+        view = project_specialist(
+            events=(),
+            role=role,
+            current_topic=state.current_topic,
+            available_findings=self._bundle.findings_pool,
+            available_narratives=self._bundle.narratives_pool,
+            available_trajectories=self._bundle.trajectories_pool,
+            available_priors=self._bundle.priors_pool,
         )
+        result = agent.contribute(view, facet_id=facet_id)
+        return result.facet, result.input_tokens, result.output_tokens
 
     # ---- synthesizer ----
 
@@ -141,18 +124,63 @@ class LiveHooks:
         result = self._synthesizer.synthesize(view, hyp_id=hyp_id)
         return result.hypothesis, result.input_tokens, result.output_tokens
 
-    # ---- critic + judge (stub for Stage 2; Stage 3 swaps in real agents) ----
+    # ---- critic ----
 
     def critique(self, state: RunnerState) -> tuple[CritiqueFull, int, int]:
         assert state.current_hypothesis is not None
-        # Stage 2 stub: always green-flag (no critique authored)
-        return CritiqueFull(
-            hyp_id=state.current_hypothesis.hyp_id,
-            flag="green",
-            reasons=[],
-            tool_calls_used=0,
-        ), 0, 0
+        view = project_critic(
+            hypothesis=state.current_hypothesis,
+            citation_lookups=self._build_citation_lookups(state.current_hypothesis),
+            relevant_priors=self._bundle.priors_pool,
+        )
+        result = self._critic.critique(view)
+        return result.critique, result.input_tokens, result.output_tokens
+
+    # ---- judge ----
 
     def judge(self, state: RunnerState) -> tuple[bool, str, int, int]:
-        # Stub: criticism not valid (because critic green-flagged)
-        return False, "stub judge: critic green-flagged", 0, 0
+        assert state.current_hypothesis is not None
+        assert state.current_critique is not None
+        view = project_judge(
+            hypothesis=state.current_hypothesis,
+            critique=state.current_critique,
+            citation_lookups=self._build_citation_lookups(state.current_hypothesis),
+        )
+        result = self._judge.rule(view)
+        return (
+            result.criticism_valid,
+            result.rationale,
+            result.input_tokens,
+            result.output_tokens,
+        )
+
+    # ---- helpers ----
+
+    def _build_citation_lookups(self, hyp) -> dict:
+        """Pre-resolve cited IDs so critic/judge don't waste calls re-querying."""
+        lookups: dict = {}
+        char = self._bundle.characterization
+        finding_by_id = {f.finding_id: f for f in char.findings}
+        narr_by_id = {n.narrative_id: n for n in char.narrative_observations}
+        for fid in hyp.cited_finding_ids:
+            f = finding_by_id.get(fid)
+            if f is not None:
+                lookups[fid] = {
+                    "type": "finding",
+                    "summary": f.summary,
+                    "severity": f.severity.value if hasattr(f.severity, "value") else str(f.severity),
+                    "variables_involved": list(f.variables_involved),
+                    "confidence": f.confidence,
+                }
+        for nid in hyp.cited_narrative_ids:
+            n = narr_by_id.get(nid)
+            if n is not None:
+                lookups[nid] = {
+                    "type": "narrative",
+                    "tag": n.tag.value if hasattr(n.tag, "value") else str(n.tag),
+                    "text": n.text,
+                    "run_id": n.run_id,
+                    "time_h": n.time_h,
+                    "affected_variables": list(n.affected_variables),
+                }
+        return lookups

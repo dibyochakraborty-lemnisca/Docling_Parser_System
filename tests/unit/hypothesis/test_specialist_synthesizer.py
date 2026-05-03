@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from fermdocs_diagnose.schema import ConfidenceBasis
-from fermdocs_hypothesis.agents.specialist_kinetics import SpecialistAgent
+from fermdocs_hypothesis.agents.specialist_base import SpecialistAgent
 from fermdocs_hypothesis.agents.synthesizer import SynthesizerAgent
 from fermdocs_hypothesis.schema import (
     CitationCatalog,

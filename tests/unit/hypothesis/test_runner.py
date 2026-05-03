@@ -58,11 +58,14 @@ def test_e2e_red_flag_judge_upholds_rejects_hypothesis(tmp_path):
     script = make_simple_script(
         topic_ids=["T-0001"], critic_flag="red", judge_valid=True
     )
+    # cycles=1 → no retry, so we expect exactly one rejection.
+    budget = BudgetSnapshot(max_critic_cycles_per_topic=1)
     result = run_stage(
         hyp_input=make_input(seeds),
         hooks=StubHooks(script),
         global_md_path=tmp_path / "global.md",
         diagnosis_id=DIAG_ID,
+        budget=budget,
         now_factory=now_factory_const,
     )
     assert len(result.output.rejected_hypotheses) == 1
@@ -142,13 +145,14 @@ def test_max_turns_exhaustion(tmp_path):
         make_seed_topic(topic_id="T-0003"),
         make_seed_topic(topic_id="T-0004"),
     ]
-    # All red+upheld so we never accept (avoid consensus exit)
+    # All red+upheld so we never accept (avoid consensus exit). cycles=1
+    # so no retry — each topic gets exactly one attempt.
     script = make_simple_script(
         topic_ids=["T-0001", "T-0002", "T-0003", "T-0004"],
         critic_flag="red",
         judge_valid=True,
     )
-    budget = BudgetSnapshot(max_turns=2)
+    budget = BudgetSnapshot(max_turns=2, max_critic_cycles_per_topic=1)
     result = run_stage(
         hyp_input=make_input(seeds),
         hooks=StubHooks(script),
@@ -311,11 +315,14 @@ def test_rejected_topic_doesnt_exit_with_consensus(tmp_path):
         ),
     }
     script = StubScript(topic_plans=plans, topic_order=["T-0001", "T-0002"])
+    # cycles=1 so T-0001 gets one attempt then runner moves to T-0002.
+    budget = BudgetSnapshot(max_critic_cycles_per_topic=1)
     result = run_stage(
         hyp_input=make_input(seeds),
         hooks=StubHooks(script),
         global_md_path=tmp_path / "global.md",
         diagnosis_id=DIAG_ID,
+        budget=budget,
         now_factory=now_factory_const,
     )
     assert len(result.output.rejected_hypotheses) == 1

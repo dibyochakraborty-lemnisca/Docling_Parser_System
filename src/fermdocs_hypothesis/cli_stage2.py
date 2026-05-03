@@ -81,6 +81,7 @@ def main(argv: list[str] | None = None) -> int:
         provider="gemini",
         model_name=hooks._client.model_name,
         budget=budget,
+        validate=True,
         now_factory=lambda: datetime.now(timezone.utc),
     )
 

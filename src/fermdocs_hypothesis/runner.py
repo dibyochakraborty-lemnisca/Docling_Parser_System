@@ -96,6 +96,7 @@ SPECIALIST_ORDER: tuple[SpecialistRole, ...] = (
 Phase = Literal[
     "init",
     "select_topic",
+    "retry_topic",
     "contribute_facet",
     "synthesize",
     "critique",
@@ -132,6 +133,10 @@ class RunnerState:
     finalized_rejected: tuple[RejectedHypothesis, ...] = ()
     exit_reason: ExitReason | None = None
     pending_question_seeds: tuple[tuple[str, list[str]], ...] = ()
+    # Set by finalize_turn rejection branch when the topic should be re-attempted
+    # (under max_critic_cycles_per_topic). Consumed by retry_topic phase, which
+    # re-emits topic_selected so the cycle counter ticks.
+    retry_topic_id: str | None = None
 
 
 class RunnerHooks(Protocol):
@@ -315,6 +320,55 @@ def step(
             ],
         )
 
+    if state.phase == "retry_topic":
+        # Re-attempt the same topic. Budget check first so a retry can also
+        # exhaust max_turns.
+        exhausted, reason = state.budget.is_exhausted()
+        if exhausted:
+            return _to_exit(state, _budget_exit_reason(reason))
+        topic_id = state.retry_topic_id
+        if topic_id is None or state.current_topic is None or state.current_topic.topic_id != topic_id:
+            # Defensive: shouldn't happen; fall back to picking new topic.
+            return (replace(state, phase="select_topic", retry_topic_id=None), [])
+        seed = next((t for t in state.seed_topics if t.topic_id == topic_id), None)
+        if seed is None:
+            return (replace(state, phase="select_topic", retry_topic_id=None), [])
+
+        new_turn = state.current_turn + 1
+        new_budget = increment_turn(state.budget)
+        if new_budget.turns_used > new_budget.max_turns:
+            return _to_exit(
+                replace(state, budget=new_budget),
+                "max_turns_reached",
+            )
+
+        # Re-emit topic_selected so cycle counter (which scans from latest
+        # topic_selected) and topic_attempt_counts both tick up correctly.
+        # Don't re-add to used_topic_ids — already there from first attempt.
+        return (
+            replace(
+                state,
+                phase="contribute_facet",
+                budget=new_budget,
+                current_facets=(),
+                next_specialist_idx=0,
+                current_hypothesis=None,
+                current_critique=None,
+                current_judge_valid=None,
+                current_turn=new_turn,
+                retry_topic_id=None,
+            ),
+            [
+                TopicSelectedEvent(
+                    ts=now,
+                    turn=new_turn,
+                    topic_id=topic_id,
+                    summary=seed.summary,
+                    rationale=f"retry attempt for topic {topic_id} after rejection",
+                )
+            ],
+        )
+
     if state.phase == "contribute_facet":
         if state.next_specialist_idx >= len(SPECIALIST_ORDER):
             return (replace(state, phase="synthesize"), [])
@@ -489,11 +543,15 @@ def step(
         criticism_upheld = state.current_judge_valid is True and state.current_critique.flag == "red"
 
         if criticism_upheld:
-            # Reject. Possibly reuse same topic for another cycle, up to cap.
-            cycles = critic_cycles_for_current_topic(
-                events_so_far, state.current_topic.topic_id
+            # Reject. Decide retry-same-topic vs move-on based on TOTAL
+            # rejections for this topic (across all attempts), not just
+            # since the last topic_selected — otherwise retries reset
+            # the counter and the loop never terminates.
+            from fermdocs_hypothesis.state import topic_rejection_counts
+            past_rejections = topic_rejection_counts(events_so_far).get(
+                state.current_topic.topic_id, 0
             )
-            # cycles counts past rejections; this rejection makes (cycles + 1)
+            cycles = past_rejections  # this rejection makes (past + 1)
             new_rejected = state.finalized_rejected + (
                 RejectedHypothesis(
                     hyp_id=state.current_hypothesis.hyp_id,
@@ -503,18 +561,34 @@ def step(
                     judge_rationale=_judge_rationale(events_so_far, state.current_hypothesis.hyp_id),
                 ),
             )
-            ev = HypothesisRejectedEvent(
+            reject_ev = HypothesisRejectedEvent(
                 ts=now,
                 turn=state.current_turn,
                 hyp_id=state.current_hypothesis.hyp_id,
                 topic_id=state.current_topic.topic_id,
                 reason=", ".join(state.current_critique.reasons) or "judge upheld critique",
             )
-            # If we've hit max_critic_cycles_per_topic, drop the topic by
-            # re-marking it as used (it already is) — runner naturally moves on.
-            # If under cap, still move on — Stage 1 stub doesn't retry same
-            # topic; retry-same-topic behavior lands in Stage 2 with a real
-            # orchestrator that decides between retry vs new topic.
+            # cycles counts past rejections for this topic since its last
+            # topic_selected; this rejection makes the count (cycles + 1).
+            # If still under cap, retry the same topic; else move on.
+            attempts_so_far = cycles + 1
+            should_retry = attempts_so_far < state.budget.max_critic_cycles_per_topic
+            if should_retry:
+                return (
+                    replace(
+                        state,
+                        phase="retry_topic",
+                        finalized_rejected=new_rejected,
+                        retry_topic_id=state.current_topic.topic_id,
+                        current_hypothesis=None,
+                        current_critique=None,
+                        current_judge_valid=None,
+                        current_facets=(),
+                        next_specialist_idx=0,
+                    ),
+                    [reject_ev],
+                )
+            # Move on to next topic
             return (
                 replace(
                     state,
@@ -527,7 +601,7 @@ def step(
                     current_facets=(),
                     next_specialist_idx=0,
                 ),
-                [ev],
+                [reject_ev],
             )
 
         # Accept path
@@ -629,6 +703,7 @@ def run_stage(
     past_insights: PastInsightStore | None = None,
     pending_question_seeds: list[tuple[str, list[str]]] | None = None,
     now_factory=lambda: datetime.now(timezone.utc),
+    validate: bool = False,
 ) -> RunResult:
     """Drive the step-function loop until phase == 'done'.
 
@@ -704,6 +779,22 @@ def run_stage(
         global_md_path=str(global_md_path),
         token_report=meter.report,
     )
+
+    if validate and hyp_input.characterization is not None:
+        from fermdocs_hypothesis.validators import validate_hypothesis_output
+        try:
+            from fermdocs.domain.process_priors import cached_priors
+            priors = cached_priors()
+        except Exception:
+            priors = None
+        output = validate_hypothesis_output(
+            output,
+            upstream=hyp_input.characterization,
+            drop_unknown_citations=True,
+            priors=priors,
+            organism=hyp_input.organism,
+        )
+
     return RunResult(output=output, state=state, events=events)
 
 
