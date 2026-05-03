@@ -807,21 +807,30 @@ def _build_output(
             affected=affected,
             also_have_other_citation=bool(cited_findings or f_trajs),
         )
-        failures.append(
-            FailureClaim(
-                claim_id=f"D-F-{i+1:04d}",
-                summary=str(raw.get("summary", "")),
-                cited_finding_ids=cited_findings,
-                cited_trajectories=f_trajs,
-                cited_narrative_ids=cited_narratives,
-                affected_variables=affected,
-                confidence=_clamp_conf(raw.get("confidence", 0.0)),
-                confidence_basis=_basis(raw.get("confidence_basis")),
-                domain_tags=list(raw.get("domain_tags") or []),
-                severity=raw.get("severity", "minor"),
-                time_window=raw.get("time_window"),
+        try:
+            failures.append(
+                FailureClaim(
+                    claim_id=f"D-F-{i+1:04d}",
+                    summary=str(raw.get("summary", "")),
+                    cited_finding_ids=cited_findings,
+                    cited_trajectories=f_trajs,
+                    cited_narrative_ids=cited_narratives,
+                    affected_variables=affected,
+                    confidence=_clamp_conf(raw.get("confidence", 0.0)),
+                    confidence_basis=_basis(raw.get("confidence_basis")),
+                    domain_tags=list(raw.get("domain_tags") or []),
+                    severity=raw.get("severity", "minor"),
+                    time_window=raw.get("time_window"),
+                )
             )
-        )
+        except ValueError as e:
+            # One bad claim (typically uncitable after backfill) shouldn't
+            # nuke the whole emit. Drop it, keep the rest.
+            _log.warning(
+                "dropping FailureClaim %d (uncitable after backfill): %s",
+                i + 1,
+                e,
+            )
 
     trends = []
     for i, raw in enumerate(payload.get("trends") or []):
@@ -837,21 +846,28 @@ def _build_output(
             affected=t_affected,
             also_have_other_citation=bool(t_findings or trajs),
         )
-        trends.append(
-            TrendClaim(
-                claim_id=f"D-T-{i+1:04d}",
-                summary=str(raw.get("summary", "")),
-                cited_finding_ids=t_findings,
-                cited_trajectories=trajs,
-                cited_narrative_ids=t_narratives,
-                affected_variables=t_affected,
-                confidence=_clamp_conf(raw.get("confidence", 0.0)),
-                confidence_basis=_basis(raw.get("confidence_basis")),
-                domain_tags=list(raw.get("domain_tags") or []),
-                direction=raw.get("direction", "plateau"),
-                time_window=raw.get("time_window"),
+        try:
+            trends.append(
+                TrendClaim(
+                    claim_id=f"D-T-{i+1:04d}",
+                    summary=str(raw.get("summary", "")),
+                    cited_finding_ids=t_findings,
+                    cited_trajectories=trajs,
+                    cited_narrative_ids=t_narratives,
+                    affected_variables=t_affected,
+                    confidence=_clamp_conf(raw.get("confidence", 0.0)),
+                    confidence_basis=_basis(raw.get("confidence_basis")),
+                    domain_tags=list(raw.get("domain_tags") or []),
+                    direction=raw.get("direction", "plateau"),
+                    time_window=raw.get("time_window"),
+                )
             )
-        )
+        except ValueError as e:
+            _log.warning(
+                "dropping TrendClaim %d (uncitable after backfill): %s",
+                i + 1,
+                e,
+            )
 
     analysis = []
     for i, raw in enumerate(payload.get("analysis") or []):
@@ -862,33 +878,45 @@ def _build_output(
             affected=a_affected,
             also_have_other_citation=bool(a_findings),
         )
-        analysis.append(
-            AnalysisClaim(
-                claim_id=f"D-A-{i+1:04d}",
-                summary=str(raw.get("summary", "")),
-                cited_finding_ids=a_findings,
-                cited_narrative_ids=a_narratives,
-                affected_variables=a_affected,
-                confidence=_clamp_conf(raw.get("confidence", 0.0)),
-                confidence_basis=_basis(raw.get("confidence_basis")),
-                domain_tags=list(raw.get("domain_tags") or []),
-                kind=raw.get("kind", "phase_characterization"),
+        try:
+            analysis.append(
+                AnalysisClaim(
+                    claim_id=f"D-A-{i+1:04d}",
+                    summary=str(raw.get("summary", "")),
+                    cited_finding_ids=a_findings,
+                    cited_narrative_ids=a_narratives,
+                    affected_variables=a_affected,
+                    confidence=_clamp_conf(raw.get("confidence", 0.0)),
+                    confidence_basis=_basis(raw.get("confidence_basis")),
+                    domain_tags=list(raw.get("domain_tags") or []),
+                    kind=raw.get("kind", "phase_characterization"),
+                )
             )
-        )
+        except ValueError as e:
+            _log.warning(
+                "dropping AnalysisClaim %d (uncitable after backfill): %s",
+                i + 1,
+                e,
+            )
 
     questions = []
     for i, raw in enumerate(payload.get("open_questions") or []):
-        questions.append(
-            OpenQuestion(
-                question_id=f"D-Q-{i+1:04d}",
-                question=str(raw.get("question", "")),
-                why_it_matters=str(raw.get("why_it_matters", "")),
-                cited_finding_ids=list(raw.get("cited_finding_ids") or []),
-                cited_narrative_ids=list(raw.get("cited_narrative_ids") or []),
-                answer_format_hint=raw.get("answer_format_hint", "free_text"),
-                domain_tags=list(raw.get("domain_tags") or []),
+        try:
+            questions.append(
+                OpenQuestion(
+                    question_id=f"D-Q-{i+1:04d}",
+                    question=str(raw.get("question", "")),
+                    why_it_matters=str(raw.get("why_it_matters", "")),
+                    cited_finding_ids=list(raw.get("cited_finding_ids") or []),
+                    cited_narrative_ids=list(raw.get("cited_narrative_ids") or []),
+                    answer_format_hint=raw.get("answer_format_hint", "free_text"),
+                    domain_tags=list(raw.get("domain_tags") or []),
+                )
             )
-        )
+        except ValueError as e:
+            _log.warning(
+                "dropping OpenQuestion %d (uncitable): %s", i + 1, e
+            )
 
     return DiagnosisOutput(
         meta=meta,
