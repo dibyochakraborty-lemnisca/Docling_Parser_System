@@ -1,4 +1,4 @@
-version: "2.0"
+version: "2.1"
 columns:
   - name: experiment_id
     description: Unique identifier for the fermentation experiment.
@@ -74,11 +74,13 @@ columns:
       - {raw_header: "q_P max [h^-1]"}
 
   - name: substrate_g_l
-    description: Substrate concentration (S).
+    # No nominal/std_dev: substrate concentration in fed-batch processes
+    # spikes after each feed pulse before being consumed; static bounds
+    # produce false range_violation findings (see plans/2026-05-03-
+    # hypothesis-debate-v0.md, IndPenSim postmortem).
+    description: Substrate concentration (S). Static bounds intentionally omitted (fed-batch dynamic).
     data_type: float
     canonical_unit: g/L
-    nominal: 1.0
-    std_dev: 0.1
     synonyms: [substrate, S, sugar, carbon_source, glucose]
     examples:
       - {raw_header: "Substrate (S)"}
@@ -98,11 +100,13 @@ columns:
       - {raw_header: "dO2 [mg L^-1]"}
 
   - name: volume_l
-    description: Bioreactor working volume.
+    # No nominal/std_dev: working volume legitimately grows monotonically
+    # in fed-batch processes (e.g. IndPenSim 58k L → 87k L over 230h as
+    # feed accumulates). Static bounds produce false range_violation
+    # findings. Trajectory-based bounds belong to a future schema feature.
+    description: Bioreactor working volume. Static bounds intentionally omitted (fed-batch dynamic).
     data_type: float
     canonical_unit: L
-    nominal: 58000.0
-    std_dev: 500.0
     synonyms: [volume, working_volume, V, V_w]
     examples:
       - {raw_header: "Volume"}
@@ -110,11 +114,11 @@ columns:
       - {raw_header: "Working Volume"}
 
   - name: weight_kg
-    description: Bioreactor broth weight.
+    # No nominal/std_dev: tracks volume_l up monotonically in fed-batch.
+    # Same reasoning as volume_l above.
+    description: Bioreactor broth weight. Static bounds intentionally omitted (fed-batch dynamic).
     data_type: float
     canonical_unit: kg
-    nominal: 62000.0
-    std_dev: 500.0
     synonyms: [weight, broth_weight, mass]
     examples:
       - {raw_header: "Weight"}

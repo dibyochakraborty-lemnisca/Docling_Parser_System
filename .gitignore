@@ -21,3 +21,4 @@ tests/fixtures/*.pdf
 # Runtime bundle directories produced by --bundle CLI flag.
 out/bundle_*
 out/.bundle_*.tmp
+.claude/
