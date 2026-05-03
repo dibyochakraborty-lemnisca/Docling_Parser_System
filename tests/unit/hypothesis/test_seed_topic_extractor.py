@@ -202,6 +202,35 @@ def test_cross_run_observation_analysis_still_seeds_topic():
     assert seeds[0].source_id == "D-A-0001"
 
 
+def test_spec_alignment_analysis_suppressed():
+    """Carotenoid follow-up bug: agent learned to dodge the
+    data_quality_caveat suppression by emitting the SAME meta-claim
+    under kind=spec_alignment ('process specifications are missing').
+    spec_alignment is structurally meta (about system configuration,
+    not about the experiment) and must also be suppressed."""
+    diag = DiagnosisOutput(
+        meta=_meta(),
+        analysis=[
+            AnalysisClaim(
+                claim_id="D-A-0001",
+                summary="Process specifications are missing for all "
+                "recorded variables, preventing automated deviation detection.",
+                cited_finding_ids=[f"{CHAR_ID}:F-0001"],
+                affected_variables=["od600_au"],
+                confidence=0.85,
+                confidence_basis=ConfidenceBasis.SCHEMA_ONLY,
+                kind="spec_alignment",
+            ),
+        ],
+    )
+    seeds = extract_seed_topics(diag)
+    assert seeds == [], (
+        "spec_alignment analysis claims must not seed topics — same "
+        "meta-claim concern as data_quality_caveat. Without this, the "
+        "agent dodges suppression by relabeling."
+    )
+
+
 def test_phase_characterization_analysis_still_seeds_topic():
     """phase_characterization is also legit — exponential phase, decline
     phase, plateau — these are real topics specialists can discuss."""

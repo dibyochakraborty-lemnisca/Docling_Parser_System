@@ -46,7 +46,21 @@ def test_rule7_explicitly_calls_out_caveat_only_emit_as_violation():
     msg = _BUNDLE_SYSTEM_PROMPT
     assert "data_quality_caveat" in msg
     assert "closure_event" in msg
-    assert "contract violation" in msg
+    assert "contract violation" in msg.lower() or "CONTRACT VIOLATION" in msg
+
+
+def test_rule7_explicitly_blocks_data_quality_to_spec_alignment_dodge():
+    """Carotenoid follow-up: agent learned to dodge the
+    'don't emit only data_quality_caveat' rule by relabeling the same
+    meta-claim under kind=spec_alignment. Rule 7 must explicitly name
+    BOTH meta kinds and the dodge pattern."""
+    msg = _BUNDLE_SYSTEM_PROMPT
+    assert "spec_alignment" in msg
+    assert "META" in msg
+    # The explicit "don't dodge" warning must be present
+    assert "dodge" in msg
+    # The required action must be stated
+    assert "non-meta claim" in msg
 
 
 def test_narrative_evidence_still_marked_primary():

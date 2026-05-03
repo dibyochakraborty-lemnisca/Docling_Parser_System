@@ -38,14 +38,24 @@ _SEV_WEIGHT = {
 }
 
 
-_SUPPRESSED_ANALYSIS_KINDS: frozenset[str] = frozenset({"data_quality_caveat"})
-"""Analysis kinds that describe meta-properties of the data rather than
-hypothesizable claims. These should not become debate topics — they bias
-specialists toward arguing about data plumbing instead of biology.
+_SUPPRESSED_ANALYSIS_KINDS: frozenset[str] = frozenset(
+    {"data_quality_caveat", "spec_alignment"}
+)
+"""Analysis kinds that describe meta-properties of the data / system
+configuration rather than hypothesizable claims about the experiment.
+
+  - data_quality_caveat: "the data is sparse / has gaps / is malformed"
+  - spec_alignment: "process specs are missing / nominal != measured"
+
+Both bias specialists toward arguing about data plumbing instead of
+biology. Observed regression: when only data_quality_caveat was
+suppressed, the diagnose agent learned to dodge by emitting the same
+meta-claim under spec_alignment instead. The fix is to suppress the
+whole "meta" kind family.
 
 `cross_run_observation` and `phase_characterization` are still
-hypothesizable (cross-run variation is a real engineering question) so
-they're allowed through.
+hypothesizable — cross-run variation and phase boundaries are real
+engineering questions — so they pass through.
 """
 
 
