@@ -40,6 +40,7 @@ DEFAULT_K = 3
 TIE_EPSILON = 0.05
 
 _SEVERITY_WEIGHT = {
+    Severity.CRITICAL: 1.2,
     Severity.MAJOR: 1.0,
     Severity.MINOR: 0.6,
     Severity.INFO: 0.3,

@@ -1,0 +1,36 @@
+name: carotenoid_pdf
+description: |
+  Carotenoid batch report PDF — 6 batches with narrative-rich diagnosis covering
+  premature termination + cell death across BATCH-01/03/04, plus IPM intervention
+  recognition and cultivation extension correlation analyses.
+
+  This is the hard case for narrative-grounded reasoning: most evidence lives in
+  prose, not numerics. Hypothesis must triangulate kinetic, transport, and
+  metabolic angles to explain the cross-batch failure pattern.
+
+bundle_path: out/bundle_multi_20260502T220318Z_1a29e4
+diagnosis_id_expected: aaed5f34-1e2e-4896-abf9-ce103f807e52
+
+expected:
+  min_final_hypotheses: 1
+  citation_pattern:
+    must_cite_narrative: true
+    must_cite_finding_or_trajectory: false   # carotenoid is narrative-dominant
+  hypothesis_class_keywords:
+    - cell death
+    - premature termination
+    - viability
+    - pigment
+  affected_variables_should_include_any_of:
+    - viability
+    - pigment
+    - cell_count
+
+budget_overrides:
+  max_turns: 3
+  max_tool_calls_total: 60
+  max_total_input_tokens: 150000
+
+reliability:
+  rerun_n: 5
+  pass_jaccard_threshold: 0.6

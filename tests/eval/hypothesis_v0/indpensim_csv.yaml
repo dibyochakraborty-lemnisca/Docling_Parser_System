@@ -1,0 +1,37 @@
+name: indpensim_csv
+description: |
+  IndPenSim CSV bundle — Penicillium chrysogenum fed-batch with PAA cessation
+  threshold (>5000 mg/L per van Gulik 2001). Hypothesis must surface the
+  process_priors-grounded explanation tying PAA accumulation to penicillin
+  inhibition.
+
+  Numerics-dominant case: the citation pattern should be findings/trajectories,
+  not narratives.
+
+bundle_path: out/bundle_indpensim
+diagnosis_id_expected: null   # filled in once we re-run characterize+diagnose
+
+expected:
+  min_final_hypotheses: 1
+  citation_pattern:
+    must_cite_narrative: false
+    must_cite_finding_or_trajectory: true
+  hypothesis_class_keywords:
+    - PAA
+    - phenylacetic acid
+    - penicillin
+    - inhibition
+  affected_variables_should_include_any_of:
+    - PAA
+    - paa
+    - phenylacetate
+    - penicillin
+
+budget_overrides:
+  max_turns: 3
+  max_tool_calls_total: 60
+  max_total_input_tokens: 150000
+
+reliability:
+  rerun_n: 5
+  pass_jaccard_threshold: 0.6

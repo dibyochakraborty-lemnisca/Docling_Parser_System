@@ -1,0 +1,33 @@
+name: mixed_bundle
+description: |
+  Synthetic mix of CSV trajectories + 3 narrative observations. Tests that
+  the hypothesis stage can integrate both surfaces in a single hypothesis
+  rather than picking one.
+
+  Built fresh by tests/eval/hypothesis_v0/build_mixed_bundle.py (Stage 4
+  deliverable). Until that exists, this case is skipped.
+
+bundle_path: out/bundle_mixed_synthetic   # built on demand
+diagnosis_id_expected: null
+status: deferred                          # built in Stage 4
+
+expected:
+  min_final_hypotheses: 1
+  citation_pattern:
+    must_cite_narrative: true
+    must_cite_finding_or_trajectory: true   # both surfaces required
+  hypothesis_class_keywords:
+    - growth
+    - DO
+  affected_variables_should_include_any_of:
+    - biomass_g_l
+    - DO
+
+budget_overrides:
+  max_turns: 3
+  max_tool_calls_total: 60
+  max_total_input_tokens: 150000
+
+reliability:
+  rerun_n: 3
+  pass_jaccard_threshold: 0.5
