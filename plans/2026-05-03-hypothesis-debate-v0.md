@@ -449,3 +449,34 @@ All five answered with leans. No open blockers for Stage 1.
 5. (Stage 1 gate) PR-ready commit with passing tests
 
 Then Stage 2 begins on the same branch.
+
+---
+
+## 17. Deferred to v0.6 — free-form chat
+
+v0.5 ships **structured-answer HITL only**: the system asks specific
+open questions, the user answers tied to a `qid`, the system resumes.
+Free-form chat ("redo with X consideration", "explain hypothesis H-3",
+"what about temperature drift in BATCH-04?") is **not** supported.
+
+The orchestrator agent today has tools `select_topic`, `add_open_question`,
+`exit_stage`. It has no "respond to user message" surface, and the runner
+has no event type for "user said X out of band."
+
+Adding chat is real work, not a tweak. v0.6 backlog:
+
+1. **New event type** `user_message_received` (carries free-form text + ts)
+2. **New run state** `awaiting_user` (vs `paused` which is structured-only)
+3. **New runner branch** that, on receiving a user message, projects a new
+   `OrchestratorView` with recent user messages and asks the orchestrator-
+   LLM to either: open a new topic for it, add it as an open question, or
+   answer it directly from `global.md` history.
+4. **A "Q&A agent"** for accept-and-ask mode — different agent shape,
+   retrieval over `global.md` events, no debate.
+5. **Frontend chat panel** with input box, message history, threading
+   by topic.
+6. **WebSocket bidirectional** (today it's server→client only).
+
+Estimated 2-3 days of focused work. Trigger: structured-answer HITL
+proves insufficient for real research use after a week or two of
+real-bundle runs.
