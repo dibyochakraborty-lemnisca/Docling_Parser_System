@@ -33,7 +33,11 @@ from fermdocs_characterize.agent_context import (
     build_agent_context,
     serialize_for_agent,
 )
-from fermdocs_characterize.schema import CharacterizationOutput
+from fermdocs_characterize.schema import (
+    CharacterizationOutput,
+    NarrativeTag,
+    Severity,
+)
 from fermdocs_characterize.specs import DictSpecsProvider, SpecsProvider
 from fermdocs_diagnose.audit.trace_writer import TraceWriter
 from fermdocs_diagnose.schema import (
@@ -546,6 +550,15 @@ class DiagnosisAgent:
                 error=f"emit_invalid:{exc.__class__.__name__}",
             )
 
+        # Runtime backstop: when the agent dodges its own contract by
+        # emitting only meta-kind analyses while narrative_observations
+        # describe closure events or interventions, synthesize
+        # deterministic claims from the narratives. Otherwise downstream
+        # ends up with no topics and the hypothesis stage exits empty.
+        # This is a generalisable safety net — works for any process,
+        # not just yeast / Penicillium.
+        built = _synthesize_narrative_backstop_if_needed(built, output)
+
         # Plan A Stage 3: hand the validator the priors set + organism so it
         # can downgrade process_priors claims that aren't actually grounded.
         priors_for_validator = (
@@ -952,6 +965,157 @@ def _build_output(
         analysis=analysis,
         open_questions=questions,
         narrative=payload.get("narrative"),
+    )
+
+
+_META_ANALYSIS_KINDS: frozenset[str] = frozenset(
+    {"data_quality_caveat", "spec_alignment"}
+)
+"""Mirror of seed_topic_extractor._SUPPRESSED_ANALYSIS_KINDS — both
+modules need to know which AnalysisClaim kinds are meta (about data /
+system configuration) vs hypothesizable (about the experiment). Kept
+in sync via the meta-claim contract test in test_meta_kinds_aligned.py.
+"""
+
+
+def _is_meta_only_emit(built: DiagnosisOutput) -> bool:
+    """True iff the diagnose output contains zero hypothesizable claims:
+    no failures, no trends, and every analysis is a meta-kind (data
+    quality caveat or spec alignment)."""
+    if built.failures or built.trends:
+        return False
+    if not built.analysis:
+        # Truly empty (no claims at all). The backstop only fires when
+        # the agent has emitted something but only meta — a fully empty
+        # emit may be intentional (no narrative observations at all),
+        # so leave it alone.
+        return False
+    return all(a.kind in _META_ANALYSIS_KINDS for a in built.analysis)
+
+
+def _synthesize_narrative_backstop_if_needed(
+    built: DiagnosisOutput, output: CharacterizationOutput
+) -> DiagnosisOutput:
+    """When the diagnose agent dodges by emitting only meta-kind analyses
+    while the bundle has narrative_observations describing closure events
+    or interventions, synthesize deterministic claims from those
+    narratives so the diagnosis isn't empty.
+
+    Each closure_event becomes a FailureClaim (severity=major, basis=
+    schema_only, provenance_downgraded=true) citing the source
+    narrative_id. Each intervention becomes an AnalysisClaim with
+    kind=cross_run_observation citing the source narrative_id.
+
+    Generalisable: works for any process / organism / document where
+    the narrative extractor surfaced typed events. No registry or
+    priors required.
+
+    Idempotent on re-call: if the agent already emitted any failures or
+    non-meta analyses, this is a no-op.
+    """
+    if not _is_meta_only_emit(built):
+        return built
+
+    closure_events = [
+        n
+        for n in output.narrative_observations
+        if n.tag == NarrativeTag.CLOSURE_EVENT
+    ]
+    interventions = [
+        n
+        for n in output.narrative_observations
+        if n.tag == NarrativeTag.INTERVENTION
+    ]
+    if not closure_events and not interventions:
+        # Agent's meta-only output is appropriate — there's no narrative
+        # signal to ground a non-meta claim on. Pass through unchanged.
+        return built
+
+    synth_failures: list[FailureClaim] = list(built.failures)
+    synth_analyses: list[AnalysisClaim] = list(built.analysis)
+
+    next_failure_idx = len(synth_failures) + 1
+    for n in closure_events:
+        run_tag = f" in {n.run_id}" if n.run_id else ""
+        time_tag = f" at {n.time_h:.0f}h" if n.time_h is not None else ""
+        summary = (
+            f"Closure event{run_tag}{time_tag} per operator narrative: "
+            f"{n.text[:240]}"
+        )
+        try:
+            synth_failures.append(
+                FailureClaim(
+                    claim_id=f"D-F-{next_failure_idx:04d}",
+                    summary=summary[:500],
+                    cited_finding_ids=[],
+                    cited_trajectories=[],
+                    cited_narrative_ids=[n.narrative_id],
+                    affected_variables=list(n.affected_variables),
+                    confidence=0.7,
+                    confidence_basis=ConfidenceBasis.SCHEMA_ONLY,
+                    domain_tags=["data_quality"]
+                    if not n.affected_variables
+                    else [],
+                    severity=Severity.MAJOR,
+                    provenance_downgraded=True,
+                    time_window=None,
+                )
+            )
+            next_failure_idx += 1
+        except ValueError as e:
+            _log.warning(
+                "backstop: dropping synthesized closure FailureClaim: %s", e
+            )
+
+    next_analysis_idx = len(synth_analyses) + 1
+    for n in interventions:
+        run_tag = f" in {n.run_id}" if n.run_id else ""
+        time_tag = f" at {n.time_h:.0f}h" if n.time_h is not None else ""
+        summary = (
+            f"Operator intervention{run_tag}{time_tag} per narrative: "
+            f"{n.text[:240]}"
+        )
+        try:
+            synth_analyses.append(
+                AnalysisClaim(
+                    claim_id=f"D-A-{next_analysis_idx:04d}",
+                    summary=summary[:500],
+                    cited_finding_ids=[],
+                    cited_narrative_ids=[n.narrative_id],
+                    affected_variables=list(n.affected_variables),
+                    confidence=0.7,
+                    confidence_basis=ConfidenceBasis.SCHEMA_ONLY,
+                    domain_tags=["process_control"],
+                    kind="cross_run_observation",
+                    provenance_downgraded=True,
+                )
+            )
+            next_analysis_idx += 1
+        except ValueError as e:
+            _log.warning(
+                "backstop: dropping synthesized intervention AnalysisClaim: %s", e
+            )
+
+    n_added_failures = len(synth_failures) - len(built.failures)
+    n_added_analyses = len(synth_analyses) - len(built.analysis)
+    if not (n_added_failures or n_added_analyses):
+        return built
+
+    _log.warning(
+        "backstop: agent emit was meta-only with %d closure_events / %d "
+        "interventions in narrative; synthesized %d failure + %d analysis "
+        "claim(s) deterministically",
+        len(closure_events),
+        len(interventions),
+        n_added_failures,
+        n_added_analyses,
+    )
+
+    return built.model_copy(
+        update={
+            "failures": synth_failures,
+            "analysis": synth_analyses,
+        }
     )
 
 
