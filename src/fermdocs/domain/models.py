@@ -198,10 +198,19 @@ class NarrativeExtraction(BaseModel):
 
 
 class ParseResult(BaseModel):
-    """What every FileParser returns. Tables always; narrative blocks for PDFs."""
+    """What every FileParser returns. Tables always; narrative blocks for PDFs.
+
+    `feed_plan_tables` carries operator-supplied feeding-strategy tables
+    (Segment | Batch hours | Feed rate) that were detected during PDF parse.
+    These are kept OUT of `tables` so they never enter the observation
+    stream as fake measurements; the pipeline stashes them into
+    residual.process_recipe instead. CSV / Excel parsers leave the field
+    empty.
+    """
 
     tables: list[ParsedTable] = Field(default_factory=list)
     narrative_blocks: list["NarrativeBlock"] = Field(default_factory=list)
+    feed_plan_tables: list[ParsedTable] = Field(default_factory=list)
 
 
 class MappingEntry(BaseModel):
