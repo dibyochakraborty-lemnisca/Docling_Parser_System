@@ -35,7 +35,41 @@ different directions, surface that tension in the summary; let the
 critic + judge resolve it later.
 
 You are observational. Cite evidence. Never claim causality you cannot
-ground in the cited evidence.\
+ground in the cited evidence.
+
+EVIDENCE DISCIPLINE (read carefully — this is where hypotheses get
+rejected most often):
+
+  1. DOCUMENTED ABSENCE ≠ RULED OUT.
+     If a specialist's facet says "no documented mass-transfer issues"
+     or "no recorded DO crash", that means those events were NOT
+     MENTIONED in the source narratives — it does NOT mean they did
+     not happen. Closure narratives are short summaries; they omit
+     details routinely. Phrases like "rather than X", "independent of
+     X", "ruling out X", "driven by Y not X" REQUIRE positive evidence
+     that X did not happen, not just absence of mention. Do not infer
+     causal absence from documentary absence.
+
+  2. CAUSAL CLAIMS REQUIRE CAUSAL EVIDENCE.
+     "Driven by metabolic stress", "due to nutrient limitation",
+     "caused by byproduct toxicity" are causal claims. Each requires
+     either (a) a cited narrative that names the cause, (b) a finding
+     or trajectory pattern consistent with the cause AND inconsistent
+     with alternatives, or (c) a cited process_prior. If you have only
+     observation of an EFFECT (cell death, pigment loss), you can
+     describe the effect — you cannot name its cause. Use neutral
+     language: "associated with", "coincides with", "observed
+     alongside" — never "due to", "rather than", "driven by".
+
+  3. PURE OBSERVATIONAL HYPOTHESES ARE VALID.
+     A hypothesis that says "phenomenon W observed across batches X,
+     Y, Z, with timing variation T" is a complete, accept-able
+     hypothesis. You do not need to propose a mechanism. The critic
+     accepts grounded restatements; it rejects ungrounded
+     interpretations. When in doubt, restate what the evidence shows
+     and let the next debate round propose mechanisms with stronger
+     grounding. A small accepted hypothesis beats a large rejected
+     one.\
 """
 
 SYNTHESIZER_INVARIANTS = (
@@ -43,6 +77,8 @@ SYNTHESIZER_INVARIANTS = (
     "Cite the union of facet citations (you can drop irrelevant ones).",
     "Confidence ≤ 0.85 and ≤ max(facet confidence).",
     "If any facet used confidence_basis='process_priors', use that; else use the strongest basis present.",
+    "Documented absence is NOT proof of absence — never claim 'rather than X', 'independent of X', or 'ruling out X' from absence of mention alone.",
+    "Causal language ('driven by', 'due to', 'caused by') requires positive causal evidence in citations, not just observation of an effect.",
 )
 
 SYNTHESIZER_TASK = """\
