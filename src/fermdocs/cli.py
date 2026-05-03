@@ -15,6 +15,7 @@ from fermdocs.mapping.factory import (
     build_identity_client,
     build_mapper,
     build_narrative_extractor,
+    build_segmenter,
 )
 from fermdocs.units.normalizer import build_default_normalizer
 from fermdocs.parsing.csv_parser import CsvParser
@@ -40,6 +41,7 @@ def _build_pipeline(
     provider: str | None = None,
     llm_normalizer: bool | None = None,
     extract_narrative: bool | None = None,
+    segment_pdfs: bool | None = None,
 ) -> tuple[IngestionPipeline, Repository]:
     db_url = os.environ.get("DATABASE_URL")
     if not db_url:
@@ -79,10 +81,28 @@ def _build_pipeline(
         enabled=extract_narr, provider=narrative_provider
     )
 
+    # PDF document segmenter (LLM-driven, gemini-3.1-pro-preview by default).
+    # Plan ref: docs/design/2026-05-03-pdf-document-segmentation.md
+    # Default ON per design; --no-segment-pdfs or FERMDOCS_PDF_SEGMENT=false
+    # disables. fake_mapper short-circuits to no segmenter (offline runs).
+    use_segmenter = (
+        segment_pdfs
+        if segment_pdfs is not None
+        else os.environ.get("FERMDOCS_PDF_SEGMENT", "true").lower() == "true"
+    )
+    if use_fake_mapper:
+        use_segmenter = False
+    segmenter_provider = (
+        os.environ.get("FERMDOCS_SEGMENTER_PROVIDER")
+        or ("fake" if not use_segmenter else (provider or "gemini"))
+    )
+    document_segmenter = build_segmenter(provider=segmenter_provider)
+
     return (
         IngestionPipeline(
             router, mapper, converter, repo, file_store, schema,
             normalizer, narrative_extractor,
+            document_segmenter=document_segmenter,
         ),
         repo,
     )
@@ -143,6 +163,29 @@ def cli(ctx: click.Context, print_schema: str | None) -> None:
         "LLM identity extractor is skipped."
     ),
 )
+@click.option(
+    "--segment-pdfs/--no-segment-pdfs",
+    "segment_pdfs",
+    default=None,
+    help=(
+        "LLM-driven PDF document segmentation (PDF only). Splits multi-batch "
+        "PDFs into per-run trajectories. Defaults to FERMDOCS_PDF_SEGMENT "
+        "(on). Use --no-segment-pdfs to disable and fall back to the "
+        "column-heuristic chain. CSV/Excel paths are unaffected either way."
+    ),
+)
+@click.option(
+    "--manifest-run-id",
+    "manifest_run_id",
+    type=str,
+    default=None,
+    help=(
+        "Pin a single run-id for every observation in every ingested file. "
+        "If the segmenter detects multiple distinct runs, a loud WARN is "
+        "logged but the manifest still wins. Use when you know the file "
+        "contains exactly one run."
+    ),
+)
 def ingest(
     experiment_id: str,
     files: tuple[Path, ...],
@@ -153,18 +196,27 @@ def ingest(
     llm_normalizer: bool | None,
     extract_narrative: bool | None,
     process_manifest: Path | None,
+    segment_pdfs: bool | None,
+    manifest_run_id: str | None,
 ) -> None:
     """Ingest files for an experiment, then optionally write a dossier JSON."""
     try:
         pipeline, repo = _build_pipeline(
-            schema_path, fake_mapper, provider, llm_normalizer, extract_narrative
+            schema_path,
+            fake_mapper,
+            provider,
+            llm_normalizer,
+            extract_narrative,
+            segment_pdfs=segment_pdfs,
         )
     except Exception as e:
         click.echo(f"db init failed: {e}", err=True)
         sys.exit(EXIT_DB)
 
     try:
-        result = pipeline.ingest(experiment_id, list(files))
+        result = pipeline.ingest(
+            experiment_id, list(files), manifest_run_id=manifest_run_id
+        )
     except UnsupportedFormatError as e:
         click.echo(f"input error: {e}", err=True)
         sys.exit(EXIT_INPUT)
