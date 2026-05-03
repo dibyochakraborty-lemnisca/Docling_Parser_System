@@ -17,6 +17,7 @@ from collections.abc import Iterable
 from fermdocs_hypothesis.events import Event
 from fermdocs_hypothesis.ranker import rank_topics
 from fermdocs_hypothesis.schema import (
+    AnalysisRef,
     BudgetSnapshot,
     CitationCatalog,
     CriticView,
@@ -52,6 +53,7 @@ VIEW_CAPS = {
     "priors_per_specialist": 8,
     "questions_per_specialist": 8,
     "facets_per_topic": 6,
+    "analyses_per_specialist": 6,
     "top_topics_k": 3,
     "accepted_hypotheses_in_orchestrator_view": 8,
 }
@@ -89,6 +91,7 @@ def project_specialist(
     available_narratives: list[NarrativeRef],
     available_trajectories: list[TrajectoryViewRef],
     available_priors: list[ResolvedPriorRef],
+    available_analyses: list[AnalysisRef] | None = None,
 ) -> SpecialistView:
     """Filter the upstream pools to what's relevant for this specialist on
     this topic.
@@ -133,6 +136,18 @@ def project_specialist(
     trajectories = [t for t in available_trajectories if _traj_relevant(t)]
     priors = [p for p in available_priors if _prior_relevant(p)]
 
+    # Analyses overlap when they cite a finding the topic also cites OR
+    # share at least one affected_variable. Generous on purpose — better
+    # to over-include a caveat than miss it.
+    cited_findings_set = set(current_topic.cited_finding_ids)
+    analyses: list[AnalysisRef] = []
+    for a in (available_analyses or []):
+        if cited_findings_set.intersection(a.cited_finding_ids):
+            analyses.append(a)
+            continue
+        if topic_vars and any(v.lower() in topic_vars for v in a.affected_variables):
+            analyses.append(a)
+
     # Open questions in this domain
     questions = [
         q
@@ -152,6 +167,7 @@ def project_specialist(
         relevant_narratives=narratives[: VIEW_CAPS["narratives_per_specialist"]],
         relevant_trajectories=trajectories[: VIEW_CAPS["trajectories_per_specialist"]],
         relevant_priors=priors[: VIEW_CAPS["priors_per_specialist"]],
+        relevant_analyses=analyses[: VIEW_CAPS["analyses_per_specialist"]],
         open_questions_in_domain=questions[: VIEW_CAPS["questions_per_specialist"]],
         prior_facets_this_topic=facets[: VIEW_CAPS["facets_per_topic"]],
     )

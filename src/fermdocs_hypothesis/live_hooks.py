@@ -107,6 +107,7 @@ class LiveHooks:
             available_narratives=self._bundle.narratives_pool,
             available_trajectories=self._bundle.trajectories_pool,
             available_priors=self._bundle.priors_pool,
+            available_analyses=self._bundle.analyses_pool,
         )
         result = agent.contribute(view, facet_id=facet_id)
         return result.facet, result.input_tokens, result.output_tokens

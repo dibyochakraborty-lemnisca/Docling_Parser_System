@@ -352,6 +352,24 @@ class TrajectoryViewRef(BaseModel):
     note: str = ""
 
 
+class AnalysisRef(BaseModel):
+    """Diagnose-layer analysis claim surfaced to specialists as a caveat.
+
+    When the diagnose stage emitted an analysis explaining-away a finding
+    (e.g. spec_alignment: 'these aren't process anomalies, the schema is
+    misconfigured'), specialists need to see it so they don't re-derive
+    a hypothesis that ignores the caveat.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    claim_id: str
+    summary: str
+    kind: str
+    cited_finding_ids: list[str] = Field(default_factory=list)
+    affected_variables: list[str] = Field(default_factory=list)
+
+
 class ResolvedPriorRef(BaseModel):
     """Mirror of fermdocs.domain.process_priors.ResolvedPrior, but as a
     BaseModel so views serialize cleanly. Loaded lazily from the priors layer."""
@@ -388,6 +406,15 @@ class SpecialistView(BaseModel):
     relevant_narratives: list[NarrativeRef] = Field(default_factory=list)
     relevant_trajectories: list[TrajectoryViewRef] = Field(default_factory=list)
     relevant_priors: list[ResolvedPriorRef] = Field(default_factory=list)
+    relevant_analyses: list[AnalysisRef] = Field(
+        default_factory=list,
+        description=(
+            "Diagnose-layer analyses overlapping the topic's cited findings."
+            " Specialists must read these as caveats: if an analysis already"
+            " explains a finding away (e.g. spec_alignment), the hypothesis"
+            " should reflect that, not re-derive a process anomaly."
+        ),
+    )
     open_questions_in_domain: list[OpenQuestionRef] = Field(default_factory=list)
     prior_facets_this_topic: list[FacetSummary] = Field(default_factory=list)
 

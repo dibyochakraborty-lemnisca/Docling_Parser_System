@@ -29,6 +29,7 @@ from fermdocs.domain.process_priors import (
 from fermdocs_characterize.schema import CharacterizationOutput
 from fermdocs_diagnose.schema import DiagnosisOutput
 from fermdocs_hypothesis.schema import (
+    AnalysisRef,
     FindingRef,
     HypothesisInput,
     NarrativeRef,
@@ -49,6 +50,7 @@ class LoadedBundle:
     narratives_pool: list[NarrativeRef]
     trajectories_pool: list[TrajectoryViewRef]
     priors_pool: list[ResolvedPriorRef]
+    analyses_pool: list[AnalysisRef]
     bundle_dir: Path
 
 
@@ -78,6 +80,7 @@ def load_bundle(bundle_dir: str | Path) -> LoadedBundle:
     narratives_pool = _build_narratives_pool(characterization)
     trajectories_pool = _build_trajectories_pool(characterization)
     priors_pool = _build_priors_pool(organism, process_family)
+    analyses_pool = _build_analyses_pool(diagnosis)
 
     hyp_input = HypothesisInput(
         diagnosis=diagnosis,
@@ -95,6 +98,7 @@ def load_bundle(bundle_dir: str | Path) -> LoadedBundle:
         narratives_pool=narratives_pool,
         trajectories_pool=trajectories_pool,
         priors_pool=priors_pool,
+        analyses_pool=analyses_pool,
         bundle_dir=Path(bundle_dir),
     )
 
@@ -141,6 +145,21 @@ def _build_trajectories_pool(char: CharacterizationOutput) -> list[TrajectoryVie
             note=f"unit={t.unit}, quality={t.quality:.2f}",
         )
         for t in char.trajectories
+    ]
+
+
+def _build_analyses_pool(diag: DiagnosisOutput) -> list[AnalysisRef]:
+    """Project DiagnosisOutput.analysis into AnalysisRefs that the projector
+    can match against topic citations."""
+    return [
+        AnalysisRef(
+            claim_id=a.claim_id,
+            summary=a.summary,
+            kind=a.kind,
+            cited_finding_ids=list(a.cited_finding_ids),
+            affected_variables=list(a.affected_variables),
+        )
+        for a in diag.analysis
     ]
 
 

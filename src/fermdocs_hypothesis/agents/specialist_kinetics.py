@@ -47,6 +47,10 @@ priors. Never make causal claims you cannot ground in cited evidence.\
         "Every facet must cite ≥1 finding, narrative, or trajectory.",
         "Confidence ≤ 0.85; if evidence is thin, drop confidence and call it out.",
         "If you used a process_priors lookup, set confidence_basis='process_priors'.",
+        "READ relevant_analyses FIRST: if a diagnose-layer analysis already"
+        " explains the topic's findings as data-quality / spec-config / known"
+        " artifact, frame your facet to honor that — do NOT re-derive a"
+        " process anomaly the analysis already explained away.",
     ),
     "task_spec": """\
 Read the view, optionally call tools to fetch more data, then contribute
