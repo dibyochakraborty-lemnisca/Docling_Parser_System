@@ -138,10 +138,17 @@ def test_critic_view_carries_hypothesis_and_lookups():
     assert "F-A" in view.citation_lookups
 
 
-def test_judge_view_has_no_debate_history_field():
+def test_judge_view_has_no_cross_topic_debate_history_by_default():
+    """Plan §14 collusion mitigation: judge does NOT see other topics'
+    debate transcripts. The feedback-loop fields previous_attempts and
+    cross_topic_lessons exist on the schema for retry-consistency on the
+    SAME topic — but a project_judge call without events threaded must
+    surface no debate history. Test guards the default."""
     hyp = make_hypothesis()
     crit = CritiqueFull(hyp_id="H-0001", flag="green", reasons=[])
     view = project_judge(hypothesis=hyp, critique=crit)
-    # Sanity: judge view structure has only the three approved fields.
+    assert view.previous_attempts == []
+    assert view.cross_topic_lessons is None
+    # Core fields stay required.
     field_names = set(view.model_dump().keys())
-    assert field_names == {"hypothesis", "critique", "citation_lookups"}
+    assert {"hypothesis", "critique", "citation_lookups"} <= field_names

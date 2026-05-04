@@ -71,10 +71,19 @@ def test_judge_green_critique_short_circuits_to_invalid():
     assert "green" in result.rationale.lower() or "no objection" in result.rationale.lower()
 
 
-def test_judge_view_excludes_debate_history():
-    """Schema-level: JudgeView only carries hypothesis + critique + lookups."""
+def test_judge_view_excludes_cross_topic_debate_history_by_default():
+    """Plan §14 collusion mitigation: judge does NOT see other topics'
+    debate transcripts. The feedback-loop fields previous_attempts and
+    cross_topic_lessons exist on the schema for retry-consistency on the
+    SAME topic, but default to empty/None when no events are threaded.
+    A constructed JudgeView with no events must surface no debate
+    history."""
     hyp = make_hypothesis()
     crit = CritiqueFull(hyp_id=hyp.hyp_id, flag="green", reasons=[])
     view = JudgeView(hypothesis=hyp, critique=crit)
+    # Defaults preserve the §14 invariant.
+    assert view.previous_attempts == []
+    assert view.cross_topic_lessons is None
+    # Core fields stay required.
     fields = set(view.model_dump().keys())
-    assert fields == {"hypothesis", "critique", "citation_lookups"}
+    assert {"hypothesis", "critique", "citation_lookups"} <= fields

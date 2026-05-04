@@ -45,6 +45,7 @@ from fermdocs_hypothesis.events import (
     HypothesisRejectedEvent,
     HypothesisSynthesizedEvent,
     JudgeRulingEvent,
+    LessonsSummarizedEvent,
     QuestionAddedEvent,
     StageExitedEvent,
     StageStartedEvent,
@@ -74,7 +75,9 @@ from fermdocs_hypothesis.schema import (
     TopicSpec,
 )
 from fermdocs_hypothesis.state import (
+    all_critic_reasons,
     critic_cycles_for_current_topic,
+    latest_lessons_digest,
     open_questions,
 )
 from fermdocs_hypothesis.stubs.canned_agents import (
@@ -141,7 +144,13 @@ class RunnerState:
 
 class RunnerHooks(Protocol):
     """Protocol so Stage 2 can swap stubs for real LLM agents without
-    changing runner code."""
+    changing runner code.
+
+    `events` is the event log up to this point. The runner passes it into
+    synthesize/critique/judge so projectors can populate previous_attempts
+    and cross_topic_lessons (the feedback loop). Stub implementations may
+    ignore it; LiveHooks threads it into project_synthesizer/critic/judge.
+    """
 
     def pick_topic(self, state: RunnerState) -> str | None: ...
     def contribute_facet(
@@ -151,12 +160,37 @@ class RunnerHooks(Protocol):
         facet_id: str,
     ) -> tuple[FacetFull, int, int]: ...
     def synthesize(
-        self, state: RunnerState, hyp_id: str
+        self,
+        state: RunnerState,
+        hyp_id: str,
+        *,
+        events: list[Event],
     ) -> tuple[HypothesisFull, int, int]: ...
     def critique(
-        self, state: RunnerState
+        self,
+        state: RunnerState,
+        *,
+        events: list[Event],
     ) -> tuple[CritiqueFull, int, int]: ...
-    def judge(self, state: RunnerState) -> tuple[bool, str, int, int]: ...
+    def judge(
+        self,
+        state: RunnerState,
+        *,
+        events: list[Event],
+    ) -> tuple[bool, str, int, int]: ...
+
+    def summarize_lessons(
+        self, state: RunnerState, recent_reasons: list[str], source_reason_count: int
+    ) -> tuple[str, int, int]:
+        """Compress recurring critic complaints into a digest. Called by
+        runner on retry_topic phases when reason count grew past the cached
+        digest's source_reason_count.
+
+        Returns (digest_text, input_tokens, output_tokens). On error the
+        runner falls back silently — implementations may return ("", 0, 0)
+        to mean "no digest available, skip this round".
+        """
+        ...
 
 
 class StubHooks:
@@ -195,10 +229,13 @@ class StubHooks:
         return facet, plan.input_tokens, plan.output_tokens
 
     def synthesize(
-        self, state: RunnerState, hyp_id: str
+        self, state: RunnerState, hyp_id: str, *, events: list[Event]
     ) -> tuple[HypothesisFull, int, int]:
         assert state.current_topic is not None
         plan = self.script.topic_plans[state.current_topic.topic_id]
+        # Stubs ignore `events` — the canned synthesizer doesn't read
+        # previous_attempts. Production LiveHooks passes events into the
+        # projector so the feedback loop reaches real LLM prompts.
         view = project_synthesizer(
             current_topic=state.current_topic,
             facets=list(state.current_facets),
@@ -207,7 +244,7 @@ class StubHooks:
         return hyp, plan.synthesizer_input_tokens, plan.synthesizer_output_tokens
 
     def critique(
-        self, state: RunnerState
+        self, state: RunnerState, *, events: list[Event]
     ) -> tuple[CritiqueFull, int, int]:
         assert state.current_topic is not None
         assert state.current_hypothesis is not None
@@ -215,12 +252,23 @@ class StubHooks:
         crit = stub_critic_file(plan, state.current_hypothesis.hyp_id)
         return crit, plan.critic_input_tokens, plan.critic_output_tokens
 
-    def judge(self, state: RunnerState) -> tuple[bool, str, int, int]:
+    def judge(
+        self, state: RunnerState, *, events: list[Event]
+    ) -> tuple[bool, str, int, int]:
         assert state.current_topic is not None
         assert state.current_hypothesis is not None
         plan = self.script.topic_plans[state.current_topic.topic_id]
         valid, rationale = stub_judge_rule(plan, state.current_hypothesis.hyp_id)
         return valid, rationale, plan.judge_input_tokens, plan.judge_output_tokens
+
+    def summarize_lessons(
+        self, state: RunnerState, recent_reasons: list[str], source_reason_count: int
+    ) -> tuple[str, int, int]:
+        # Deterministic stub: encodes inputs so the runner's caching test
+        # can assert exact strings without an LLM round-trip.
+        joined = " | ".join(recent_reasons[:5])
+        text = f"DETERMINISTIC[{len(recent_reasons)}]: {joined}" if recent_reasons else ""
+        return text, 0, 0
 
 
 # ---------- pure step function ----------
@@ -342,6 +390,56 @@ def step(
                 "max_turns_reached",
             )
 
+        # ---- Lessons summarizer gate ----
+        # On retry, if cumulative critic-reason count grew past the cached
+        # digest's source_reason_count, refresh the digest so the next
+        # synthesizer/critic/judge see updated cross-topic lessons.
+        # Cap input at last 20 reasons to bound token cost regardless of
+        # debate length (state.all_critic_reasons enforces the cap).
+        emitted_lessons: list[Event] = []
+        recent_reasons = all_critic_reasons(events_so_far, limit=20)
+        cached = latest_lessons_digest(events_so_far)
+        cached_count = cached.source_reason_count if cached else 0
+        live_count = sum(
+            len(ev.reasons)
+            for ev in events_so_far
+            if isinstance(ev, CritiqueFiledEvent)
+        )
+        if recent_reasons and live_count > cached_count:
+            try:
+                digest_text, in_tok, out_tok = hooks.summarize_lessons(
+                    state, recent_reasons, live_count
+                )
+            except Exception:
+                # Silent fallback: lessons are advisory; never block retry
+                # on summarizer failure. Synthesizer still has previous_attempts.
+                digest_text, in_tok, out_tok = "", 0, 0
+            if digest_text:
+                new_budget = meter.record(
+                    new_budget,
+                    agent="lessons_summarizer",
+                    input_tokens=in_tok,
+                    output_tokens=out_tok,
+                )
+                emitted_lessons.append(
+                    LessonsSummarizedEvent(
+                        ts=now,
+                        turn=new_turn,
+                        digest=digest_text,
+                        source_reason_count=live_count,
+                    )
+                )
+                if in_tok or out_tok:
+                    emitted_lessons.append(
+                        TokensUsedEvent(
+                            ts=now,
+                            turn=new_turn,
+                            agent="lessons_summarizer",
+                            input=in_tok,
+                            output=out_tok,
+                        )
+                    )
+
         # Re-emit topic_selected so cycle counter (which scans from latest
         # topic_selected) and topic_attempt_counts both tick up correctly.
         # Don't re-add to used_topic_ids — already there from first attempt.
@@ -358,7 +456,7 @@ def step(
                 current_turn=new_turn,
                 retry_topic_id=None,
             ),
-            [
+            emitted_lessons + [
                 TopicSelectedEvent(
                     ts=now,
                     turn=new_turn,
@@ -424,7 +522,7 @@ def step(
             )
         new_hyp_counter = state.hyp_counter + 1
         hyp_id = f"H-{new_hyp_counter:04d}"
-        hyp, in_tok, out_tok = hooks.synthesize(state, hyp_id)
+        hyp, in_tok, out_tok = hooks.synthesize(state, hyp_id, events=events_so_far)
         new_budget = meter.record(
             state.budget,
             agent="synthesizer",
@@ -466,7 +564,7 @@ def step(
         )
 
     if state.phase == "critique":
-        crit, in_tok, out_tok = hooks.critique(state)
+        crit, in_tok, out_tok = hooks.critique(state, events=events_so_far)
         new_budget = meter.record(
             state.budget,
             agent="critic",
@@ -501,7 +599,7 @@ def step(
         )
 
     if state.phase == "judge":
-        valid, rationale, in_tok, out_tok = hooks.judge(state)
+        valid, rationale, in_tok, out_tok = hooks.judge(state, events=events_so_far)
         new_budget = meter.record(
             state.budget,
             agent="judge",

@@ -40,8 +40,10 @@ from fermdocs_hypothesis.state import (
     accepted_hypotheses,
     facets_for_current_topic,
     last_turn_outcome,
+    latest_lessons_digest,
     open_questions,
     specialist_domain_tags,
+    topic_history,
 )
 
 
@@ -177,8 +179,15 @@ def project_synthesizer(
     *,
     current_topic: TopicSpec,
     facets: list[FacetFull],
+    events: Iterable[Event] | None = None,
 ) -> SynthesizerView:
-    """Synthesizer sees full facets and a unioned citation catalog."""
+    """Synthesizer sees full facets, a unioned citation catalog, and on
+    retries also its prior rejected attempts on this topic + any
+    cross-topic lessons digest emitted by LessonsSummarizerAgent.
+
+    `events` is optional so direct test call sites that pre-date the
+    feedback loop keep working with empty history.
+    """
     finding_ids: list[str] = []
     narrative_ids: list[str] = []
     trajectories = []
@@ -201,6 +210,19 @@ def project_synthesizer(
                 seen_traj.add(key)
                 trajectories.append(ref)
 
+    previous_attempts = []
+    cross_lessons = None
+    if events is not None:
+        events_list = list(events)
+        history = topic_history(events_list, current_topic.topic_id)
+        # Only surface attempts that were actually critiqued — avoids
+        # showing the synthesizer half-finished cycles. Order is oldest-
+        # first so the model can read the progression.
+        previous_attempts = [
+            a for a in history.attempts if a.critic_flag is not None
+        ]
+        cross_lessons = latest_lessons_digest(events_list)
+
     return SynthesizerView(
         current_topic=current_topic,
         facets=facets,
@@ -209,6 +231,8 @@ def project_synthesizer(
             narrative_ids=narrative_ids,
             trajectories=trajectories,
         ),
+        previous_attempts=previous_attempts,
+        cross_topic_lessons=cross_lessons,
     )
 
 
@@ -218,12 +242,29 @@ def project_critic(
     citation_lookups: dict[str, object] | None = None,
     relevant_priors: list[ResolvedPriorRef] | None = None,
     debate_summary_one_line: str = "",
+    events: Iterable[Event] | None = None,
+    topic_id: str | None = None,
 ) -> CriticView:
+    """`events` + `topic_id` populate previous_attempts and the cross-topic
+    lessons digest. Both default to None to preserve existing test calls.
+    """
+    previous_attempts = []
+    cross_lessons = None
+    if events is not None and topic_id is not None:
+        events_list = list(events)
+        history = topic_history(events_list, topic_id)
+        previous_attempts = [
+            a for a in history.attempts
+            if a.critic_flag is not None and a.hyp_id != hypothesis.hyp_id
+        ]
+        cross_lessons = latest_lessons_digest(events_list)
     return CriticView(
         hypothesis=hypothesis,
         citation_lookups=dict(citation_lookups or {}),
         relevant_priors=list(relevant_priors or []),
         debate_summary_one_line=debate_summary_one_line,
+        previous_attempts=previous_attempts,
+        cross_topic_lessons=cross_lessons,
     )
 
 
@@ -232,11 +273,32 @@ def project_judge(
     hypothesis: HypothesisFull,
     critique,  # CritiqueFull
     citation_lookups: dict[str, object] | None = None,
+    events: Iterable[Event] | None = None,
+    topic_id: str | None = None,
 ) -> JudgeView:
+    """Judge sees previous_attempts on the same topic to avoid contradicting
+    its own prior rulings. Cross-topic lessons help with consistency.
+
+    Per plan §14: judge does NOT see other topics' debate history beyond
+    the lessons digest (which is anonymized pattern-level, not transcript-
+    level). The previous_attempts list is scoped to `topic_id` only.
+    """
+    previous_attempts = []
+    cross_lessons = None
+    if events is not None and topic_id is not None:
+        events_list = list(events)
+        history = topic_history(events_list, topic_id)
+        previous_attempts = [
+            a for a in history.attempts
+            if a.critic_flag is not None and a.hyp_id != hypothesis.hyp_id
+        ]
+        cross_lessons = latest_lessons_digest(events_list)
     return JudgeView(
         hypothesis=hypothesis,
         critique=critique,
         citation_lookups=dict(citation_lookups or {}),
+        previous_attempts=previous_attempts,
+        cross_topic_lessons=cross_lessons,
     )
 
 

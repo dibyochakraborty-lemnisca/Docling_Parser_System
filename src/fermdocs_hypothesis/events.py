@@ -142,6 +142,21 @@ class HumanInputReceivedEvent(_EventBase):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
+class LessonsSummarizedEvent(_EventBase):
+    """Emitted when the LessonsSummarizerAgent compresses recent critic
+    reasons into a digest. The digest is then visible to retrying
+    synthesizer/critic/judge via their views.
+
+    `source_reason_count` is the cache key the runner checks before
+    re-invoking the summarizer; if no new reasons accumulated, the
+    previous digest is reused.
+    """
+
+    type: Literal["lessons_summarized"] = "lessons_summarized"
+    digest: str
+    source_reason_count: int = Field(ge=0)
+
+
 class StageExitedEvent(_EventBase):
     type: Literal["stage_exited"] = "stage_exited"
     reason: ExitReason
@@ -163,6 +178,7 @@ Event = Annotated[
         TokensUsedEvent,
         StagePausedEvent,
         HumanInputReceivedEvent,
+        LessonsSummarizedEvent,
         StageExitedEvent,
     ],
     Field(discriminator="type"),

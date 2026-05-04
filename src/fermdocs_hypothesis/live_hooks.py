@@ -18,6 +18,11 @@ from __future__ import annotations
 
 from fermdocs_hypothesis.agents.critic import CriticAgent, build_critic
 from fermdocs_hypothesis.agents.judge import JudgeAgent, build_judge
+from fermdocs_hypothesis.agents.lessons_summarizer import (
+    LessonsSummarizerAgent,
+    LessonsView,
+    build_lessons_summarizer,
+)
 from fermdocs_hypothesis.agents.orchestrator import OrchestratorAgent
 from fermdocs_hypothesis.agents.specialist_base import SpecialistAgent
 from fermdocs_hypothesis.agents.specialist_kinetics import build_kinetics_specialist
@@ -27,6 +32,7 @@ from fermdocs_hypothesis.agents.specialist_mass_transfer import (
 from fermdocs_hypothesis.agents.specialist_metabolic import build_metabolic_specialist
 from fermdocs_hypothesis.agents.synthesizer import SynthesizerAgent, build_synthesizer
 from fermdocs_hypothesis.bundle_loader import LoadedBundle
+from fermdocs_hypothesis.events import Event
 from fermdocs_hypothesis.llm_clients import GeminiHypothesisClient
 from fermdocs_hypothesis.projector import (
     project_critic,
@@ -64,6 +70,10 @@ class LiveHooks:
         self._synthesizer = build_synthesizer(self._client)
         self._critic = build_critic(self._client, self._tools)
         self._judge = build_judge(self._client)
+        # Lessons summarizer is a small LLM call that compresses recurring
+        # critic complaints into a digest, surfaced into synth/critic/judge
+        # views on retries. Lives outside the main debate cycle.
+        self._lessons: LessonsSummarizerAgent = build_lessons_summarizer(self._client)
         self._specialists: dict[SpecialistRole, SpecialistAgent] = {
             "kinetics": self._kinetics,
             "mass_transfer": self._mass_transfer,
@@ -115,37 +125,52 @@ class LiveHooks:
     # ---- synthesizer ----
 
     def synthesize(
-        self, state: RunnerState, hyp_id: str
+        self, state: RunnerState, hyp_id: str, *, events: list[Event]
     ) -> tuple[HypothesisFull, int, int]:
         assert state.current_topic is not None
+        # Threading `events` here is what makes the feedback loop reach
+        # the synthesizer prompt: project_synthesizer reads
+        # topic_history(events, topic_id) to populate previous_attempts
+        # and latest_lessons_digest(events) for cross_topic_lessons.
         view = project_synthesizer(
             current_topic=state.current_topic,
             facets=list(state.current_facets),
+            events=events,
         )
         result = self._synthesizer.synthesize(view, hyp_id=hyp_id)
         return result.hypothesis, result.input_tokens, result.output_tokens
 
     # ---- critic ----
 
-    def critique(self, state: RunnerState) -> tuple[CritiqueFull, int, int]:
+    def critique(
+        self, state: RunnerState, *, events: list[Event]
+    ) -> tuple[CritiqueFull, int, int]:
         assert state.current_hypothesis is not None
+        assert state.current_topic is not None
         view = project_critic(
             hypothesis=state.current_hypothesis,
             citation_lookups=self._build_citation_lookups(state.current_hypothesis),
             relevant_priors=self._bundle.priors_pool,
+            events=events,
+            topic_id=state.current_topic.topic_id,
         )
         result = self._critic.critique(view)
         return result.critique, result.input_tokens, result.output_tokens
 
     # ---- judge ----
 
-    def judge(self, state: RunnerState) -> tuple[bool, str, int, int]:
+    def judge(
+        self, state: RunnerState, *, events: list[Event]
+    ) -> tuple[bool, str, int, int]:
         assert state.current_hypothesis is not None
         assert state.current_critique is not None
+        assert state.current_topic is not None
         view = project_judge(
             hypothesis=state.current_hypothesis,
             critique=state.current_critique,
             citation_lookups=self._build_citation_lookups(state.current_hypothesis),
+            events=events,
+            topic_id=state.current_topic.topic_id,
         )
         result = self._judge.rule(view)
         return (
@@ -154,6 +179,26 @@ class LiveHooks:
             result.input_tokens,
             result.output_tokens,
         )
+
+    # ---- lessons summarizer ----
+
+    def summarize_lessons(
+        self,
+        state: RunnerState,
+        recent_reasons: list[str],
+        source_reason_count: int,
+    ) -> tuple[str, int, int]:
+        """Real LLM-backed lesson compression. Wraps in try/except so a
+        Gemini outage never blocks a retry — runner already falls back
+        silently, but we're defensive at this layer too."""
+        try:
+            view = LessonsView(recent_critic_reasons=list(recent_reasons))
+            result = self._lessons.summarize(
+                view, source_reason_count=source_reason_count
+            )
+            return result.digest.digest, result.input_tokens, result.output_tokens
+        except Exception:
+            return "", 0, 0
 
     # ---- helpers ----
 

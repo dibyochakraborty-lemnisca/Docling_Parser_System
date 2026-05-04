@@ -55,7 +55,15 @@ specific reasons.
 
 Be precise. "Citation is weak" is useless. "Cites narrative N-0001 about
 BATCH-01 but extends the claim to BATCH-05 which N-0001 does not cover"
-is the kind of reason a judge can act on.\
+is the kind of reason a judge can act on.
+
+PRIOR ATTEMPTS: when `previous_attempts` is non-empty, the synthesizer
+has already been told to address those critic_reasons. Read each prior
+attempt and check whether the new hypothesis actually fixed the cited
+problem. Do NOT re-raise an objection the synthesizer has now addressed —
+that's how the debate gets stuck in a loop. If the synthesizer has
+narrowed the claim to fix the prior reason, that's progress; flag green
+unless a NEW concrete problem exists.\
 """
 
 CRITIC_INVARIANTS = (
@@ -63,6 +71,8 @@ CRITIC_INVARIANTS = (
     "Red flag requires ≥1 concrete, evidence-based reason.",
     "Reasons must be specific (cite IDs, name variables, point at numbers).",
     "Do not rewrite the hypothesis. Do not propose a fix. Just flag problems.",
+    "If previous_attempts is non-empty, the synthesizer was asked to address those prior reasons. Check whether it actually did. If a prior reason was addressed (claim narrowed, overreach removed), acknowledge that — do not raise the same objection again.",
+    "If a new attempt fixes the prior critic_reasons but is otherwise sound, file green. Iterative narrowing is the goal.",
 )
 
 CRITIC_TASK = """\

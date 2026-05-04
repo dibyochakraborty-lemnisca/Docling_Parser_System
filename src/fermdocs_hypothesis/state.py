@@ -13,21 +13,26 @@ from collections import Counter
 from collections.abc import Iterable
 
 from fermdocs_hypothesis.events import (
+    CritiqueFiledEvent,
     Event,
     FacetContributedEvent,
     HypothesisAcceptedEvent,
     HypothesisRejectedEvent,
     HypothesisSynthesizedEvent,
     JudgeRulingEvent,
+    LessonsSummarizedEvent,
     QuestionAddedEvent,
     QuestionResolvedEvent,
     TopicSelectedEvent,
 )
 from fermdocs_hypothesis.schema import (
+    AttemptRecord,
     FacetSummary,
     HypothesisRef,
+    LessonsDigest,
     OpenQuestionRef,
     SpecialistRole,
+    TopicHistoryEntry,
     TurnOutcome,
 )
 
@@ -237,3 +242,112 @@ def latest_judge_ruling_for(events: Iterable[Event], hyp_id: str) -> JudgeRuling
         if isinstance(ev, JudgeRulingEvent) and ev.hyp_id == hyp_id:
             last = ev
     return last
+
+
+def topic_history(events: Iterable[Event], topic_id: str) -> TopicHistoryEntry:
+    """All synthesizer→critic→judge cycles on `topic_id`, oldest-first.
+
+    Walks the event log once, grouping events by hyp_id under topic_id.
+    A cycle is anchored on HypothesisSynthesizedEvent; critic/judge events
+    are attached if present. Status reflects the topic's terminal state at
+    projection time.
+
+    Used by the projector to populate `previous_attempts` on retrying
+    agents — the synthesizer must address each prior critic_reasons entry
+    rather than re-emit the same overreach.
+    """
+    events_list = list(events)
+
+    topic_summary = ""
+    for ev in events_list:
+        if isinstance(ev, TopicSelectedEvent) and ev.topic_id == topic_id:
+            topic_summary = ev.summary
+
+    # hyp_id → AttemptRecord-in-progress (mutable scratch dict)
+    attempts_by_hyp: dict[str, dict] = {}
+    hyp_order: list[str] = []  # preserve synthesis order
+
+    accepted = False
+    for ev in events_list:
+        if isinstance(ev, HypothesisSynthesizedEvent) and ev.topic_id == topic_id:
+            attempts_by_hyp[ev.hyp_id] = {
+                "hyp_id": ev.hyp_id,
+                "hypothesis_summary": ev.summary,
+                "critic_flag": None,
+                "critic_reasons": [],
+                "judge_ruling": None,
+                "judge_rationale": None,
+                "human_input": None,
+            }
+            hyp_order.append(ev.hyp_id)
+        elif isinstance(ev, CritiqueFiledEvent) and ev.hyp_id in attempts_by_hyp:
+            attempts_by_hyp[ev.hyp_id]["critic_flag"] = ev.flag
+            attempts_by_hyp[ev.hyp_id]["critic_reasons"] = list(ev.reasons)
+        elif isinstance(ev, JudgeRulingEvent) and ev.hyp_id in attempts_by_hyp:
+            attempts_by_hyp[ev.hyp_id]["judge_ruling"] = (
+                "valid" if ev.criticism_valid else "invalid"
+            )
+            attempts_by_hyp[ev.hyp_id]["judge_rationale"] = ev.rationale
+        elif isinstance(ev, HypothesisAcceptedEvent) and ev.topic_id == topic_id:
+            accepted = True
+        elif isinstance(ev, HypothesisRejectedEvent) and ev.topic_id == topic_id:
+            pass  # already captured via critic/judge events
+
+    attempts = [AttemptRecord(**attempts_by_hyp[hid]) for hid in hyp_order]
+
+    if accepted:
+        status = "accepted"
+    elif not attempts:
+        status = "deferred"
+    else:
+        # Runner enforces max_critic_cycles_per_topic; we expose the raw
+        # state and let downstream consumers decide. "in_progress" is
+        # accurate from the projection's pure-function perspective.
+        status = "in_progress"
+
+    return TopicHistoryEntry(
+        topic_id=topic_id,
+        summary=topic_summary,
+        attempts=attempts,
+        status=status,
+    )
+
+
+def all_critic_reasons(
+    events: Iterable[Event], *, limit: int = 20
+) -> list[str]:
+    """Last `limit` critic reasons across ALL topics, newest-last.
+
+    Input to LessonsSummarizerAgent. Capping protects token budget — older
+    reasons matter less than recent recurring patterns.
+    """
+    reasons: list[str] = []
+    for ev in events:
+        if isinstance(ev, CritiqueFiledEvent):
+            reasons.extend(ev.reasons)
+    if len(reasons) > limit:
+        reasons = reasons[-limit:]
+    return reasons
+
+
+def latest_lessons_digest(events: Iterable[Event]) -> LessonsDigest | None:
+    """Most recent LessonsSummarizedEvent projected as a LessonsDigest, or
+    None if the summarizer hasn't run yet.
+
+    `computed_at_event_idx` is the event-list index at which the summary
+    landed — used by the runner as a cache key alongside source_reason_count.
+    """
+    events_list = list(events)
+    last_idx = -1
+    last_ev: LessonsSummarizedEvent | None = None
+    for i, ev in enumerate(events_list):
+        if isinstance(ev, LessonsSummarizedEvent):
+            last_idx = i
+            last_ev = ev
+    if last_ev is None:
+        return None
+    return LessonsDigest(
+        digest=last_ev.digest,
+        source_reason_count=last_ev.source_reason_count,
+        computed_at_event_idx=last_idx,
+    )

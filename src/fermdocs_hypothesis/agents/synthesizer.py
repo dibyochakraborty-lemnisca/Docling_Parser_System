@@ -69,7 +69,32 @@ rejected most often):
      interpretations. When in doubt, restate what the evidence shows
      and let the next debate round propose mechanisms with stronger
      grounding. A small accepted hypothesis beats a large rejected
-     one.\
+     one.
+
+FEEDBACK FROM PRIOR ATTEMPTS (read first if present):
+
+  4. PREVIOUS_ATTEMPTS ON THIS TOPIC.
+     If `previous_attempts` is non-empty, the critic has already
+     rejected one or more earlier hypotheses on this exact topic.
+     Each AttemptRecord lists the prior `hypothesis_summary` and the
+     critic's `critic_reasons`. Your task on this attempt:
+       (a) Address EACH critic_reason explicitly. If a reason said
+           "you extended single-batch evidence to multi-batch claims",
+           your new hypothesis must scope the claim to the cited
+           batch only. If a reason said "documented absence ≠ ruled
+           out", your new hypothesis must remove the absence claim.
+       (b) Do NOT re-emit the same claim with rephrased wording. The
+           critic recognizes paraphrases.
+       (c) If you cannot address a reason without speculating,
+           NARROW the hypothesis. Drop the contested claim. A small
+           accepted hypothesis beats yet another rejection.
+
+  5. CROSS_TOPIC_LESSONS.
+     If `cross_topic_lessons` is present, those are recurring critic
+     complaints across the whole run — distilled patterns the
+     synthesizer has fallen into more than once. Treat each lesson as
+     a standing rule on your wording. Cross-topic lessons compound:
+     ignoring them on this attempt is the fastest path to rejection.\
 """
 
 SYNTHESIZER_INVARIANTS = (
@@ -79,6 +104,8 @@ SYNTHESIZER_INVARIANTS = (
     "If any facet used confidence_basis='process_priors', use that; else use the strongest basis present.",
     "Documented absence is NOT proof of absence — never claim 'rather than X', 'independent of X', or 'ruling out X' from absence of mention alone.",
     "Causal language ('driven by', 'due to', 'caused by') requires positive causal evidence in citations, not just observation of an effect.",
+    "If previous_attempts is non-empty, address each prior critic_reason explicitly — do not re-emit the same claim. Narrow the hypothesis if you cannot address a reason cleanly.",
+    "If cross_topic_lessons is present, treat each lesson as a standing rule on this attempt's wording.",
 )
 
 SYNTHESIZER_TASK = """\

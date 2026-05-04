@@ -216,6 +216,75 @@ class CritiqueFull(BaseModel):
         return self
 
 
+# ---------- Feedback ledger (debate history visible to retrying agents) ----------
+
+
+class HumanInputRecord(BaseModel):
+    """Slot for HITL v1. Empty in v0; populated when humans inject guidance
+    on an attempt (accept-with-note, reject-with-note, free-form steer).
+
+    Schema kept minimal so the projector + agent prompts can reference the
+    field today; richer fields (qid linkage, structured payload) land with
+    HITL wiring.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    note: str = Field(min_length=1)
+
+
+class AttemptRecord(BaseModel):
+    """One synthesizer→critic→judge cycle on a single topic.
+
+    Built by `state.topic_history` from event log. Surfaced into agent
+    views so retries can address prior critic reasons explicitly instead
+    of re-emitting the same overreach.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    hyp_id: str
+    hypothesis_summary: str
+    critic_flag: Literal["red", "green"] | None = None
+    critic_reasons: list[str] = Field(default_factory=list)
+    judge_ruling: Literal["valid", "invalid"] | None = None
+    judge_rationale: str | None = None
+    human_input: HumanInputRecord | None = None
+
+
+class TopicHistoryEntry(BaseModel):
+    """All attempts on one topic + terminal status.
+
+    `status` reflects the topic's outcome at the time of projection:
+      - in_progress: at least one attempt, none accepted, retry budget left
+      - rejected_terminal: retry budget exhausted on this topic
+      - accepted: hypothesis on this topic was accepted by judge
+      - deferred: topic selected but no synthesis happened (rare)
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    topic_id: str
+    summary: str
+    attempts: list[AttemptRecord] = Field(default_factory=list)
+    status: Literal["in_progress", "rejected_terminal", "accepted", "deferred"]
+
+
+class LessonsDigest(BaseModel):
+    """LLM-summarized cross-topic critic patterns.
+
+    Computed by LessonsSummarizerAgent on retry. `source_reason_count` and
+    `computed_at_event_idx` are cache keys: the runner skips recompute when
+    the live critic-reason count hasn't grown past `source_reason_count`.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    digest: str = Field(min_length=1)
+    source_reason_count: int = Field(ge=0)
+    computed_at_event_idx: int = Field(ge=0)
+
+
 # ---------- Open questions + ledger ----------
 
 
@@ -423,6 +492,23 @@ class SynthesizerView(BaseModel):
     current_topic: TopicSpec
     facets: list[FacetFull]
     citation_universe: CitationCatalog
+    previous_attempts: list[AttemptRecord] = Field(
+        default_factory=list,
+        description=(
+            "Prior rejected attempts on `current_topic`, oldest-first."
+            " Empty on first attempt. Synthesizer must address each"
+            " critic_reasons entry rather than re-emit the same claim."
+        ),
+    )
+    cross_topic_lessons: LessonsDigest | None = Field(
+        default=None,
+        description=(
+            "LLM-summarized recurring critic complaints across the run."
+            " Populated only on retries when enough critic reasons have"
+            " accumulated. None means: nothing to add beyond per-topic"
+            " context."
+        ),
+    )
 
 
 class CriticView(BaseModel):
@@ -430,13 +516,26 @@ class CriticView(BaseModel):
     citation_lookups: dict[str, Any] = Field(default_factory=dict)
     relevant_priors: list[ResolvedPriorRef] = Field(default_factory=list)
     debate_summary_one_line: str = ""
+    previous_attempts: list[AttemptRecord] = Field(
+        default_factory=list,
+        description=(
+            "Prior attempts on this topic so the critic doesn't repeat"
+            " itself or contradict an earlier ruling."
+        ),
+    )
+    cross_topic_lessons: LessonsDigest | None = None
 
 
 class JudgeView(BaseModel):
     hypothesis: HypothesisFull
     critique: CritiqueFull
     citation_lookups: dict[str, Any] = Field(default_factory=dict)
-    # Explicitly NO debate history — see plan §14 (judge collusion mitigation).
+    # Explicitly NO debate history of *other* topics — see plan §14 (judge
+    # collusion mitigation). previous_attempts is scoped to *this* topic
+    # only, which is consistent with judge already seeing this hypothesis
+    # + critique pair.
+    previous_attempts: list[AttemptRecord] = Field(default_factory=list)
+    cross_topic_lessons: LessonsDigest | None = None
 
 
 # ---------- Output (final + rejected) ----------

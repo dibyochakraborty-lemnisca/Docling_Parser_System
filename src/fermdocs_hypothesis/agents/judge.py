@@ -56,6 +56,7 @@ JUDGE_INVARIANTS = (
     "Rule on the critique only — do not re-evaluate the hypothesis from scratch.",
     "Green-flag critiques always rule criticism_valid=false.",
     "Provide a one-paragraph rationale (≤500 chars) that names the evidence you weighed.",
+    "If previous_attempts shows you ruled the same critic_reason valid before AND the synthesizer has now narrowed the hypothesis to address it, the critique is no longer valid for that reason — rule criticism_valid=false. Consistency across retries.",
 )
 
 JUDGE_TASK = """\
