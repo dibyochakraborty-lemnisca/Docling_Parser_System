@@ -27,6 +27,9 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from fermdocs_characterize import CHARACTERIZATION_VERSION, SCHEMA_VERSION
+from fermdocs_characterize.agents.trajectory_analyzer import (
+    TrajectoryAnalyzerAgent,
+)
 from fermdocs_characterize.builders.expected_vs_observed import build_deviations
 from fermdocs_characterize.builders.facts_graph import build_facts_graph
 from fermdocs_characterize.builders.open_questions import build_open_questions
@@ -65,11 +68,18 @@ class CharacterizationPipeline:
         validate: bool = True,
         current_schema_version: str = SCHEMA_VERSION,
         current_process_priors_version: str | None = None,
+        trajectory_analyzer: TrajectoryAnalyzerAgent | None = None,
     ) -> None:
+        # `trajectory_analyzer` is the LLM-driven pattern discovery stage
+        # (May 2026). When None, the pipeline runs purely deterministic
+        # — preserves backward compat for tests + fixture-based runs.
+        # When provided, the analyzer runs after spec checks and appends
+        # FindingType.TRAJECTORY_PATTERN findings to the output.
         self._specs_provider = specs_provider
         self._validate = validate
         self._current_schema_version = current_schema_version
         self._current_process_priors_version = current_process_priors_version
+        self._trajectory_analyzer = trajectory_analyzer
 
     def run(
         self,
@@ -136,6 +146,29 @@ class CharacterizationPipeline:
                     statistics=c.statistics,
                 )
             )
+
+        # 4b. LLM-driven trajectory pattern analysis (May 2026 architecture
+        # shift). Optional — when no analyzer is wired, pipeline stays
+        # purely deterministic. When wired, the analyzer reads the same
+        # trajectories + spec findings, runs execute_python over a tmp
+        # observations.csv, and emits FindingType.TRAJECTORY_PATTERN
+        # findings that get IDs after the spec findings.
+        if self._trajectory_analyzer is not None and trajectories:
+            try:
+                analyzer_result = self._trajectory_analyzer.analyze(
+                    char_id=char_id,
+                    trajectories=trajectories,
+                    spec_findings=findings,
+                    starting_index=len(findings) + 1,
+                )
+                findings.extend(analyzer_result.findings)
+            except Exception as exc:
+                # Analyzer is advisory; never block the deterministic
+                # spec-finding pipeline on a Gemini outage or sandbox error.
+                _log.warning(
+                    "trajectory_analyzer raised %s; skipping pattern findings",
+                    exc.__class__.__name__,
+                )
 
         # 5. Other artifacts
         deviations = build_deviations(summary)

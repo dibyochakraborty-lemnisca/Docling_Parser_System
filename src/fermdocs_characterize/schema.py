@@ -39,6 +39,13 @@ class FindingType(str, Enum):
     # v3+:
     PRECEDES_WITH_LAG = "precedes_with_lag"
     KINETIC_ANOMALY = "kinetic_anomaly"
+    # v4 (May 2026): generic bucket for LLM-discovered trajectory patterns.
+    # Sub-discrimination lives in `Finding.statistics["pattern_kind"]` —
+    # e.g. "phase_boundary", "cross_batch_variance", "correlation",
+    # "outlier_batch". Open-ended on purpose: the trajectory analyzer
+    # surfaces patterns we haven't pre-enumerated, and forcing them into
+    # narrower types makes the contract dishonest.
+    TRAJECTORY_PATTERN = "trajectory_pattern"
 
 
 class Severity(str, Enum):
