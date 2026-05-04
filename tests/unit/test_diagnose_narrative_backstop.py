@@ -215,12 +215,24 @@ def test_meta_only_returns_false_when_cross_run_present():
     assert _is_meta_only_emit(diag) is False
 
 
-def test_meta_only_returns_false_when_truly_empty():
-    """Truly empty emit (zero claims) is intentional — backstop should
-    NOT fire because we don't want to invent claims when the agent
-    genuinely saw no signal."""
+def test_meta_only_returns_true_when_emit_is_fully_empty():
+    """Updated contract (May 2026): a fully-empty emit (failures=[],
+    trends=[], analysis=[]) is now treated as a dodge case, not as an
+    intentional 'no signal' verdict.
+
+    Why the change: yeast/unknown_process bundles started producing
+    fully-empty emits where the agent interpreted the meta-flags
+    (sparse_data, specs_mostly_missing, unknown_process) as 'I have
+    nothing to claim.' Hypothesis stage then exited no_topics_left.
+
+    The predicate now flags these as meta-only-equivalent. The actual
+    decision of whether to inject claims is the caller's:
+    `_synthesize_narrative_backstop_if_needed` checks whether the
+    bundle has narrative_observations to ground claims on. If there's
+    nothing in the narrative either, the empty emit passes through
+    unchanged (covered by test_backstop_no_op_when_no_actionable_narratives)."""
     diag = DiagnosisOutput(meta=_diag_meta(), failures=[], trends=[], analysis=[])
-    assert _is_meta_only_emit(diag) is False
+    assert _is_meta_only_emit(diag) is True
 
 
 # ---------- backstop synthesis ----------
@@ -325,6 +337,71 @@ def test_backstop_no_op_when_no_actionable_narratives():
     new = _synthesize_narrative_backstop_if_needed(diag, output)
     assert len(new.failures) == 0
     assert len(new.analysis) == 2  # original meta preserved
+
+
+# ---------- yeast empty-emit regression (May 2026) ----------
+
+
+def _empty_diagnosis() -> DiagnosisOutput:
+    """Reproduces the yeast/unknown_process bug shape from run a5b7b43b:
+    failures=[], trends=[], analysis=[], open_questions=[]. The agent
+    interpreted unknown_process + sparse_data + specs_mostly_missing as
+    'I have nothing to claim.' Hypothesis stage then exited
+    no_topics_left."""
+    return DiagnosisOutput(
+        meta=_diag_meta(),
+        failures=[],
+        trends=[],
+        analysis=[],
+        open_questions=[],
+        narrative=(
+            "The system flagged the data as sparse and lacking specifications. "
+            "Zero automated findings reported."
+        ),
+    )
+
+
+def test_backstop_fires_on_empty_emit_when_closure_events_exist():
+    """The yeast regression: agent emits zero claims, but the bundle has
+    closure_events in narrative_observations. Backstop must inject
+    FailureClaims so hypothesis stage has something to debate.
+
+    Mirrors run a5b7b43b which exited no_topics_left at turn 0 with 0
+    tokens spent — the symptom that prompted this fix."""
+    output = _output_with_narratives(closures=3)
+    diag = _empty_diagnosis()
+    new = _synthesize_narrative_backstop_if_needed(diag, output)
+    assert len(new.failures) == 3, (
+        f"expected 3 synthesized failures from 3 closure_events, got "
+        f"{len(new.failures)} — the empty-emit case is not firing"
+    )
+    cited = {fid for f in new.failures for fid in f.cited_narrative_ids}
+    assert len(cited) == 3
+    # All synthesized claims marked provenance_downgraded so the
+    # validator + downstream UI know they came from the safety net.
+    assert all(f.provenance_downgraded is True for f in new.failures)
+
+
+def test_backstop_fires_on_empty_emit_when_interventions_exist():
+    output = _output_with_narratives(interventions=2)
+    diag = _empty_diagnosis()
+    new = _synthesize_narrative_backstop_if_needed(diag, output)
+    assert len(new.analysis) == 2
+    assert all(a.kind == "cross_run_observation" for a in new.analysis)
+    assert all(a.provenance_downgraded is True for a in new.analysis)
+
+
+def test_backstop_passes_through_empty_emit_when_no_narratives():
+    """Empty emit + empty narratives = nothing to ground a claim on.
+    Backstop respects this — it only injects when narrative content
+    exists. The downstream hypothesis stage will still exit
+    no_topics_left in this case, but that's a reflection of upstream
+    extraction having found nothing, not a dodge."""
+    output = _empty_output()
+    diag = _empty_diagnosis()
+    new = _synthesize_narrative_backstop_if_needed(diag, output)
+    assert len(new.failures) == 0
+    assert len(new.analysis) == 0
 
 
 def test_backstop_marks_synthesized_claims_as_provenance_downgraded():

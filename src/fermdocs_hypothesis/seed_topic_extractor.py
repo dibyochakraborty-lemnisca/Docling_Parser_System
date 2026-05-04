@@ -17,9 +17,12 @@ Severity weight: critical=1.0, major=0.7, minor=0.4, info=0.2.
 
 from __future__ import annotations
 
+import re
+
 from fermdocs_characterize.schema import Severity
 from fermdocs_diagnose.schema import (
     AnalysisClaim,
+    ConfidenceBasis,
     DiagnosisOutput,
     FailureClaim,
     OpenQuestion,
@@ -59,22 +62,104 @@ engineering questions — so they pass through.
 """
 
 
+_SPEC_LANGUAGE_RE = re.compile(
+    r"\b("
+    r"sigma|"
+    r"nominal|"
+    r"specification|"
+    r"spec|"
+    r"setpoint|"
+    r"set\s*point|"
+    r"schema"
+    r")\b",
+    re.IGNORECASE,
+)
+"""Vocabulary fingerprint for 'this isn't a biological anomaly, it's a
+schema/spec interpretation issue'. Used by `_is_spec_only_failure` to
+detect when a FailureClaim's evidence is purely a measured-vs-nominal
+delta.
+
+Conservative on purpose: matches whole words only so 'biospecification'
+or 'schemata' don't false-positive. The IndPenSim regression's three
+failures all use 'nominal specification' or 'sigma' verbatim.
+"""
+
+
+def _is_spec_only_failure(f: FailureClaim) -> bool:
+    """True when a FailureClaim is grounded ONLY in spec-mismatch logic,
+    not in real biological/operational evidence.
+
+    The IndPenSim case (May 2026): when `unknown_process` is set and
+    recipe-specific priors are unavailable, the diagnose agent computes
+    `(measured - nominal) / std_dev` against generic schema specs and
+    reports the result as a FailureClaim. For unknown_process bundles
+    these specs are usually wrong (e.g. biomass nominal = inoculum
+    density, not steady-state) — so the 'failure' is a schema artifact,
+    not a real anomaly. The synthesizer + critic correctly reject
+    debating it; the seed topic just wastes turns.
+
+    Predicate (all three must hold):
+      1. confidence_basis == 'schema_only' (not grounded in process priors
+         or cross-run data)
+      2. No narrative or trajectory citations (no operator-witnessed event,
+         no time-series anomaly to anchor on)
+      3. Summary contains spec-vocabulary words (nominal/spec/sigma/etc.)
+
+    A failure that has narrative or trajectory citations is kept even
+    when its summary mentions specs — the real evidence is what makes it
+    debatable. We only filter when spec-talk is the sole grounding.
+    """
+    if f.confidence_basis != ConfidenceBasis.SCHEMA_ONLY:
+        return False
+    if f.cited_narrative_ids or f.cited_trajectories:
+        return False
+    if not _SPEC_LANGUAGE_RE.search(f.summary):
+        return False
+    return True
+
+
+def _is_spec_only_open_question(q: OpenQuestion) -> bool:
+    """Open questions framed as 'what is the correct spec for X?' suffer
+    the same problem — they seed topics that route specialists into
+    arguing about data plumbing instead of biology.
+
+    Detection mirrors `_is_spec_only_failure` but on the question text:
+    spec-vocabulary present and only finding citations (no narratives).
+    """
+    if q.cited_narrative_ids:
+        return False
+    text = f"{q.question} {q.why_it_matters or ''}"
+    return bool(_SPEC_LANGUAGE_RE.search(text))
+
+
 def extract_seed_topics(diag: DiagnosisOutput) -> list[SeedTopic]:
     """Project every claim/question into a SeedTopic. Topic IDs are
     assigned in deterministic order: failures, then analyses, then trends,
     then open questions.
 
-    Filters out analysis claims whose kind is in _SUPPRESSED_ANALYSIS_KINDS
-    (data_quality_caveat) — these are meta-observations about the data
-    itself, not candidates for hypothesis-debate. Letting them seed topics
-    derails specialists into framing "the registry doesn't match" or "the
-    data is sparse" as the central question, when the actual document
-    is asking biological questions.
+    Two filters applied:
+
+      1. Analysis claims whose kind is in _SUPPRESSED_ANALYSIS_KINDS
+         (data_quality_caveat / spec_alignment) — meta-observations
+         about the data itself, not candidates for hypothesis-debate.
+
+      2. Failures and open questions that are SPEC-ONLY: their evidence
+         is purely 'measured value differs from nominal spec' with no
+         narrative or trajectory anchoring. These derail debate when
+         specs are misaligned (the common case for unknown_process
+         bundles like IndPenSim) — the synthesizer correctly rejects
+         debating spec-vs-measurement deltas, so the seed topic just
+         wastes turns. See `_is_spec_only_failure`.
+
+    Failures that mix spec language WITH narrative/trajectory citations
+    are kept — the real evidence makes them debatable.
     """
     topics: list[SeedTopic] = []
     counter = 0
 
     for f in diag.failures:
+        if _is_spec_only_failure(f):
+            continue
         counter += 1
         topics.append(_from_failure(f, counter))
     for a in diag.analysis:
@@ -86,6 +171,8 @@ def extract_seed_topics(diag: DiagnosisOutput) -> list[SeedTopic]:
         counter += 1
         topics.append(_from_trend(t, counter))
     for q in diag.open_questions:
+        if _is_spec_only_open_question(q):
+            continue
         counter += 1
         topics.append(_from_open_question(q, counter))
 

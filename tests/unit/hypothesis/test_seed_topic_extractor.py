@@ -252,6 +252,277 @@ def test_phase_characterization_analysis_still_seeds_topic():
     assert len(seeds) == 1
 
 
+# ---------- spec-only failure suppression (IndPenSim regression) ----------
+#
+# May 2026: when running on IndPenSim CSV (unknown_process, no priors),
+# the diagnose agent emitted three FailureClaims that were pure
+# measured-vs-nominal-spec deltas:
+#
+#   D-F-0001: "DO ... violating the nominal specification of 15 mg/L"
+#   D-F-0002: "Temperature ... exceeding the nominal specification of 297 K"
+#   D-F-0003: "Biomass ... exceeding nominal specification of 0.5 g/L by
+#             over 470 sigma"
+#
+# All three: confidence_basis=SCHEMA_ONLY, no narrative or trajectory
+# citations. Hypothesis specialists were forced to debate each one,
+# correctly rejected (no real evidence beyond schema interpretation),
+# and the run produced 3 rejected hypotheses + 0 finals.
+#
+# `_is_spec_only_failure` filters these at seed extraction so the
+# debate never starts. Failures that mix spec language with narrative
+# or trajectory citations are kept — real evidence makes them debatable.
+
+
+def test_spec_only_failure_dropped_indpensim_biomass_shape():
+    """The exact shape from run a5b7b43b → must not seed a topic."""
+    diag = DiagnosisOutput(
+        meta=_meta(),
+        failures=[
+            FailureClaim(
+                claim_id="D-F-0001",
+                summary=(
+                    "Biomass measurements reached up to 24.7 g/L between "
+                    "120h and 156h, exceeding the nominal specification of "
+                    "0.5 g/L by over 470 sigma."
+                ),
+                cited_finding_ids=[f"{CHAR_ID}:F-0001"],
+                affected_variables=["biomass_g_l"],
+                confidence=0.85,
+                confidence_basis=ConfidenceBasis.SCHEMA_ONLY,
+                severity=Severity.CRITICAL,
+            ),
+        ],
+    )
+    seeds = extract_seed_topics(diag)
+    assert seeds == [], (
+        "spec-only FailureClaim must not seed a topic — these waste "
+        "debate turns when specs are misaligned (unknown_process bundles)"
+    )
+
+
+def test_spec_only_failure_dropped_indpensim_do_shape():
+    diag = DiagnosisOutput(
+        meta=_meta(),
+        failures=[
+            FailureClaim(
+                claim_id="D-F-0001",
+                summary=(
+                    "Dissolved oxygen consistently measured between 9.2 "
+                    "and 14.0 mg/L, violating the nominal specification "
+                    "of 15 mg/L."
+                ),
+                cited_finding_ids=[f"{CHAR_ID}:F-0001"],
+                affected_variables=["dissolved_o2_mg_l"],
+                confidence=0.85,
+                confidence_basis=ConfidenceBasis.SCHEMA_ONLY,
+                severity=Severity.MAJOR,
+            ),
+        ],
+    )
+    seeds = extract_seed_topics(diag)
+    assert seeds == []
+
+
+def test_spec_only_failure_with_setpoint_language_dropped():
+    """Variant vocabulary: 'setpoint' is also a spec-frame word."""
+    diag = DiagnosisOutput(
+        meta=_meta(),
+        failures=[
+            FailureClaim(
+                claim_id="D-F-0001",
+                summary="Temperature held above the 30C setpoint for 12h",
+                cited_finding_ids=[f"{CHAR_ID}:F-0001"],
+                affected_variables=["temperature_k"],
+                confidence=0.85,
+                confidence_basis=ConfidenceBasis.SCHEMA_ONLY,
+                severity=Severity.MAJOR,
+            ),
+        ],
+    )
+    seeds = extract_seed_topics(diag)
+    assert seeds == []
+
+
+def test_failure_with_spec_language_AND_narrative_citation_kept():
+    """The narrative citation is the anchoring evidence — even though
+    the summary mentions specs, this is debatable because there's a
+    real operator-witnessed event behind it."""
+    diag = DiagnosisOutput(
+        meta=_meta(),
+        failures=[
+            FailureClaim(
+                claim_id="D-F-0001",
+                summary="DO crashed below nominal spec at 30h, mixer trip recorded",
+                cited_finding_ids=[f"{CHAR_ID}:F-0001"],
+                cited_narrative_ids=[f"{CHAR_ID}:N-0001"],
+                affected_variables=["dissolved_o2_mg_l"],
+                confidence=0.85,
+                confidence_basis=ConfidenceBasis.SCHEMA_ONLY,
+                severity=Severity.MAJOR,
+            ),
+        ],
+    )
+    seeds = extract_seed_topics(diag)
+    assert len(seeds) == 1, (
+        "narrative-cited failures stay even with spec language — the "
+        "operator narrative is the real evidence"
+    )
+
+
+def test_failure_with_spec_language_AND_trajectory_citation_kept():
+    """Same principle — a trajectory citation anchors the claim in real
+    time-series data, so spec language doesn't disqualify it."""
+    diag = DiagnosisOutput(
+        meta=_meta(),
+        failures=[
+            FailureClaim(
+                claim_id="D-F-0001",
+                summary="Biomass exceeded nominal at 24h",
+                cited_finding_ids=[f"{CHAR_ID}:F-0001"],
+                cited_trajectories=[
+                    TrajectoryRef(run_id="RUN-0001", variable="biomass_g_l")
+                ],
+                affected_variables=["biomass_g_l"],
+                confidence=0.85,
+                confidence_basis=ConfidenceBasis.SCHEMA_ONLY,
+                severity=Severity.MAJOR,
+            ),
+        ],
+    )
+    seeds = extract_seed_topics(diag)
+    assert len(seeds) == 1
+
+
+def test_failure_with_process_priors_basis_kept_even_without_narrative():
+    """When confidence_basis=process_priors, the claim was grounded in
+    organism+process priors (not raw schema). These ARE debatable — the
+    spec-only filter targets schema_only basis specifically."""
+    diag = DiagnosisOutput(
+        meta=_meta(),
+        failures=[
+            FailureClaim(
+                claim_id="D-F-0001",
+                summary="DO held below typical range vs spec",
+                cited_finding_ids=[f"{CHAR_ID}:F-0001"],
+                affected_variables=["dissolved_o2_mg_l"],
+                confidence=0.85,
+                confidence_basis=ConfidenceBasis.PROCESS_PRIORS,
+                severity=Severity.MAJOR,
+            ),
+        ],
+    )
+    seeds = extract_seed_topics(diag)
+    assert len(seeds) == 1
+
+
+def test_failure_without_spec_language_kept():
+    """No spec/nominal/sigma vocabulary → not spec-only, kept as topic.
+    Sanity that the carotenoid-shape biological failures still flow."""
+    diag = DiagnosisOutput(
+        meta=_meta(),
+        failures=[
+            FailureClaim(
+                claim_id="D-F-0001",
+                summary="Cells lost pigmentation across all 6 batches by 72h",
+                cited_finding_ids=[f"{CHAR_ID}:F-0001"],
+                affected_variables=["pigmentation"],
+                confidence=0.85,
+                confidence_basis=ConfidenceBasis.SCHEMA_ONLY,
+                severity=Severity.CRITICAL,
+            ),
+        ],
+    )
+    seeds = extract_seed_topics(diag)
+    assert len(seeds) == 1
+
+
+def test_spec_only_open_question_dropped():
+    """'What is the correct specification for X?' open questions seed
+    topics that route specialists into spec-arguing — same dodge as
+    spec-only failures."""
+    diag = DiagnosisOutput(
+        meta=_meta(),
+        open_questions=[
+            OpenQuestion(
+                question_id="D-Q-0001",
+                question="What is the correct specification for dissolved_o2_mg_l?",
+                why_it_matters=(
+                    "Hundreds of observations violate the current 15 mg/L "
+                    "nominal, which may be a setpoint rather than a range."
+                ),
+                cited_finding_ids=[f"{CHAR_ID}:F-0001"],
+                answer_format_hint="numeric",
+            ),
+        ],
+    )
+    seeds = extract_seed_topics(diag)
+    assert seeds == []
+
+
+def test_indpensim_full_diagnosis_drops_to_empty_topics():
+    """End-to-end shape from the real IndPenSim run: 3 spec-only
+    failures + 2 spec_alignment analyses + 2 spec-only open questions
+    → all filtered → 0 seed topics. This reproduces the exact
+    a5b7b43b regression at the seed extraction layer."""
+    diag = DiagnosisOutput(
+        meta=_meta(),
+        failures=[
+            FailureClaim(
+                claim_id="D-F-0001",
+                summary="DO violating nominal specification of 15 mg/L",
+                cited_finding_ids=[f"{CHAR_ID}:F-0001"],
+                affected_variables=["dissolved_o2_mg_l"],
+                confidence=0.85,
+                confidence_basis=ConfidenceBasis.SCHEMA_ONLY,
+                severity=Severity.MAJOR,
+            ),
+            FailureClaim(
+                claim_id="D-F-0002",
+                summary="Temperature exceeding nominal specification of 297 K",
+                cited_finding_ids=[f"{CHAR_ID}:F-0002"],
+                affected_variables=["temperature_k"],
+                confidence=0.85,
+                confidence_basis=ConfidenceBasis.SCHEMA_ONLY,
+                severity=Severity.MAJOR,
+            ),
+            FailureClaim(
+                claim_id="D-F-0003",
+                summary="Biomass exceeding nominal specification by over 470 sigma",
+                cited_finding_ids=[f"{CHAR_ID}:F-0003"],
+                affected_variables=["biomass_g_l"],
+                confidence=0.85,
+                confidence_basis=ConfidenceBasis.SCHEMA_ONLY,
+                severity=Severity.CRITICAL,
+            ),
+        ],
+        analysis=[
+            AnalysisClaim(
+                claim_id="D-A-0001",
+                summary="Spec misaligned with observed values",
+                cited_finding_ids=[f"{CHAR_ID}:F-0001"],
+                affected_variables=["biomass_g_l"],
+                confidence=0.85,
+                confidence_basis=ConfidenceBasis.SCHEMA_ONLY,
+                kind="spec_alignment",
+            ),
+        ],
+        open_questions=[
+            OpenQuestion(
+                question_id="D-Q-0001",
+                question="What are the intended trajectory bounds for biomass_g_l?",
+                why_it_matters="Observations exceed schema nominal by 470 sigma",
+                cited_finding_ids=[f"{CHAR_ID}:F-0001"],
+                answer_format_hint="numeric",
+            ),
+        ],
+    )
+    seeds = extract_seed_topics(diag)
+    assert seeds == [], (
+        "All-spec IndPenSim shape must produce zero seed topics — better "
+        "than wasting debate cycles on schema interpretations"
+    )
+
+
 def test_topic_id_numbering_skips_suppressed():
     """When a data_quality_caveat is sandwiched between a cross_run and
     a trend, the failure → cross_run → trend numbering must be

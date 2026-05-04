@@ -184,6 +184,23 @@ _BUNDLE_SYSTEM_PROMPT = (
     "           diagnosis of the experiment. The experiment itself almost\n"
     "           always has a real, document-grounded story (closure events,\n"
     "           interventions, cross-run patterns); find that story.\n"
+    "       (d) TRAJECTORY_PATTERN FINDINGS ARE PRIMARY EVIDENCE. The\n"
+    "           characterize stage now runs an LLM-driven trajectory\n"
+    "           analyzer that produces findings of type='trajectory_pattern'\n"
+    "           — cross-batch variance, phase boundaries, outlier batches,\n"
+    "           variable correlations. These are computed from real time-\n"
+    "           series via execute_python; their citations are valid\n"
+    "           evidence and they do NOT depend on schema specs or process\n"
+    "           priors. PREFER trajectory_pattern findings over\n"
+    "           range_violation findings when emitting failure / trend /\n"
+    "           cross_run_observation claims, especially under\n"
+    "           UNKNOWN_PROCESS. A claim like 'PAA diverges between runs,\n"
+    "           5202 vs 1506 mg/L peak' (citing F-0101) is debatable\n"
+    "           biology; 'biomass exceeded 0.5 g/L spec' (citing\n"
+    "           range_violation findings) is a schema artifact. Lead with\n"
+    "           the trajectory patterns. statistics.pattern_kind tells you\n"
+    "           the sub-kind (phase_boundary, cross_batch_variance,\n"
+    "           correlation, outlier_batch).\n"
     "  5. Open questions: data-gap only. Each must reference a finding_id,\n"
     "     carry a why_it_matters one-liner, and be answerable in <30s.\n"
     "  6. You MUST call execute_python (or another data-fetch tool) before\n"
@@ -198,13 +215,18 @@ _BUNDLE_SYSTEM_PROMPT = (
     "     system configuration), not about the experiment. If your output\n"
     "     contains ONLY meta-kind analyses (no failures, no trends, no\n"
     "     cross_run_observation / phase_characterization analyses) WHILE\n"
-    "     narrative_observations include closure_events or interventions,\n"
-    "     this is a CONTRACT VIOLATION. Closure events ARE failures\n"
-    "     waiting to be written. Interventions ARE observations that\n"
-    "     belong in cross_run_observation analyses. Do not dodge by\n"
+    "     narrative_observations include closure_events or interventions\n"
+    "     OR characterize emitted trajectory_pattern findings, this is a\n"
+    "     CONTRACT VIOLATION. Closure events ARE failures waiting to be\n"
+    "     written. Interventions ARE observations that belong in\n"
+    "     cross_run_observation analyses. Trajectory patterns ARE either\n"
+    "     failures (when the pattern signals deviation from expected) or\n"
+    "     cross_run_observation analyses (when the pattern is a phase\n"
+    "     characterization or a divergence between runs). Do not dodge by\n"
     "     swapping data_quality_caveat for spec_alignment — both are\n"
     "     equally meta and equally insufficient on their own. Ground at\n"
-    "     least one non-meta claim in the narrative.\n\n"
+    "     least one non-meta claim in narrative_observations OR\n"
+    "     trajectory_pattern findings.\n\n"
     "TOOLS (cost: H = high, L = low):\n"
     "  - execute_python(code, timeout=120) [H] — sandboxed pandas/numpy/scipy.\n"
     "    cwd is project root; `from fermdocs...` imports work. The bundle's\n"
@@ -979,27 +1001,45 @@ in sync via the meta-claim contract test in test_meta_kinds_aligned.py.
 
 
 def _is_meta_only_emit(built: DiagnosisOutput) -> bool:
-    """True iff the diagnose output contains zero hypothesizable claims:
-    no failures, no trends, and every analysis is a meta-kind (data
-    quality caveat or spec alignment)."""
+    """True iff the diagnose output contains zero hypothesizable claims.
+
+    Two failure modes both qualify and both need the backstop:
+
+      (a) "Meta-dodge": agent emits only AnalysisClaims of meta kinds
+          (data_quality_caveat / spec_alignment) — i.e. claims about the
+          DATA rather than about the experiment. Earlier failure mode;
+          we suppress these in seed_topic_extractor too.
+
+      (b) "Empty-dodge": agent emits NO claims at all. Newer failure
+          mode observed on yeast/unknown_process bundles where the agent
+          interprets `unknown_process + sparse_data + specs_mostly_missing`
+          as "I have nothing to claim" and emits failures=[], trends=[],
+          analysis=[]. Equally bad downstream: hypothesis stage exits
+          no_topics_left.
+
+    The decision of whether to actually inject claims is made by the
+    caller — it checks whether narrative_observations contain
+    closure_events or interventions to ground the synthesized claims.
+    If neither exists, the empty emit is allowed to stand.
+    """
     if built.failures or built.trends:
         return False
     if not built.analysis:
-        # Truly empty (no claims at all). The backstop only fires when
-        # the agent has emitted something but only meta — a fully empty
-        # emit may be intentional (no narrative observations at all),
-        # so leave it alone.
-        return False
+        # Empty-dodge: no claims at all. Caller decides if narratives
+        # exist to ground deterministic claims on; if not, the empty
+        # emit passes through unchanged.
+        return True
     return all(a.kind in _META_ANALYSIS_KINDS for a in built.analysis)
 
 
 def _synthesize_narrative_backstop_if_needed(
     built: DiagnosisOutput, output: CharacterizationOutput
 ) -> DiagnosisOutput:
-    """When the diagnose agent dodges by emitting only meta-kind analyses
-    while the bundle has narrative_observations describing closure events
-    or interventions, synthesize deterministic claims from those
-    narratives so the diagnosis isn't empty.
+    """When the diagnose agent emits zero hypothesizable claims (either
+    only meta-kind analyses, or fully empty) while the bundle has
+    narrative_observations describing closure events or interventions,
+    synthesize deterministic claims from those narratives so the
+    diagnosis isn't empty.
 
     Each closure_event becomes a FailureClaim (severity=major, basis=
     schema_only, provenance_downgraded=true) citing the source
@@ -1010,8 +1050,8 @@ def _synthesize_narrative_backstop_if_needed(
     the narrative extractor surfaced typed events. No registry or
     priors required.
 
-    Idempotent on re-call: if the agent already emitted any failures or
-    non-meta analyses, this is a no-op.
+    Idempotent on re-call: if the agent already emitted any failures,
+    trends, or non-meta analyses, this is a no-op.
     """
     if not _is_meta_only_emit(built):
         return built
@@ -1101,10 +1141,12 @@ def _synthesize_narrative_backstop_if_needed(
     if not (n_added_failures or n_added_analyses):
         return built
 
+    dodge_kind = "empty" if not built.analysis else "meta-only"
     _log.warning(
-        "backstop: agent emit was meta-only with %d closure_events / %d "
+        "backstop: agent emit was %s with %d closure_events / %d "
         "interventions in narrative; synthesized %d failure + %d analysis "
         "claim(s) deterministically",
+        dodge_kind,
         len(closure_events),
         len(interventions),
         n_added_failures,

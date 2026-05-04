@@ -252,23 +252,33 @@ def _rank_finding_ids(
     """Sort findings for the agent prefix.
 
     Order:
-      1. Severity desc (critical > major > minor > info).
-      2. Within severity: aggregated rollups before per-row findings.
+      1. trajectory_pattern findings ALWAYS first (regardless of severity).
+         Trajectory-grounded patterns (cross-batch variance, phase
+         boundaries, outlier batches, correlations) are biology-grounded
+         and computed from real time-series — strictly more debatable
+         than spec-mismatch findings, especially for unknown_process
+         bundles where specs are misaligned. Without this promotion, on
+         IndPenSim-shape bundles the ~80 spec findings crowd them out
+         below the agent's visible cap and diagnose never cites them.
+      2. Severity desc (critical > major > minor > info).
+      3. Within severity: aggregated rollups before per-row findings.
          A rollup carrying N=2242 violations covers more variables and
          carries strictly more information density than a per-row finding
-         that flags one timestep. Without this nudge, a single high-sigma
-         per-row finding crowds out N rollups for other variables.
-      3. Tiebreaker: natural id order (the pipeline already pre-sorted by
-         sigma desc / severity, so this is stable).
+         that flags one timestep.
+      4. Tiebreaker: natural id order (pipeline pre-sorted, stable).
     """
+    from fermdocs_characterize.schema import FindingType
+
     def _key(fid: str) -> tuple:
         if fid not in by_id:
-            return (0, 1, fid)  # missing → lowest priority
+            return (1, 0, 1, fid)  # missing → lowest priority
         f = by_id[fid]
+        is_pattern = f.type == FindingType.TRAJECTORY_PATTERN
         is_aggregated = bool(f.statistics.get("aggregated"))
         return (
+            0 if is_pattern else 1,  # trajectory_pattern wins outright
             -_severity_rank(f.severity),
-            0 if is_aggregated else 1,  # aggregated wins within severity
+            0 if is_aggregated else 1,
             fid,
         )
 
