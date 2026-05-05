@@ -30,6 +30,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from fermdocs.domain.user_question import UserQuestion
 from fermdocs_characterize.flags import ProcessFlag, compute_flags
 from fermdocs_characterize.schema import (
     CharacterizationOutput,
@@ -77,6 +78,13 @@ class AgentContext(BaseModel):
 
     # Findings raw refs; severity rollup computed at serialize time
     finding_ids: list[str] = Field(default_factory=list)
+
+    # User question (PR-A): when the human typed a question at run start,
+    # this carries the typed-and-classified directive. None on legacy runs.
+    # Diagnose's prompt builder reads this and appends a question section
+    # to the system prompt; downstream agents see it via threading
+    # through the hypothesis-stage views.
+    user_question: UserQuestion | None = None
 
 
 def build_agent_context(

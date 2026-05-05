@@ -26,6 +26,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from fermdocs.domain.user_question import UserQuestion
 from fermdocs_characterize.schema import Severity
 from fermdocs_diagnose.schema import (
     ConfidenceBasis,
@@ -569,6 +570,24 @@ class FinalHypothesis(BaseModel):
     supporting_specialists: list[SpecialistRole] = Field(default_factory=list)
     critic_flag: Literal["red", "green"]
     judge_ruled_criticism_valid: bool
+    question_answered: Literal["yes", "partial", "insufficient_data"] | None = Field(
+        default=None,
+        description=(
+            "When the run had a UserQuestion, synthesizer populates this:"
+            " 'yes' = evidence directly addresses the question,"
+            " 'partial' = evidence addresses part of it,"
+            " 'insufficient_data' = bundle doesn't support an answer."
+            " None on runs without a UserQuestion (back-compat)."
+        ),
+    )
+    question_response_summary: str | None = Field(
+        default=None,
+        max_length=800,
+        description=(
+            "One paragraph stating what we learned about the user's"
+            " question. None on runs without a UserQuestion."
+        ),
+    )
 
 
 class RejectedHypothesis(BaseModel):
@@ -611,6 +630,15 @@ class HypothesisInput(BaseModel):
     seed_topics: list[SeedTopic]
     organism: str | None = None
     process_family: str | None = None
+    user_question: UserQuestion | None = Field(
+        default=None,
+        description=(
+            "Set when the human typed a question at run start (PR-A, bias"
+            " posture) or as a follow-up (PR-A2, drive posture). None on"
+            " legacy runs — every downstream agent treats None as 'no"
+            " question, run as today'."
+        ),
+    )
 
 
 class HypothesisOutput(BaseModel):
