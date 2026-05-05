@@ -36,7 +36,11 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from fermdocs_api.runner_pipeline import execute_resume, execute_run
+from fermdocs_api.runner_pipeline import (
+    execute_followup_run,
+    execute_resume,
+    execute_run,
+)
 from fermdocs_api.state import RunStatus, RunStore
 
 
@@ -62,6 +66,17 @@ class Answer(BaseModel):
 
 class AnswersRequest(BaseModel):
     answers: list[Answer]
+
+
+class FollowupRequest(BaseModel):
+    """Body for POST /api/runs/{run_id}/followup (PR-A2 drive posture).
+
+    Only the question is needed — the run already knows its bundle.
+    Same 2000-char cap as the original CreateRunRequest.user_question
+    so users can't bypass the limit by submitting a follow-up.
+    """
+
+    question: str = Field(min_length=1, max_length=2000)
 
 load_dotenv()
 
@@ -151,6 +166,23 @@ def create_app() -> FastAPI:
         output = None
         if output_path and output_path.exists():
             output = json.loads(output_path.read_text())
+        # PR-A2: surface follow-up state. `followups` is a list of
+        # {followup_index, user_question_text, output, created_at}.
+        # `bundle_followup_eligible` lets the frontend hide the textarea
+        # when the bundle has been GC'd (would 410 on POST).
+        followups = [
+            {
+                "followup_index": f.followup_index,
+                "user_question_text": f.user_question_text,
+                "output": (
+                    f.output.model_dump(mode="json")
+                    if hasattr(f.output, "model_dump")
+                    else f.output
+                ),
+                "created_at": f.created_at.isoformat(),
+            }
+            for f in run.followups
+        ]
         return {
             "run_id": run.run_id,
             "upload_id": run.upload_id,
@@ -161,6 +193,9 @@ def create_app() -> FastAPI:
             "global_md": str(run.global_md) if run.global_md else None,
             "error": run.error,
             "output": output,
+            "followups": followups,
+            "followup_index": run.followup_index,
+            "bundle_followup_eligible": run.bundle_followup_eligible,
         }
 
     # ---- live event stream ----
@@ -191,6 +226,51 @@ def create_app() -> FastAPI:
             pass
         finally:
             STORE.unsubscribe(run_id, q)
+
+    # ---- follow-up (drive posture, PR-A2) ----
+
+    @app.post("/api/runs/{run_id}/followup")
+    async def submit_followup(
+        run_id: str, body: FollowupRequest, background: BackgroundTasks
+    ) -> dict:
+        """Drive posture: a DONE run accepts a new question against the
+        same bundle. No re-ingest. Status flips to HYPOTHESIZING and
+        runs the debate cycle once with shape-aware seed topics.
+
+        Returns 404 if the run doesn't exist, 409 if the run isn't DONE,
+        410 Gone if the bundle has been deleted (so frontend can hide
+        the textarea on subsequent loads).
+        """
+        run = STORE.get_run(run_id)
+        if run is None:
+            raise HTTPException(404, f"run {run_id} not found")
+        if run.status != RunStatus.DONE:
+            raise HTTPException(
+                409,
+                f"run {run_id} is in {run.status.value!r}; must be done to follow up",
+            )
+        if not run.bundle_followup_eligible:
+            # Bundle dir is missing — no work to do, no point queueing.
+            raise HTTPException(
+                410, f"run {run_id} bundle is no longer available for follow-up"
+            )
+        question = body.question.strip()
+        if not question:
+            raise HTTPException(400, "question is empty")
+        background.add_task(
+            execute_followup_run,
+            store=STORE,
+            run=run,
+            question_text=question,
+        )
+        # followup_index is incremented by the runner just before work
+        # starts; report the *anticipated* index so the UI can render
+        # "Running follow-up #N" immediately.
+        return {
+            "run_id": run.run_id,
+            "status": "queued",
+            "anticipated_followup_index": run.followup_index + 1,
+        }
 
     # ---- answers (resume) ----
 
