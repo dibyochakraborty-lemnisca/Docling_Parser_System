@@ -106,6 +106,13 @@ SYNTHESIZER_INVARIANTS = (
     "Causal language ('driven by', 'due to', 'caused by') requires positive causal evidence in citations, not just observation of an effect.",
     "If previous_attempts is non-empty, address each prior critic_reason explicitly — do not re-emit the same claim. Narrow the hypothesis if you cannot address a reason cleanly.",
     "If cross_topic_lessons is present, treat each lesson as a standing rule on this attempt's wording.",
+    "CROSS-METRIC TRIANGULATION: when facets cite different metric_ids that"
+    " point at the same conclusion (e.g. kinetics cites A8+A10 for declining"
+    " growth post-144h, metabolic cites B10+B16 for overflow post-36h),"
+    " surface the convergence in your summary: 'metabolic and kinetic"
+    " evidence converge — overflow metabolism (B10) coincides with carbon"
+    " balance failure (B16) and growth arrest (A10) in the same window.'"
+    " Multiple metric_ids triangulating beats a single metric_id alone.",
 )
 
 SYNTHESIZER_TASK = """\

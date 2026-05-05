@@ -50,6 +50,12 @@ priors. Never make causal claims you cannot ground in cited evidence.\
         " explains the topic's findings as data-quality / spec-config / known"
         " artifact, frame your facet to honor that — do NOT re-derive a"
         " process anomaly the analysis already explained away.",
+        "Findings with metric_id are your home turf: A14 (DO margin),"
+        " A15 (controller excursions), A17 (tip speed), A18 (P/V),"
+        " B8/B11/B14/B15 (kLa, OUR, OTR), C3 (Henry C*), C4 (Van't Riet"
+        " kLa), C9 (O2 demand-vs-supply), C13 (dissolved-CO2 inhibition)."
+        " Cite metric_ids in facet summaries; treat catalog math as"
+        " authoritative and don't recompute.",
     ),
     "task_spec": """\
 Read the view, optionally call tools to fetch more data, then contribute

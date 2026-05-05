@@ -59,16 +59,18 @@ def test_ready_entries_resolve_toolkit_fn() -> None:
         assert callable(fn), f"{entry.metric_id} toolkit_fn did not resolve to callable"
 
 
-def test_ready_entries_after_pr2_are_correct_set() -> None:
+def test_ready_entries_after_pr3_are_correct_set() -> None:
     ready_ids = {e.metric_id for e in ready_entries()}
     # PR 1: A8/A9/A10/A11 (kinetics)
     # PR 2: A14/A15/A17/A18 (operational), A19/A20/A21 (cross_run),
     #       B6/B10/B16 (balances)
+    # PR 3: C2/C3/C4/C5/C9/C10 (literature)
     expected = {
         "A8", "A9", "A10", "A11",
         "A14", "A15", "A17", "A18",
         "A19", "A20", "A21",
         "B6", "B10", "B16",
+        "C2", "C3", "C4", "C5", "C9", "C10",
     }
     assert ready_ids == expected
 

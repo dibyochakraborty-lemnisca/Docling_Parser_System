@@ -14,6 +14,12 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+from fermdocs_characterize.agents.metric_catalog import (
+    DATA_QUALITY_METRICS,
+    KINETICS_METRICS,
+    MASS_TRANSFER_METRICS,
+    METABOLIC_METRICS,
+)
 from fermdocs_hypothesis.events import Event
 from fermdocs_hypothesis.ranker import rank_topics
 from fermdocs_hypothesis.schema import (
@@ -84,6 +90,19 @@ def project_orchestrator(
     )
 
 
+_SPECIALIST_METRIC_FAMILY: dict[str, frozenset[str]] = {
+    "kinetics": KINETICS_METRICS,
+    "mass_transfer": MASS_TRANSFER_METRICS,
+    "metabolic": METABOLIC_METRICS,
+    "data_quality": DATA_QUALITY_METRICS,
+}
+
+
+def specialist_metric_ids(role: SpecialistRole) -> frozenset[str]:
+    """Catalog metric_ids this specialist owns. Empty when role isn't mapped."""
+    return _SPECIALIST_METRIC_FAMILY.get(str(role), frozenset())
+
+
 def project_specialist(
     events: Iterable[Event],
     *,
@@ -103,6 +122,7 @@ def project_specialist(
     """
     events_list = list(events)
     domain = specialist_domain_tags(role)
+    metric_family = specialist_metric_ids(role)
     topic_vars = {v.lower() for v in current_topic.affected_variables}
     cited_finding_ids = set(current_topic.cited_finding_ids)
     cited_narrative_ids = set(current_topic.cited_narrative_ids)
@@ -114,6 +134,13 @@ def project_specialist(
         if any(v.lower() in topic_vars for v in f.variables_involved):
             return True
         if any(v.lower() in domain for v in f.variables_involved):
+            return True
+        # Metric_id family routing — trajectory_pattern findings grounded
+        # in catalog entries auto-flow to the matching specialist even
+        # when the topic's variables don't overlap the finding's variables.
+        # This is the "specialist gets every B10 RQ finding because they
+        # own the metabolic family" rule.
+        if f.metric_id and f.metric_id in metric_family:
             return True
         return False
 

@@ -51,6 +51,13 @@ priors. Never make causal claims you cannot ground in cited evidence.\
         " explains the topic's findings as data-quality / spec-config / known"
         " artifact, frame your facet to honor that — do NOT re-derive a"
         " process anomaly the analysis already explained away.",
+        "Findings carrying metric_id from the characterize-stage catalog are"
+        " your home turf: A8 (mu(t)), A9 (doubling time), A10 (phase"
+        " segmentation), A11 (phasewise mu), A13 (phasewise Qp), A23"
+        " (productivity reduction), B10 (RQ + overflow flag). Cite these"
+        " metric_ids in your facet summary so the synthesizer can"
+        " triangulate across specialists; the math is verified, treat the"
+        " numbers as authoritative and don't recompute.",
     ),
     "task_spec": """\
 Read the view, optionally call tools to fetch more data, then contribute

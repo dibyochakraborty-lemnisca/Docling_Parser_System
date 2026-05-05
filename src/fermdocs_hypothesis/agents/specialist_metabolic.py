@@ -52,6 +52,12 @@ priors. Never make causal claims you cannot ground in cited evidence.\
         " explains the topic's findings as data-quality / spec-config / known"
         " artifact, frame your facet to honor that — do NOT re-derive a"
         " process anomaly the analysis already explained away.",
+        "Findings with metric_id are your home turf: B6 (byproduct yield),"
+        " B10 (RQ + overflow flag), B16 (carbon balance closure), B17/B18"
+        " (N + degree-of-reduction balances), C5 (qs vs Verduyn), C6"
+        " (theoretical qp), C7 (maintenance reference), C10 (overflow"
+        " threshold). Cite metric_ids in facet summaries; treat catalog"
+        " math as authoritative and don't recompute.",
     ),
     "task_spec": """\
 Read the view, optionally call tools to fetch more data, then contribute

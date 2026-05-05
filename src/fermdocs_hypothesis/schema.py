@@ -402,6 +402,16 @@ class FindingRef(BaseModel):
     finding_id: str
     summary: str
     variables_involved: list[str] = Field(default_factory=list)
+    metric_id: str | None = Field(
+        default=None,
+        description=(
+            "Stable identifier from fermdocs_characterize.agents.metric_catalog "
+            "when this finding came from a verified toolkit function. Lets the "
+            "hypothesis projector route findings to specialists by domain "
+            "(kinetics/mass_transfer/metabolic) without depending on tag "
+            "string overlap."
+        ),
+    )
 
 
 class NarrativeRef(BaseModel):

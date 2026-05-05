@@ -664,18 +664,13 @@ del _B_READY_IN_PR2
 
 # ---------------- Tier C — literature-assisted (require organism priors) ----------------
 
+_C_READY_IN_PR3 = {"C2", "C3", "C4", "C5", "C9", "C10"}
 
 for _id, _short in [
     ("C1", "Theoretical Yxs from Verduyn yields"),
-    ("C2", "mu_max reference vs observed"),
-    ("C3", "Henry's-law-derived saturation O2 C*"),
-    ("C4", "Van't Riet kLa estimate"),
-    ("C5", "qs estimated from Verduyn yields"),
     ("C6", "Theoretical qp from Yps_max"),
     ("C7", "Maintenance vs Verduyn ms reference"),
     ("C8", "Glucose uptake reference window"),
-    ("C9", "Oxygen demand vs supply ratio"),
-    ("C10", "Overflow threshold (Crabtree / acetate switch)"),
     ("C11", "Heat generation vs metabolic prediction"),
     ("C12", "CO2 stripping efficiency"),
     ("C13", "Dissolved-CO2 inhibition flag"),
@@ -689,15 +684,132 @@ for _id, _short in [
             tier="C",
             short_description=_short,
             long_description=(
-                f"{_short}. Implementation deferred to PR 3. Requires "
-                "fermdocs.domain.process_priors lookup; emits data-gap when "
-                "organism missing from registry."
+                f"{_short}. Implementation pending; not in PR 3 scope. "
+                "Will consume fermdocs.domain.process_priors when wired."
             ),
             applies_to="organism present in process_priors registry",
             output_shape="scalar_with_metadata",
             status="pending",
         )
     )
+
+_register(
+    CatalogEntry(
+        metric_id="C2",
+        tier="C",
+        short_description="Reference mu_max vs observed",
+        long_description=(
+            "Compares observed mu_max from A8 against the organism's prior "
+            "range (variable=mu_x_max_per_h). Flags 'observed mu_max=0.05 "
+            "is 4x below Verduyn 1991 typical 0.20' style claims."
+        ),
+        applies_to="bundles with organism in priors registry + an A8 result",
+        output_shape="scalar_with_metadata",
+        output_columns=("ratio_observed_to_typical", "in_range", "typical"),
+        toolkit_fn="fermdocs_characterize.toolkit.literature:mu_max_reference_vs_observed",
+        status="ready",
+        literature_source="Verduyn 1991; Hensing 1995; per organism in priors",
+    )
+)
+
+_register(
+    CatalogEntry(
+        metric_id="C3",
+        tier="C",
+        short_description="Henry's-law-derived O2 saturation C*",
+        long_description=(
+            "C* = H(T,P) · p_O2 with optional Setschenow salt correction. "
+            "Pure chemistry (no organism prior); audit trail cites Schumpe "
+            "1982 + Sander 2015. Used as input to C9."
+        ),
+        applies_to="any bundle with temperature + pressure recorded",
+        output_shape="scalar_with_metadata",
+        output_columns=("c_star_mg_per_l", "henry_constant_mol_per_l_per_atm"),
+        toolkit_fn="fermdocs_characterize.toolkit.literature:saturation_o2_concentration",
+        status="ready",
+        literature_source="Schumpe 1982; Sander 2015 review",
+    )
+)
+
+_register(
+    CatalogEntry(
+        metric_id="C4",
+        tier="C",
+        short_description="Van't Riet kLa estimate",
+        long_description=(
+            "kLa = α · (P/V)^β · v_s^γ. Defaults α=0.026, β=0.4, γ=0.5 are "
+            "for coalescing aqueous broths (Van't Riet 1979 Table II). "
+            "Combine with A18 P/V for a full estimate."
+        ),
+        applies_to="bundles with computable P/V (A18) + reactor geometry",
+        output_shape="scalar_with_metadata",
+        output_columns=("kla_per_s", "kla_per_h"),
+        toolkit_fn="fermdocs_characterize.toolkit.literature:vant_riet_kla",
+        status="ready",
+        literature_source="Van't Riet 1979 Table II",
+    )
+)
+
+_register(
+    CatalogEntry(
+        metric_id="C5",
+        tier="C",
+        short_description="qs from Verduyn yields",
+        long_description=(
+            "Compares observed specific glucose uptake rate qs against the "
+            "organism's prior range. Returns ratio observed/typical and "
+            "in-range flag. When observed_qs is None, emits the prior "
+            "typical/range as a reference."
+        ),
+        applies_to="bundles with biomass + substrate trajectories AND organism in priors",
+        output_shape="scalar_with_metadata",
+        output_columns=("ratio_observed_to_typical", "typical", "in_range"),
+        toolkit_fn="fermdocs_characterize.toolkit.literature:qs_from_verduyn_yields",
+        status="ready",
+        literature_source="Sonnleitner 1986; Verduyn 1991; per organism",
+    )
+)
+
+_register(
+    CatalogEntry(
+        metric_id="C9",
+        tier="C",
+        short_description="Oxygen demand vs supply ratio",
+        long_description=(
+            "ratio = OUR / [kLa · (C* - DO)]. ratio < 1 = O2 headroom; "
+            "≈1 = O2-transfer limited; >1 = numerically impossible at "
+            "steady state (flags OUR overestimate or kLa underestimate). "
+            "Combine with B10 RQ for full overflow story."
+        ),
+        applies_to="bundles with OUR (B3), kLa (B15 or C4), DO trajectory, C* (C3)",
+        output_shape="scalar_with_metadata",
+        output_columns=("ratio_demand_over_supply", "otr_max_mg_per_l_per_h"),
+        toolkit_fn="fermdocs_characterize.toolkit.literature:oxygen_demand_vs_supply",
+        status="ready",
+        literature_source="Mass-transfer envelope (textbook)",
+    )
+)
+
+_register(
+    CatalogEntry(
+        metric_id="C10",
+        tier="C",
+        short_description="Overflow threshold (Crabtree / acetate switch)",
+        long_description=(
+            "Flags overflow when observed qs exceeds the top of the "
+            "organism's qs prior range. Surfaces both the critical qs and "
+            "the byproduct marker variable (e.g. ethanol_g_l for yeast) "
+            "so the analyzer knows which species to inspect."
+        ),
+        applies_to="bundles with biomass + substrate trajectories AND organism in priors",
+        output_shape="scalar_with_metadata",
+        output_columns=("critical_qs", "overflow_signal", "marker_typical"),
+        toolkit_fn="fermdocs_characterize.toolkit.literature:overflow_threshold",
+        status="ready",
+        literature_source="Sonnleitner 1986; per organism's qs prior",
+    )
+)
+del _C_READY_IN_PR3
 
 
 # -----------------------------------------------------------------------------

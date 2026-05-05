@@ -113,14 +113,25 @@ def _extract_organism_and_family(dossier: dict) -> tuple[str | None, str | None]
 
 
 def _build_findings_pool(char: CharacterizationOutput) -> list[FindingRef]:
-    return [
-        FindingRef(
-            finding_id=f.finding_id,
-            summary=f.summary,
-            variables_involved=list(f.variables_involved),
+    out: list[FindingRef] = []
+    for f in char.findings:
+        # statistics is a free-form dict on Finding; only trajectory_pattern
+        # findings carry metric_id today, set by the trajectory_analyzer
+        # coercer when the pattern is grounded in a ready catalog entry.
+        metric_id = None
+        if isinstance(f.statistics, dict):
+            raw = f.statistics.get("metric_id")
+            if isinstance(raw, str) and raw:
+                metric_id = raw
+        out.append(
+            FindingRef(
+                finding_id=f.finding_id,
+                summary=f.summary,
+                variables_involved=list(f.variables_involved),
+                metric_id=metric_id,
+            )
         )
-        for f in char.findings
-    ]
+    return out
 
 
 def _build_narratives_pool(char: CharacterizationOutput) -> list[NarrativeRef]:
