@@ -609,6 +609,16 @@ class FinalHypothesis(BaseModel):
             " question. None on runs without a UserQuestion."
         ),
     )
+    parent_hypothesis_ids: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Hypotheses (by hyp_id) from a prior run on the same bundle that"
+            " this hypothesis refines or contradicts. Populated only on"
+            " follow-up runs (PR-A2, drive posture). Empty on the original"
+            " run and on legacy runs. Frontend uses this to render an"
+            " '↑ refines H-NNNN' link between chained cards."
+        ),
+    )
 
 
 class RejectedHypothesis(BaseModel):

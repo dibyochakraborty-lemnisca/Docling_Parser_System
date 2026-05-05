@@ -51,6 +51,23 @@ class Upload:
 
 
 @dataclass
+class FollowupResult:
+    """One follow-up question + its hypothesis output, appended to a Run.
+
+    PR-A2 on hitl-followup. Drive posture: after a run reaches DONE, the
+    user can submit a follow-up question against the *same* bundle (no
+    re-ingest). Each follow-up produces its own HypothesisOutput, stored
+    here in order. The bundle's user_question.json holds only the most
+    recent question; full history lives in Run.followups.
+    """
+
+    followup_index: int  # 1-indexed
+    user_question_text: str
+    output: Any  # HypothesisOutput; loose to avoid a cross-package import here
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass
 class Run:
     run_id: str
     upload_id: str
@@ -63,9 +80,29 @@ class Run:
     # PR-A on caisc-hitl: optional human-typed question that biases the
     # debate. Empty string and None both mean "no question, run as today".
     user_question_text: str | None = None
+    # PR-A2 on hitl-followup: ordered follow-up results (drive posture).
+    # Empty for runs that never received a follow-up. Lives in-memory only;
+    # API restart wipes follow-up history (matches today's Run lifetime).
+    followups: list[FollowupResult] = field(default_factory=list)
+    # 0 means "no follow-ups yet". Incremented before each execute_followup_run
+    # so the FollowupResult records which # it is. Equals len(followups)
+    # after the run completes; may briefly be ahead while a follow-up is
+    # in-flight (status=HYPOTHESIZING and followup_index > 0 means
+    # "running follow-up #N").
+    followup_index: int = 0
     # Live event subscribers — WebSockets connect and receive future events.
     # We keep one queue per subscriber.
     subscribers: list[asyncio.Queue] = field(default_factory=list, repr=False)
+
+    @property
+    def bundle_followup_eligible(self) -> bool:
+        """True iff a follow-up against this run could succeed today.
+
+        Follow-up requires the bundle still on disk; retention/GC may
+        delete bundle_dir between original run and follow-up. Frontend
+        uses this to hide the follow-up textarea when it would 410 Gone.
+        """
+        return self.bundle_dir is not None and self.bundle_dir.exists()
 
 
 class RunStore:
@@ -125,6 +162,17 @@ class RunStore:
         return sorted(
             self._runs.values(), key=lambda r: r.created_at, reverse=True
         )
+
+    # ---- follow-ups (PR-A2) ----
+
+    def add_followup(self, run_id: str, result: FollowupResult) -> None:
+        """Append a FollowupResult to a run. Caller is responsible for
+        having already incremented run.followup_index to result.followup_index
+        before kicking off the work."""
+        run = self._runs.get(run_id)
+        if run is None:
+            raise KeyError(f"unknown run_id {run_id!r}")
+        run.followups.append(result)
 
     # ---- pub/sub ----
 
