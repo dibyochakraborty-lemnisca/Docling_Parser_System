@@ -127,6 +127,104 @@ SYNTHESIZER_INVARIANTS = (
     " — back-compat with legacy runs.",
 )
 
+def make_followup_invariants(view: SynthesizerView) -> tuple[str, ...]:
+    """Drive-posture rules layered on top of SYNTHESIZER_INVARIANTS.
+
+    Fires only when the view's user_question came in as a follow-up
+    (raised_by='user_followup'). Returns shape-specific guidance:
+
+      - mechanistic: frame as 'X is/isn't consistent with the evidence
+        because…'. Don't restate the mechanism — test it. Cite FOR
+        AND AGAINST evidence in the same hypothesis.
+      - comparative: structure the summary as a side-by-side. Both
+        groups must be present, with the contrast explicit.
+      - scoping (USER_SCOPE source_type, the empty-filter case):
+        EMIT a single hypothesis with question_answered='insufficient_data'
+        and a question_response_summary listing the available runs and
+        variables. Do not invent topics.
+      - scoping (in-scope topic): narrow strictly to the cited scope.
+        Don't extrapolate to runs/variables the user didn't ask about.
+      - open: lighter touch — don't redo work the user already saw
+        in earlier accepted hypotheses; build on or contradict them.
+
+    Returns an empty tuple on bias-posture runs (raised_by != 'user_followup')
+    so back-compat is preserved.
+    """
+    q = view.user_question
+    if q is None or q.raised_by != "user_followup":
+        return ()
+
+    rules: list[str] = [
+        "FOLLOW-UP MODE (raised_by='user_followup'): the user is driving"
+        " the debate, not biasing it. Your hypothesis is the ANSWER to"
+        " their follow-up question, not a survey of the bundle.",
+    ]
+
+    # Topic source_type encodes the shape branch picked in commit 3.
+    src = view.current_topic.source_type
+    src_value = src.value if hasattr(src, "value") else str(src)
+
+    if q.shape == "mechanistic" or src_value == "user_mechanism":
+        rules.append(
+            "MECHANISTIC SHAPE: the user proposed a mechanism. Frame your"
+            " summary as 'mechanism X is/isn't consistent with the cited"
+            " evidence because Y'. Do NOT restate the mechanism without"
+            " testing it — that's a rejection. Cite FOR evidence (findings"
+            " / narratives consistent with the mechanism) AND AGAINST"
+            " evidence (findings inconsistent with it) in the SAME"
+            " hypothesis. If the bundle can't actually test the mechanism"
+            " (e.g. no data on the relevant variable), set"
+            " question_answered='insufficient_data' instead of faking a"
+            " test."
+        )
+    elif q.shape == "comparative" or src_value == "user_comparison":
+        rules.append(
+            "COMPARATIVE SHAPE: structure the summary as a side-by-side."
+            " Both named groups MUST appear. Format: 'In Group A, X. In"
+            " Group B, Y. The difference is Z, supported by [citations].'"
+            " A summary that describes only one side is a rejection."
+            " If one of the named groups doesn't exist in the bundle,"
+            " set question_answered='insufficient_data' and list the"
+            " available runs."
+        )
+    elif src_value == "user_scope":
+        # D3 empty-filter case — synthesize the insufficient_data response.
+        rules.append(
+            "USER_SCOPE EMPTY-MATCH: the user's scope did not match any"
+            " bundle topic. Emit ONE FinalHypothesis with"
+            " question_answered='insufficient_data'. The"
+            " question_response_summary must (a) acknowledge the scope"
+            " mismatch, (b) list the bundle's available runs and"
+            " variables (read them from view.facets and"
+            " view.citation_universe), and (c) suggest the closest"
+            " in-scope angles the user could re-ask. Confidence = 0.0,"
+            " confidence_basis='schema_only', and at least one citation"
+            " from the bundle to satisfy the citation invariant — pick"
+            " any finding/narrative."
+        )
+    elif q.shape == "scoping":
+        rules.append(
+            "SCOPING SHAPE (in-scope topic): narrow your hypothesis"
+            " STRICTLY to the user's cited scope (affected_runs /"
+            " affected_variables). Do NOT extrapolate to other runs or"
+            " variables. If the topic's evidence spans more than the"
+            " user's scope, drop the out-of-scope citations. The user"
+            " asked a focused question; answer the focused question."
+        )
+    elif q.shape == "open":
+        rules.append(
+            "OPEN-SHAPE FOLLOW-UP: this is a re-framing. Don't redo work"
+            " the user already saw in earlier accepted hypotheses (look"
+            " for hyp_ids in citation_universe / view context). Build on"
+            " or explicitly contradict prior conclusions. If your"
+            " summary would re-derive an accepted hypothesis verbatim,"
+            " populate parent_hypothesis_ids with the prior hyp_id and"
+            " add the new framing — don't pretend it's novel."
+        )
+
+    return tuple(rules)
+
+
 SYNTHESIZER_TASK = """\
 Read the facets and citation_universe. Emit one HypothesisFull that
 integrates all facets.
@@ -211,9 +309,12 @@ class SynthesizerAgent:
         self._client = client
 
     def synthesize(self, view: SynthesizerView, *, hyp_id: str) -> SynthesizerResult:
+        # Drive-posture rules append-only on follow-up runs. Empty tuple
+        # on bias-posture / legacy runs → identical prompt to PR-A.
+        invariants = SYNTHESIZER_INVARIANTS + make_followup_invariants(view)
         parts = build_prompt(
             system_identity=SYNTHESIZER_SYSTEM,
-            invariants=SYNTHESIZER_INVARIANTS,
+            invariants=invariants,
             task_spec=SYNTHESIZER_TASK,
             view_obj=view,
             tool_hints=SYNTHESIZER_TOOL_HINTS,
