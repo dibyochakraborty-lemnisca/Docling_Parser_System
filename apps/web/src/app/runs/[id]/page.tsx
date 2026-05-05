@@ -9,6 +9,8 @@ import {
   eventStreamUrl,
   getRun,
   submitAnswers,
+  submitFollowup,
+  type FollowupResultDTO,
   type RunDetail,
 } from "@/lib/api";
 import { Timeline } from "@/components/Timeline";
@@ -22,6 +24,10 @@ export default function RunPage({ params }: { params: { id: string } }) {
   >([]);
   const [submitting, setSubmitting] = useState(false);
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  // PR-A2: follow-up textarea state
+  const [followupQuestion, setFollowupQuestion] = useState("");
+  const [followupSubmitting, setFollowupSubmitting] = useState(false);
+  const [followupError, setFollowupError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   // Poll run status
@@ -72,6 +78,27 @@ export default function RunPage({ params }: { params: { id: string } }) {
     };
   }, [runId]);
 
+  async function onSubmitFollowup() {
+    const q = followupQuestion.trim();
+    if (!q) return;
+    setFollowupSubmitting(true);
+    setFollowupError(null);
+    try {
+      await submitFollowup(runId, q);
+      setFollowupQuestion("");
+      // Immediate refresh so the badge can flip to "Running follow-up #N"
+      // ahead of the next 2-second poll.
+      try {
+        const r = await getRun(runId);
+        setRun(r);
+      } catch {}
+    } catch (e: any) {
+      setFollowupError(e?.message ?? "Submission failed");
+    } finally {
+      setFollowupSubmitting(false);
+    }
+  }
+
   async function onSubmit() {
     if (!run?.output) return;
     const payload = run.output.open_questions
@@ -92,6 +119,14 @@ export default function RunPage({ params }: { params: { id: string } }) {
   }
 
   const unresolved = (run.output?.open_questions ?? []).filter((q) => !q.resolved);
+  const followups = run.followups ?? [];
+  const followupIndex = run.followup_index ?? 0;
+  const followupEligible = run.bundle_followup_eligible ?? false;
+  const isRunningFollowup =
+    run.status === "hypothesizing" && followupIndex > 0;
+  const statusLabel = isRunningFollowup
+    ? `Running follow-up #${followupIndex}`
+    : run.status;
 
   return (
     <div className="space-y-8">
@@ -100,7 +135,7 @@ export default function RunPage({ params }: { params: { id: string } }) {
           <h1 className="text-2xl font-semibold">Run {run.run_id.slice(0, 8)}</h1>
           <p className="text-sm text-muted-foreground">{run.run_id}</p>
         </div>
-        <Badge>{run.status}</Badge>
+        <Badge>{statusLabel}</Badge>
       </header>
 
       {run.error && (
@@ -171,6 +206,111 @@ export default function RunPage({ params }: { params: { id: string } }) {
               </CardContent>
             </Card>
           ))}
+        </section>
+      )}
+
+      {/* Follow-up cards (PR-A2 drive posture) */}
+      {followups.length > 0 && (
+        <section className="space-y-4">
+          <div className="border-t pt-4" />
+          <h2 className="text-lg font-semibold">Follow-ups</h2>
+          {followups.map((f: FollowupResultDTO) => (
+            <div key={f.followup_index} className="space-y-2">
+              <div className="text-sm">
+                <span className="font-medium">Follow-up #{f.followup_index}:</span>{" "}
+                <span className="italic text-muted-foreground">
+                  {f.user_question_text}
+                </span>
+              </div>
+              {f.output?.final_hypotheses?.map((h) => (
+                <Card key={h.hyp_id}>
+                  <CardHeader>
+                    <div className="flex items-center justify-between">
+                      <CardTitle className="font-mono text-sm">{h.hyp_id}</CardTitle>
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline">{h.confidence_basis}</Badge>
+                        <Badge variant="success">conf {h.confidence.toFixed(2)}</Badge>
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    {h.question_answered && (
+                      <div className="mb-3 rounded-md border bg-accent/40 px-3 py-2">
+                        <div className="flex items-center gap-2 text-xs">
+                          <span className="font-medium">Your follow-up:</span>
+                          <Badge
+                            variant={
+                              h.question_answered === "yes"
+                                ? "success"
+                                : h.question_answered === "partial"
+                                ? "warning"
+                                : "secondary"
+                            }
+                          >
+                            {h.question_answered === "yes"
+                              ? "Answered"
+                              : h.question_answered === "partial"
+                              ? "Partially answered"
+                              : "Insufficient data"}
+                          </Badge>
+                        </div>
+                        {h.question_response_summary && (
+                          <p className="mt-2 text-sm leading-relaxed">
+                            {h.question_response_summary}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    <p className="text-sm leading-relaxed">{h.summary}</p>
+                  </CardContent>
+                </Card>
+              ))}
+              {(f.output?.final_hypotheses?.length ?? 0) === 0 && (
+                <p className="text-xs text-muted-foreground italic">
+                  No final hypothesis was emitted for this follow-up.
+                </p>
+              )}
+            </div>
+          ))}
+        </section>
+      )}
+
+      {/* Follow-up textarea (PR-A2). Shown only when run is DONE and the
+          bundle is still on disk. Hidden during follow-up runs and when
+          the bundle has been GC'd. */}
+      {run.status === "done" && followupEligible && (
+        <section>
+          <Card>
+            <CardHeader>
+              <CardTitle>Ask a follow-up question</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-xs text-muted-foreground">
+                The bundle is frozen — no re-ingest. Your follow-up runs the
+                hypothesis stage again with shape-aware seeding.
+              </p>
+              <Textarea
+                placeholder="e.g. Focus on RUN-0002's RQ peak — was it a sensor artifact?"
+                value={followupQuestion}
+                onChange={(e) => setFollowupQuestion(e.target.value)}
+                maxLength={2000}
+              />
+              {followupError && (
+                <p className="text-sm text-destructive">{followupError}</p>
+              )}
+              <div className="flex items-center gap-3">
+                <Button
+                  onClick={onSubmitFollowup}
+                  disabled={followupSubmitting || !followupQuestion.trim()}
+                >
+                  {followupSubmitting ? "Submitting…" : "Submit follow-up"}
+                </Button>
+                <span className="text-xs text-muted-foreground">
+                  {followupQuestion.length}/2000
+                </span>
+              </div>
+            </CardContent>
+          </Card>
         </section>
       )}
 

@@ -22,11 +22,23 @@ export interface RunSummary {
   error: string | null;
 }
 
+export interface FollowupResultDTO {
+  followup_index: number;
+  user_question_text: string;
+  output: HypothesisOutput | null;
+  created_at: string;
+}
+
 export interface RunDetail extends RunSummary {
   bundle_dir: string | null;
   hypothesis_dir: string | null;
   global_md: string | null;
   output: HypothesisOutput | null;
+  // PR-A2 drive posture: follow-up question history + eligibility flag.
+  // Legacy runs (pre-PR-A2) return [] / 0 / true-when-bundle-present.
+  followups?: FollowupResultDTO[];
+  followup_index?: number;
+  bundle_followup_eligible?: boolean;
 }
 
 export interface OpenQuestion {
@@ -130,6 +142,30 @@ export async function listRuns(): Promise<{ runs: RunSummary[] }> {
 export async function getRun(runId: string): Promise<RunDetail> {
   const r = await fetch(`${BASE}/runs/${runId}`, { cache: "no-store" });
   if (!r.ok) throw new Error(`getRun failed: ${r.status}`);
+  return r.json();
+}
+
+export async function submitFollowup(
+  runId: string,
+  question: string,
+): Promise<{
+  run_id: string;
+  status: string;
+  anticipated_followup_index: number;
+}> {
+  const r = await fetch(`${BASE}/runs/${runId}/followup`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question: question.trim() }),
+  });
+  if (!r.ok) {
+    let detail = `${r.status}`;
+    try {
+      const text = await r.text();
+      detail = `${r.status}: ${text}`;
+    } catch {}
+    throw new Error(`submitFollowup failed: ${detail}`);
+  }
   return r.json();
 }
 
