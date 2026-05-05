@@ -261,10 +261,17 @@ def _apply_soft_enforcement(
         prior is loaded for any of its affected_variables (Plan A Stage 3)
       - provenance downgrade when claim cites statistical_toolkit but none
         of its cited findings actually carry a metric_id (PR 4)
+      - PROVENANCE UPGRADE: schema_only → statistical_toolkit when every
+        cited finding came from a verified catalog toolkit_fn. The diagnose
+        prompt asks the LLM to do this itself; production runs show models
+        often default to schema_only out of caution. Server-side upgrade
+        keeps the audit trail honest without trusting the model to follow
+        the rule.
       - forbidden-phrase warn
     """
     updates: dict = {}
     downgrade_reason: str | None = None
+    upgrade_reason: str | None = None
     target_basis = ConfidenceBasis.SCHEMA_ONLY
 
     if (
@@ -293,6 +300,20 @@ def _apply_soft_enforcement(
             "no cited finding carries a catalog metric_id"
         )
 
+    elif (
+        claim.confidence_basis == ConfidenceBasis.SCHEMA_ONLY
+        and statistical_finding_ids is not None
+        and claim.cited_finding_ids
+        and set(claim.cited_finding_ids).issubset(statistical_finding_ids)
+    ):
+        # Every cited finding came from a verified toolkit function.
+        # Upgrade so downstream consumers know the math is reproducible.
+        upgrade_reason = (
+            f"all {len(claim.cited_finding_ids)} cited findings are "
+            "catalog-grounded (extracted_via=statistical, metric_id present)"
+        )
+        target_basis = ConfidenceBasis.STATISTICAL_TOOLKIT
+
     if downgrade_reason is not None:
         _log.warning(
             "claim %s used %s but %s — downgrading to %s",
@@ -303,6 +324,17 @@ def _apply_soft_enforcement(
         )
         updates["confidence_basis"] = target_basis
         updates["provenance_downgraded"] = True
+    elif upgrade_reason is not None:
+        _log.info(
+            "claim %s upgrading %s → %s: %s",
+            claim.claim_id,
+            claim.confidence_basis.value,
+            target_basis.value,
+            upgrade_reason,
+        )
+        updates["confidence_basis"] = target_basis
+        # provenance_downgraded stays False — this is an upgrade, not a
+        # safety downgrade.
 
     forbidden = _scan_forbidden_phrases(claim.summary)
     if forbidden:

@@ -35,6 +35,7 @@ from fermdocs_characterize.agent_context import (
 )
 from fermdocs_characterize.schema import (
     CharacterizationOutput,
+    ExtractedVia,
     NarrativeTag,
     Severity,
 )
@@ -225,6 +226,26 @@ _BUNDLE_SYSTEM_PROMPT = (
     "     failure. An empty failures list is correct only when, after\n"
     "     looking at the data, you genuinely see no anomalies — which is\n"
     "     rare on real industrial data and unlikely here.\n"
+    "     STATISTICAL-FINDINGS CONTRACT: if get_findings() returns one or\n"
+    "     more findings with extracted_via='statistical' AND\n"
+    "     statistics.metric_id present (catalog-grounded toolkit math from\n"
+    "     characterize), you MUST emit at least one non-meta claim —\n"
+    "     failure, trend, or non-meta analysis — that cites them. The math\n"
+    "     came from a verified function; the audit trail is reproducible;\n"
+    "     surfacing the numbers is your job. Emitting only open_questions\n"
+    "     while statistical findings exist is a CONTRACT VIOLATION.\n"
+    "     Concrete examples of what TO emit:\n"
+    "       - 'Trend D-T-0001: μ_max ranged 0.043-0.076 1/h across 5 runs\n"
+    "         (cited F-0001..F-0005, all metric_id=A8); 3x below Verduyn\n"
+    "         1991 typical 0.20 (cited F-0010, metric_id=C2).'\n"
+    "       - 'Failure D-F-0001: B16 carbon balance closure 34.7% in\n"
+    "         RUN-0002 (cited F-0121); 65% of carbon unaccounted for by\n"
+    "         biomass alone.'\n"
+    "       - 'Analysis D-A-0001 kind=cross_run_observation: B10 RQ\n"
+    "         peaked at 52.89 in RUN-0001 vs 3.90 in RUN-0002 (cited\n"
+    "         F-0103/F-0104).'\n"
+    "     A statistical finding with a real number is ALWAYS at least a\n"
+    "     trend even when you can't decide failure-vs-normal. Surface it.\n"
     "     META-CLAIM CONTRACT: AnalysisClaim kinds 'data_quality_caveat'\n"
     "     and 'spec_alignment' are META observations (about the data /\n"
     "     system configuration), not about the experiment. If your output\n"
@@ -1092,13 +1113,31 @@ def _synthesize_narrative_backstop_if_needed(
         for n in output.narrative_observations
         if n.tag == NarrativeTag.INTERVENTION
     ]
-    if not closure_events and not interventions:
+    # Statistical findings the agent failed to surface even though they
+    # carry verified toolkit math. We treat metric_id-tagged
+    # extracted_via=statistical findings as backstop-able evidence: the
+    # numbers came from a deterministic function, the audit trail is
+    # reproducible, the agent has no excuse not to mention them.
+    catalog_findings = [
+        f
+        for f in output.findings
+        if (
+            f.extracted_via == ExtractedVia.STATISTICAL
+            and isinstance(f.statistics, dict)
+            and f.statistics.get("metric_id")
+            # Skip data-gap entries — they're informational, not anomalies.
+            and f.statistics.get("pattern_kind") != "data_gap"
+        )
+    ]
+    if not closure_events and not interventions and not catalog_findings:
         # Agent's meta-only output is appropriate — there's no narrative
-        # signal to ground a non-meta claim on. Pass through unchanged.
+        # OR statistical signal to ground a non-meta claim on. Pass
+        # through unchanged.
         return built
 
     synth_failures: list[FailureClaim] = list(built.failures)
     synth_analyses: list[AnalysisClaim] = list(built.analysis)
+    synth_trends: list[TrendClaim] = list(built.trends)
 
     next_failure_idx = len(synth_failures) + 1
     for n in closure_events:
@@ -1162,27 +1201,83 @@ def _synthesize_narrative_backstop_if_needed(
                 "backstop: dropping synthesized intervention AnalysisClaim: %s", e
             )
 
+    # Statistical-findings backstop: one TrendClaim per metric_id, citing
+    # all findings of that metric_id from this bundle. Keeps the claim
+    # count proportional to the catalog dimensions actually exercised
+    # (not one trend per run × variable, which would explode).
+    findings_by_metric: dict[str, list] = {}
+    for f in catalog_findings:
+        mid = str(f.statistics.get("metric_id"))
+        findings_by_metric.setdefault(mid, []).append(f)
+
+    next_trend_idx = len(synth_trends) + 1
+    for metric_id, group in sorted(findings_by_metric.items()):
+        cited_ids = [f.finding_id for f in group]
+        # Concatenate the first ~3 finding summaries so the trend has a
+        # meaningful body. Cap to avoid ballooning the summary.
+        joined = "; ".join(g.summary[:120] for g in group[:3])
+        if len(group) > 3:
+            joined += f" (and {len(group) - 3} more)"
+        # Direction is descriptive when ambiguous — agent can override on
+        # re-run. "stable" reads as "we surfaced this; downstream judges
+        # whether it's normal or anomalous".
+        try:
+            synth_trends.append(
+                TrendClaim(
+                    claim_id=f"D-T-{next_trend_idx:04d}",
+                    summary=(
+                        f"Catalog metric {metric_id}: {joined}"[:500]
+                    ),
+                    cited_finding_ids=cited_ids,
+                    cited_narrative_ids=[],
+                    cited_trajectories=[],
+                    affected_variables=sorted({
+                        v
+                        for g in group
+                        for v in (g.variables_involved or [])
+                    }),
+                    confidence=0.8,
+                    confidence_basis=ConfidenceBasis.STATISTICAL_TOOLKIT,
+                    domain_tags=[],
+                    direction="plateau",
+                    provenance_downgraded=False,
+                    time_window=None,
+                )
+            )
+            next_trend_idx += 1
+        except ValueError as e:
+            _log.warning(
+                "backstop: dropping synthesized statistical TrendClaim for %s: %s",
+                metric_id,
+                e,
+            )
+
     n_added_failures = len(synth_failures) - len(built.failures)
     n_added_analyses = len(synth_analyses) - len(built.analysis)
-    if not (n_added_failures or n_added_analyses):
+    n_added_trends = len(synth_trends) - len(built.trends)
+    if not (n_added_failures or n_added_analyses or n_added_trends):
         return built
 
     dodge_kind = "empty" if not built.analysis else "meta-only"
     _log.warning(
         "backstop: agent emit was %s with %d closure_events / %d "
-        "interventions in narrative; synthesized %d failure + %d analysis "
-        "claim(s) deterministically",
+        "interventions / %d catalog metric_id groups in upstream; "
+        "synthesized %d failure + %d analysis + %d trend claim(s) "
+        "deterministically",
         dodge_kind,
         len(closure_events),
         len(interventions),
+        len(findings_by_metric),
         n_added_failures,
         n_added_analyses,
+        n_added_trends,
     )
 
     return built.model_copy(
         update={
             "failures": synth_failures,
             "analysis": synth_analyses,
+            "trends": synth_trends,
         }
     )
 
