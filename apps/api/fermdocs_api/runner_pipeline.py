@@ -45,7 +45,7 @@ from fermdocs_hypothesis.live_hooks import LiveHooks
 from fermdocs_hypothesis.runner import resume_stage, run_stage
 from fermdocs_hypothesis.schema import BudgetSnapshot
 
-from fermdocs_api.state import Run, RunStatus, RunStore, Upload
+from fermdocs_api.state import FollowupResult, Run, RunStatus, RunStore, Upload
 
 _log = logging.getLogger(__name__)
 
@@ -142,31 +142,175 @@ async def execute_resume(
             run.run_id, {"type": "error", "status": run.status.value, "error": run.error}
         )
         return
+
+    bundle_dir = run.bundle_dir
+    global_md = run.global_md
+    hypothesis_dir = run.hypothesis_dir
+
+    def _do_work():
+        return _resume_hypothesis_blocking(bundle_dir, global_md, answers)
+
+    def _on_success(result) -> None:
+        if hypothesis_dir is not None:
+            (hypothesis_dir / "hypothesis_output.json").write_text(
+                json.dumps(result.output.model_dump(mode="json"), indent=2, default=str)
+            )
+        unresolved = [q for q in result.output.open_questions if not q.resolved]
+        run.status = RunStatus.PAUSED if unresolved else RunStatus.DONE
+
+    await _run_hypothesis_with_lifecycle(
+        store=store,
+        run=run,
+        target_status=RunStatus.RESUMING,
+        global_md=global_md,
+        do_blocking_work=_do_work,
+        on_success=_on_success,
+        log_label="resume",
+    )
+
+
+async def execute_followup_run(
+    *,
+    store: RunStore,
+    run: Run,
+    question_text: str,
+) -> None:
+    """Background task: run a follow-up question against an already-DONE run.
+
+    Drive posture (PR-A2). Bundle is frozen — we DO NOT re-run
+    ingest/characterize/diagnose. Only the hypothesis stage fires, with
+    the new user_question.json overwriting the prior one in the bundle.
+
+    Caller is responsible for asserting `run.status == DONE` and
+    `run.bundle_followup_eligible` *before* spawning this task; we re-
+    assert here as a defense-in-depth invariant.
+    """
+    if run.bundle_dir is None or run.global_md is None:
+        run.status = RunStatus.FAILED
+        run.error = "run has no bundle for follow-up"
+        await store.publish(
+            run.run_id, {"type": "error", "status": run.status.value, "error": run.error}
+        )
+        return
+    if not run.bundle_dir.exists():
+        run.status = RunStatus.FAILED
+        run.error = f"bundle_dir {run.bundle_dir} no longer exists on disk"
+        await store.publish(
+            run.run_id, {"type": "error", "status": run.status.value, "error": run.error}
+        )
+        return
+
+    bundle_dir = run.bundle_dir
+    global_md = run.global_md
+    hypothesis_dir = run.hypothesis_dir
+
+    # Increment first so any concurrent GET sees status=HYPOTHESIZING +
+    # followup_index=N "running follow-up #N" before the work starts.
+    run.followup_index += 1
+    this_index = run.followup_index
+
+    # Classify the new question against the bundle's actual run_ids/variables
+    # (same path as PR-A's _classify_and_persist_user_question, but with
+    # raised_by="user_followup" baked in by question_classifier).
+    char_path = bundle_dir / "characterization.json"
+    if not char_path.exists():
+        # Some legacy bundles don't ship characterization.json next to
+        # meta.json — try the standard nested location.
+        alt = bundle_dir / "characterization" / "characterization.json"
+        if alt.exists():
+            char_path = alt
     try:
-        run.status = RunStatus.RESUMING
-        await store.publish(run.run_id, {"type": "status", "status": run.status.value})
+        await asyncio.to_thread(
+            _classify_and_persist_followup_question,
+            question_text=question_text,
+            bundle_dir=bundle_dir,
+            char_path=char_path,
+        )
+    except Exception as exc:
+        _log.warning(
+            "follow-up classification failed (%s: %s); continuing with raw text",
+            exc.__class__.__name__, str(exc)[:200],
+        )
+
+    def _do_work():
+        return _run_hypothesis_blocking(bundle_dir, global_md)
+
+    def _on_success(result) -> None:
+        if hypothesis_dir is not None:
+            # Per-followup output file so prior follow-up outputs don't clobber.
+            out_path = hypothesis_dir / f"hypothesis_output_followup_{this_index}.json"
+            out_path.write_text(
+                json.dumps(result.output.model_dump(mode="json"), indent=2, default=str)
+            )
+        store.add_followup(
+            run.run_id,
+            FollowupResult(
+                followup_index=this_index,
+                user_question_text=question_text,
+                output=result.output,
+            ),
+        )
+        # Follow-ups don't honor open_questions → PAUSED — drive posture
+        # treats the answer as terminal. Goes straight back to DONE so
+        # the user can submit yet another follow-up.
+        run.status = RunStatus.DONE
+
+    await _run_hypothesis_with_lifecycle(
+        store=store,
+        run=run,
+        target_status=RunStatus.HYPOTHESIZING,
+        global_md=global_md,
+        do_blocking_work=_do_work,
+        on_success=_on_success,
+        log_label="follow-up",
+        extra_status_payload={"followup_index": this_index},
+    )
+
+
+async def _run_hypothesis_with_lifecycle(
+    *,
+    store: RunStore,
+    run: Run,
+    target_status: RunStatus,
+    global_md: Path,
+    do_blocking_work,
+    on_success,
+    log_label: str,
+    extra_status_payload: dict | None = None,
+) -> None:
+    """Shared skeleton for execute_resume and execute_followup_run.
+
+    Pattern:
+        set status → publish status → start watcher → run blocking work
+        → cancel watcher → on_success(result) → publish result event
+        on exception → set FAILED → publish error event
+
+    execute_run is intentionally NOT routed through this — its bundle-prep
+    stages have unique status hops and are well-tested; refactoring them
+    here would risk regressing PR-A's pipeline path for no DRY win on the
+    skeleton we're trying to dedupe.
+    """
+    try:
+        run.status = target_status
+        status_event = {"type": "status", "status": run.status.value}
+        if extra_status_payload:
+            status_event.update(extra_status_payload)
+        await store.publish(run.run_id, status_event)
 
         watcher_task = asyncio.create_task(
             _watch_global_md(
-                store=store, run=run, global_md=run.global_md, start_from_eof=True
+                store=store, run=run, global_md=global_md, start_from_eof=True
             )
         )
-        result = await asyncio.to_thread(
-            _resume_hypothesis_blocking, run.bundle_dir, run.global_md, answers
-        )
+        result = await asyncio.to_thread(do_blocking_work)
         watcher_task.cancel()
         try:
             await watcher_task
         except asyncio.CancelledError:
             pass
 
-        if run.hypothesis_dir is not None:
-            (run.hypothesis_dir / "hypothesis_output.json").write_text(
-                json.dumps(result.output.model_dump(mode="json"), indent=2, default=str)
-            )
+        on_success(result)
 
-        unresolved = [q for q in result.output.open_questions if not q.resolved]
-        run.status = RunStatus.PAUSED if unresolved else RunStatus.DONE
         await store.publish(
             run.run_id,
             {
@@ -176,13 +320,55 @@ async def execute_resume(
             },
         )
     except Exception as e:
-        _log.exception("resume %s failed", run.run_id)
+        _log.exception("%s %s failed", log_label, run.run_id)
         run.status = RunStatus.FAILED
         run.error = f"{type(e).__name__}: {e}"
         await store.publish(
             run.run_id,
             {"type": "error", "status": run.status.value, "error": run.error},
         )
+
+
+def _classify_and_persist_followup_question(
+    *,
+    question_text: str,
+    bundle_dir: Path,
+    char_path: Path,
+) -> Path:
+    """Same shape as _classify_and_persist_user_question (PR-A) but
+    raised_by='user_followup'. Overwrites bundle/user_question.json.
+    """
+    import json as _json
+
+    from fermdocs_hypothesis.question_classifier import (
+        GeminiQuestionClassifierClient,
+        classify_user_question,
+    )
+
+    if char_path.exists():
+        char_data = _json.loads(char_path.read_text())
+        run_ids = sorted({t.get("run_id") for t in char_data.get("trajectories") or [] if t.get("run_id")})
+        variables = sorted({t.get("variable") for t in char_data.get("trajectories") or [] if t.get("variable")})
+    else:
+        run_ids, variables = [], []
+
+    client: GeminiQuestionClassifierClient | None
+    try:
+        client = GeminiQuestionClassifierClient()
+    except Exception:
+        client = None
+
+    question = classify_user_question(
+        text=question_text,
+        available_run_ids=run_ids,
+        available_variables=variables,
+        client=client,
+        raised_by="user_followup",
+    )
+
+    target = bundle_dir / "user_question.json"
+    target.write_text(_json.dumps(question.model_dump(mode="json"), indent=2))
+    return target
 
 
 # ---------- prepare bundle ----------
