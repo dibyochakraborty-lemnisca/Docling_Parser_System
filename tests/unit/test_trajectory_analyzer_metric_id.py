@@ -106,9 +106,9 @@ def test_unknown_metric_id_falls_back_to_llm_judged() -> None:
 def test_pending_metric_id_falls_back_to_llm_judged() -> None:
     traj = _traj("RUN-0001", "biomass_g_l")
     pattern = {
-        "pattern_kind": "rq_overflow",
-        "metric_id": "B10",  # in catalog, but status="pending" until PR 2
-        "summary": "RUN-0001 RQ jumped to 1.4 at t=36h",
+        "pattern_kind": "kla_pending",
+        "metric_id": "B11",  # in catalog, status="pending" until PR 3
+        "summary": "RUN-0001 kLa estimate pending",
         "run_ids": ["RUN-0001"],
         "variables_involved": ["biomass_g_l"],
         "confidence": 0.9,
@@ -117,7 +117,7 @@ def test_pending_metric_id_falls_back_to_llm_judged() -> None:
     [finding] = _coerce(pattern, traj)
     assert finding.extracted_via == ExtractedVia.LLM_JUDGED
     assert finding.confidence == LLM_CONFIDENCE_CAP
-    assert finding.statistics["metric_id"] == "B10"
+    assert finding.statistics["metric_id"] == "B11"
     # tier still picked up from catalog even for pending entries — it's
     # an audit-friendly default.
     assert finding.statistics["tier"] == "B"

@@ -59,10 +59,18 @@ def test_ready_entries_resolve_toolkit_fn() -> None:
         assert callable(fn), f"{entry.metric_id} toolkit_fn did not resolve to callable"
 
 
-def test_pr1_ready_entries_are_kinetics() -> None:
+def test_ready_entries_after_pr2_are_correct_set() -> None:
     ready_ids = {e.metric_id for e in ready_entries()}
-    # PR 1 ships A8 (mu), A9 (doubling), A10 (phases), A11 (phasewise mu)
-    assert ready_ids == {"A8", "A9", "A10", "A11"}
+    # PR 1: A8/A9/A10/A11 (kinetics)
+    # PR 2: A14/A15/A17/A18 (operational), A19/A20/A21 (cross_run),
+    #       B6/B10/B16 (balances)
+    expected = {
+        "A8", "A9", "A10", "A11",
+        "A14", "A15", "A17", "A18",
+        "A19", "A20", "A21",
+        "B6", "B10", "B16",
+    }
+    assert ready_ids == expected
 
 
 def test_pending_entries_have_no_toolkit_fn() -> None:

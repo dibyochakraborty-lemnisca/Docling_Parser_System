@@ -361,10 +361,23 @@ _register(
         metric_id="A14",
         tier="A",
         short_description="DO margin profile",
-        long_description="Per-run minimum dissolved-oxygen margin over the run; flags windows of O2 limitation.",
-        applies_to="runs with dissolved_o2 trajectory",
+        long_description=(
+            "Profiles dissolved oxygen against an O2-limitation threshold. "
+            "Returns frac_below, min_margin, time_below_h. Margin = DO - threshold."
+        ),
+        applies_to="runs with dissolved_o2_pct trajectory",
         output_shape="scalar_with_metadata",
-        status="pending",
+        output_columns=("frac_below", "min_margin", "min_do", "mean_do", "time_below_h"),
+        required_inputs=(InputSpec(variable="dissolved_o2_pct", min_points=2),),
+        required_parameters=(
+            ParamSpec(
+                name="critical_threshold_pct",
+                default=30.0,
+                note="Lower DO bound for aerobic fermentation (textbook). Override per organism if documented.",
+            ),
+        ),
+        toolkit_fn="fermdocs_characterize.toolkit.operational:compute_do_margin",
+        status="ready",
     )
 )
 
@@ -373,10 +386,22 @@ _register(
         metric_id="A15",
         tier="A",
         short_description="Controller excursion count",
-        long_description="Count and duration of windows where controller (pH, temperature, DO) deviated outside ±tolerance from setpoint.",
-        applies_to="runs with controller setpoint + measured trajectories",
+        long_description=(
+            "Count, duration, and peak deviation of windows where a measured "
+            "controlled variable left the setpoint ±tolerance band."
+        ),
+        applies_to="runs with paired controlled variable + setpoint trajectories",
         output_shape="multi_run_summary",
-        status="pending",
+        output_columns=("n_excursions", "total_time_out_h", "max_abs_deviation"),
+        required_parameters=(
+            ParamSpec(
+                name="tolerance",
+                default=None,
+                note="±tolerance in measurement units; required, no universal default.",
+            ),
+        ),
+        toolkit_fn="fermdocs_characterize.toolkit.operational:controller_excursions",
+        status="ready",
     )
 )
 
@@ -397,10 +422,16 @@ _register(
         metric_id="A17",
         tier="A",
         short_description="Impeller tip speed",
-        long_description="Tip speed = pi * D * N. Flags shear-stress windows. Requires impeller diameter from process_priors / dossier.",
+        long_description="Tip speed = π · D · N (rps). Returns scalar (constant RPM) or timecourse.",
         applies_to="bioreactor runs with agitation_rpm and impeller_diameter_m",
         output_shape="timecourse_csv",
-        status="pending",
+        output_columns=("tip_speed_m_s",),
+        required_inputs=(InputSpec(variable="agitation_rpm", min_points=1),),
+        required_parameters=(
+            ParamSpec(name="impeller_diameter_m", default=None, note="Required from dossier or process_priors."),
+        ),
+        toolkit_fn="fermdocs_characterize.toolkit.operational:tip_speed",
+        status="ready",
     )
 )
 
@@ -409,10 +440,22 @@ _register(
         metric_id="A18",
         tier="A",
         short_description="Power per volume P/V",
-        long_description="Volumetric power input from agitation_rpm + impeller geometry; bridges to kLa estimates.",
-        applies_to="bioreactor runs with agitation + reactor geometry",
+        long_description=(
+            "Ungassed volumetric power: P = Np · ρ · N³ · D⁵, divided by working volume. "
+            "Default Np=5.0 for Rushton turbine in turbulent regime (Bates 1963)."
+        ),
+        applies_to="bioreactor runs with agitation_rpm + reactor geometry",
         output_shape="timecourse_csv",
-        status="pending",
+        output_columns=("p_per_v_w_m3",),
+        required_inputs=(InputSpec(variable="agitation_rpm", min_points=1),),
+        required_parameters=(
+            ParamSpec(name="impeller_diameter_m", default=None, note="From dossier or process_priors."),
+            ParamSpec(name="fluid_density_kg_m3", default=1000.0, note="Water density default; override for high-osmolarity broth."),
+            ParamSpec(name="working_volume_l", default=None, note="From dossier."),
+            ParamSpec(name="power_number", default=5.0, note="Rushton turbine in turbulent regime (Bates 1963)."),
+        ),
+        toolkit_fn="fermdocs_characterize.toolkit.operational:power_per_volume",
+        status="ready",
     )
 )
 
@@ -421,10 +464,12 @@ _register(
         metric_id="A19",
         tier="A",
         short_description="Cross-run KPI table",
-        long_description="One row per run with all A1 KPIs side-by-side. Backbone for cohort-level outlier detection.",
+        long_description="Tidies per-run KPI dicts into a DataFrame indexed by run_id. Backbone for A20/A21.",
         applies_to="cohorts of 2+ runs",
         output_shape="multi_run_summary",
-        status="pending",
+        output_columns=("run_id", "kpi_name", "value"),
+        toolkit_fn="fermdocs_characterize.toolkit.cross_run:cross_run_kpi_table",
+        status="ready",
     )
 )
 
@@ -432,11 +477,20 @@ _register(
     CatalogEntry(
         metric_id="A20",
         tier="A",
-        short_description="Pairwise deviation matrix",
-        long_description="For each KPI, pairwise |xi - xj| / mean across runs. Surfaces the most divergent run pairs.",
-        applies_to="cohorts of 3+ runs",
+        short_description="Pairwise deviation between runs",
+        long_description=(
+            "Top-K most divergent run pairs per KPI by relative gap "
+            "|xi - xj| / mean(xi, xj). Surfaces outlier runs without "
+            "a parametric assumption."
+        ),
+        applies_to="cohorts of 3+ runs with a KPI table from A19",
         output_shape="multi_run_summary",
-        status="pending",
+        output_columns=("kpi", "run_a", "run_b", "value_a", "value_b", "relative_gap"),
+        required_parameters=(
+            ParamSpec(name="top_k", default=3, note="How many divergent pairs to surface per KPI."),
+        ),
+        toolkit_fn="fermdocs_characterize.toolkit.cross_run:pairwise_deviation",
+        status="ready",
     )
 )
 
@@ -444,11 +498,17 @@ _register(
     CatalogEntry(
         metric_id="A21",
         tier="A",
-        short_description="Variance decomposition",
-        long_description="Decomposes total KPI variance into (between-run) vs (within-run-window) components. Tells whether spread comes from batch identity or measurement noise.",
+        short_description="Variance decomposition (between vs within group)",
+        long_description=(
+            "Decomposes per-KPI variance into between-group and within-group "
+            "components when a grouping column (e.g. process condition) is "
+            "given; otherwise reports total variance only."
+        ),
         applies_to="cohorts of 5+ runs",
         output_shape="multi_run_summary",
-        status="pending",
+        output_columns=("kpi", "total_var", "between_var", "within_var", "between_frac"),
+        toolkit_fn="fermdocs_characterize.toolkit.cross_run:variance_decomposition",
+        status="ready",
     )
 )
 
@@ -491,6 +551,7 @@ _register(
 
 # ---------------- Tier B — mass balance / yields (require measured inputs) ----------------
 
+_B_READY_IN_PR2 = {"B6", "B10", "B16"}
 
 for _id, _short in [
     ("B1", "Substrate consumption rate qs"),
@@ -498,17 +559,14 @@ for _id, _short in [
     ("B3", "Oxygen uptake rate OUR"),
     ("B4", "Carbon dioxide evolution rate CER"),
     ("B5", "Biomass yield Yxs"),
-    ("B6", "Byproduct yields (ethanol/acetate/lactate per substrate)"),
     ("B7", "Product yield Yps"),
     ("B8", "Oxygen yield Yxo"),
     ("B9", "Maintenance coefficient ms"),
-    ("B10", "Respiratory quotient RQ + overflow flag"),
     ("B11", "kLa back-calculation from OUR"),
     ("B12", "Substrate-to-product carbon split"),
     ("B13", "Ash-corrected dry-cell-weight balance"),
     ("B14", "Volumetric oxygen transfer OTR"),
     ("B15", "Volumetric mass transfer coefficient kLa"),
-    ("B16", "Carbon balance closure"),
     ("B17", "Nitrogen balance closure"),
     ("B18", "Degree-of-reduction (gamma) balance"),
     ("B19", "Specific heat generation"),
@@ -519,12 +577,89 @@ for _id, _short in [
             metric_id=_id,
             tier="B",
             short_description=_short,
-            long_description=f"{_short}. Implementation deferred to PR 2 of plans/2026-05-04-metric-catalog-and-toolkit.md.",
-            applies_to="depends on metric; inputs declared in PR 2",
+            long_description=f"{_short}. Implementation pending; not in PR 2 scope.",
+            applies_to="depends on metric; inputs declared when wired",
             output_shape="scalar_with_metadata",
             status="pending",
         )
     )
+
+_register(
+    CatalogEntry(
+        metric_id="B6",
+        tier="B",
+        short_description="Byproduct yield ΔP/ΔX",
+        long_description=(
+            "Ratio of byproduct mass produced to biomass produced over the "
+            "run (g byproduct / g biomass). High ethanol/acetate yield is a "
+            "classic overflow-metabolism signal."
+        ),
+        applies_to="runs with paired biomass + byproduct (ethanol/acetate/lactate) trajectories",
+        output_shape="scalar_with_metadata",
+        output_columns=("byproduct", "delta_p", "delta_x", "yield_g_per_g"),
+        required_inputs=(
+            InputSpec(variable="biomass_g_l", min_points=2),
+        ),
+        required_parameters=(
+            ParamSpec(name="byproduct_name", default="byproduct", note="Free-form label of the byproduct species."),
+        ),
+        toolkit_fn="fermdocs_characterize.toolkit.balances:compute_byproduct_yield",
+        status="ready",
+    )
+)
+
+_register(
+    CatalogEntry(
+        metric_id="B10",
+        tier="B",
+        short_description="Respiratory quotient RQ + overflow flag",
+        long_description=(
+            "RQ(t) = CER / OUR. Sustained RQ > 1.1 indicates respiro-fermentative "
+            "metabolism (ethanol/acetate excretion). Reports mean, max, and the "
+            "fraction of time above 1.1."
+        ),
+        applies_to="runs with paired OUR + CER trajectories",
+        output_shape="scalar_with_metadata",
+        output_columns=(
+            "rq_mean",
+            "rq_max",
+            "rq_min",
+            "frac_over_overflow_threshold",
+            "overflow_flag",
+        ),
+        required_parameters=(
+            ParamSpec(name="overflow_threshold", default=1.1, note="RQ above this counts as overflow (Crabtree literature)."),
+            ParamSpec(name="overflow_fraction_floor", default=0.2, note="Fraction-of-run above threshold needed to set overflow_flag."),
+        ),
+        toolkit_fn="fermdocs_characterize.toolkit.balances:compute_rq",
+        status="ready",
+    )
+)
+
+_register(
+    CatalogEntry(
+        metric_id="B16",
+        tier="B",
+        short_description="Carbon balance closure",
+        long_description=(
+            "Run-level carbon balance: (C in biomass + C in products + C in CO2) "
+            "/ C consumed. Healthy fermentation closes 0.90-1.05; below 0.85 or "
+            "above 1.10 signals an unmeasured carbon pool."
+        ),
+        applies_to="runs with measured substrate consumption + biomass + at least one product/CO2 stream",
+        output_shape="scalar_with_metadata",
+        output_columns=(
+            "closure",
+            "c_consumed_g",
+            "c_in_biomass_g",
+            "c_in_products_g",
+            "c_in_co2_g",
+        ),
+        toolkit_fn="fermdocs_characterize.toolkit.balances:compute_carbon_balance_closure",
+        status="ready",
+    )
+)
+del _B_READY_IN_PR2
 
 
 # ---------------- Tier C — literature-assisted (require organism priors) ----------------
