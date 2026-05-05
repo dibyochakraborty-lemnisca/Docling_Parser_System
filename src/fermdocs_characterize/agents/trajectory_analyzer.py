@@ -69,7 +69,11 @@ from fermdocs_diagnose.tools_bundle.execute_python import execute_python
 
 _log = logging.getLogger(__name__)
 
-MAX_TOOL_CALLS = 8
+MAX_TOOL_CALLS = 20
+"""Tool budget per analysis. With ~20 ready catalog metrics across
+Tier A/B/C, 8 was starving the agent: it computed one metric and
+emitted. 20 leaves headroom for the per-metric checklist contract
+to actually cover every applicable entry."""
 EXECUTE_PYTHON = "execute_python"
 EMIT = "emit_patterns"
 
@@ -142,30 +146,70 @@ HOW TO USE execute_python:
     summary statistics, head/tail, or specific rows.
   - You have up to 8 execute_python calls before being forced to emit.
 
-CATALOG + TOOLKIT (preferred path for any metric we have a function for):
+CATALOG + TOOLKIT — PRIMARY PATH (HARD CHECKLIST CONTRACT):
 
   A declarative catalog of standard fermentation metrics is available at
   `fermdocs_characterize.agents.metric_catalog.CATALOG` (dict keyed by
-  metric_id like "A8", "A10", "B10"). Each entry tells you:
-    - tier (A/B/C), short/long description, applies_to rule
-    - required_inputs (which trajectory variables must be present)
-    - required_parameters (defaults sourced from literature)
-    - toolkit_fn (importable Python path) when status == "ready"
+  metric_id like "A8", "A10", "B10"). Ready entries (status="ready")
+  expose a verified `toolkit_fn` import path. Today's ready set:
 
-  When a metric_id has status="ready", you should PREFER calling its
-  toolkit_fn over writing your own derivation. The math is verified,
-  the audit trail is cleaner (we record the metric_id), and findings
-  emitted with metric_id break out of the LLM-judged 0.85 confidence
-  cap because the numbers come from a deterministic function.
+    Tier A (kinetics):    A8, A9, A10, A11
+    Tier A (operational): A14, A15, A17, A18
+    Tier A (cross-run):   A19, A20, A21
+    Tier B (balances):    B6, B10, B16
+    Tier C (literature):  C2, C3, C4, C5, C9, C10
 
-  Example: bundle has biomass trajectories. Catalog A8 (specific growth
-  rate) and A10 (phase segmentation) are ready. Call them:
+  EVERY READY METRIC IS YOUR JOB. For each ready metric_id you MUST
+  do exactly ONE of:
+
+    (a) COMPUTE it: import its toolkit_fn, run it via execute_python
+        on the appropriate trajectories, and emit ONE pattern with
+        `metric_id` set + the toolkit's result fields in `statistics`.
+        Cross-run metrics (A19/A20/A21) emit ONE pattern across runs;
+        single-run metrics (A8/A9/A10/A11/A14/A15/B6/B10/B16) emit
+        ONE pattern per applicable run.
+
+    (b) DATA-GAP it: emit ONE pattern with `metric_id` set,
+        `pattern_kind="data_gap"`, and a summary naming the missing
+        input ("RQ (B10) skipped: bundle has no CER trajectory").
+        Severity="info", confidence=0.5. NO summary of the metric;
+        just the gap.
+
+  SILENTLY SKIPPING A READY METRIC IS A CONTRACT VIOLATION. The
+  catalog is your checklist. Cover every entry. The cost of a
+  data-gap entry is one line; the cost of a missed metric is a
+  blind spot in the downstream debate.
+
+  PER-METRIC EXECUTION GUIDE (use the entry's required_inputs +
+  required_parameters to decide applicability):
+
+    A8 compute_mu                 — needs biomass_g_l ≥ 5 points/run
+    A9 doubling_time              — needs biomass_g_l ≥ 5 points/run
+    A10 segment_growth_phases     — needs biomass_g_l ≥ 8 points/run
+    A11 phasewise_mu              — needs biomass_g_l ≥ 8 points/run
+    A14 compute_do_margin         — needs dissolved_o2_pct OR _mg_l
+    A15 controller_excursions    — needs measured + setpoint pair
+    A17 tip_speed                 — needs agitation_rpm + impeller_diameter_m
+    A18 power_per_volume          — needs agitation + reactor geometry
+    A19 cross_run_kpi_table       — needs ≥ 2 runs (cross-run)
+    A20 pairwise_deviation        — needs ≥ 3 runs (cross-run)
+    A21 variance_decomposition    — needs ≥ 5 runs (cross-run)
+    B6 compute_byproduct_yield   — needs biomass + a byproduct trajectory
+    B10 compute_rq                — needs OUR + CER trajectories
+    B16 compute_carbon_balance_closure — needs substrate + biomass +
+                                          (products and/or CO2 from CER)
+    C2 mu_max_reference_vs_observed — needs A8 result + organism in priors
+    C3 saturation_o2_concentration  — needs temperature_C
+    C4 vant_riet_kla              — needs P/V (A18) + gas velocity
+    C5 qs_from_verduyn_yields     — needs observed qs OR just organism
+    C9 oxygen_demand_vs_supply    — needs OUR + kLa + C* + DO
+    C10 overflow_threshold        — needs observed qs + organism in priors
+
+  CALLING PATTERN (study and adapt):
 
     ```python
     import pandas as pd
-    from fermdocs_characterize.toolkit.kinetics import (
-        compute_mu, segment_growth_phases,
-    )
+    from fermdocs_characterize.toolkit.kinetics import compute_mu
     df = pd.read_csv("OBS_PATH")
     bio = df[df["variable"] == "biomass_g_l"].dropna(subset=["value"])
     rows = []
@@ -174,23 +218,44 @@ CATALOG + TOOLKIT (preferred path for any metric we have a function for):
         if len(g) < 5:
             continue
         res = compute_mu(g["time_h"], g["value"])
-        rows.append({"run_id": rid, "mu_max": res.mu_max, "t_mu_max": res.t_mu_max_h})
+        rows.append({"run_id": rid, "mu_max": res.mu_max, "t_mu_max_h": res.t_mu_max_h})
     print(rows)
     ```
 
-  Then emit ONE pattern per run with `metric_id="A8"`,
-  `statistics={"mu_max": <number>, "t_mu_max_h": <number>}`. Do NOT
-  invent numbers. Cite the run_id + the toolkit function name in
-  your summary.
+  For Tier C calls that need priors:
+
+    ```python
+    from fermdocs.domain.process_priors import cached_priors
+    from fermdocs_characterize.toolkit.literature import (
+        mu_max_reference_vs_observed,
+    )
+    priors = cached_priors()
+    res = mu_max_reference_vs_observed(
+        priors=priors,
+        organism="<organism string from your view>",
+        observed_mu_max=<value from A8>,
+    )
+    print(res.status, res.value, res.source, res.details)
+    ```
+
+  When the result has status="data_gap", emit a data_gap pattern;
+  otherwise emit a normal computed pattern.
+
+  RECORDING THE RESULT:
 
   When emitting a pattern grounded in a ready catalog entry, include
   `metric_id` in your output JSON. This routes the finding through
   the verified-statistical path with confidence allowed up to 0.95
-  (still < 1.0 because human review is the gold standard).
+  (vs 0.85 for open-ended LLM patterns).
 
-  When a metric isn't in the catalog OR status is "pending", fall
-  back to the open-ended pattern detection below — emit without
-  `metric_id` and confidence ≤ 0.85.
+  EFFICIENCY: batch related metrics into one execute_python call.
+  Computing A8/A9/A10/A11 over the same biomass DataFrame is one
+  call, not four. Same for B10 + B16 (both need OUR/CER). Aim to
+  cover all ~20 metrics in 6-10 execute_python calls.
+
+  ONLY AFTER the catalog checklist is complete may you turn to
+  open-ended pattern detection (without metric_id) for whatever
+  the catalog doesn't cover.
 
 FEW-SHOT EXAMPLES (see one shape per analysis kind; combine and adapt):
 
@@ -502,6 +567,10 @@ class TrajectoryAnalyzerAgent:
                 f"(vars: {','.join(f.variables_involved) or '—'})"
             )
 
+        checklist = self._build_metric_checklist(
+            variables=set(variables), n_runs=len(run_ids)
+        )
+
         return (
             f"[OBSERVATIONS_CSV]\n{obs_path}\n\n"
             f"[TRAJECTORY METADATA]\n"
@@ -510,12 +579,82 @@ class TrajectoryAnalyzerAgent:
             f"variables ({len(variables)}): {', '.join(variables[:50])}"
             f"{' ...' if len(variables) > 50 else ''}\n"
             f"trajectories total: {len(trajectories)}.{time_grid_hint}\n\n"
+            f"[CATALOG CHECKLIST FOR THIS BUNDLE]\n{checklist}\n\n"
             f"[SPEC FINDINGS — context only, do not re-emit]\n"
             + ("\n".join(spec_summaries) if spec_summaries else "  (none)")
-            + "\n\n[TASK]\nAnalyze the trajectories. Surface patterns. "
-            "Use execute_python on the OBSERVATIONS_CSV path. Emit zero or "
-            "more pattern_findings."
+            + "\n\n[TASK]\nWork the catalog checklist top-to-bottom. For each "
+            "ready metric, EITHER call its toolkit_fn via execute_python and "
+            "emit a pattern with metric_id set, OR emit a data_gap pattern "
+            "naming the missing input. Silent skipping is a contract "
+            "violation. After the checklist is complete you may add open-"
+            "ended patterns (without metric_id) for anything the catalog "
+            "doesn't cover."
         )
+
+    @staticmethod
+    def _build_metric_checklist(*, variables: set[str], n_runs: int) -> str:
+        """Render a deterministic per-bundle checklist of ready catalog
+        entries with applicability marked from this bundle's variables.
+
+        The model sees this in the volatile (per-bundle) section of the
+        prompt so it can't claim ignorance of which metrics apply. Each
+        line is one catalog entry: id, short_description, applicability
+        verdict, and the inputs the toolkit_fn needs.
+        """
+        # Lazy import to avoid circulars; metric_catalog imports nothing
+        # from trajectory_analyzer.
+        from fermdocs_characterize.agents.metric_catalog import ready_entries
+
+        var_lower = {v.lower() for v in variables}
+
+        def _vars_present(needed: set[str]) -> bool:
+            # Loose substring match — bundle column names vary slightly
+            # (dissolved_o2_mg_l vs dissolved_o2_pct, etc.).
+            return all(
+                any(n in v or v in n for v in var_lower) for n in needed
+            )
+
+        # Map metric_id → minimum required variable substrings + run count.
+        # Cross-run metrics get min_runs > 1.
+        applicability: dict[str, tuple[set[str], int, str]] = {
+            "A8":  ({"biomass"}, 1, "biomass_g_l ≥ 5 points/run"),
+            "A9":  ({"biomass"}, 1, "biomass_g_l ≥ 5 points/run"),
+            "A10": ({"biomass"}, 1, "biomass_g_l ≥ 8 points/run"),
+            "A11": ({"biomass"}, 1, "biomass_g_l ≥ 8 points/run"),
+            "A14": ({"dissolved_o2"}, 1, "dissolved_o2 trajectory"),
+            "A15": (set(), 1, "any controlled variable + setpoint pair"),
+            "A17": ({"agitation"}, 1, "agitation_rpm + impeller_diameter_m param"),
+            "A18": ({"agitation"}, 1, "agitation_rpm + reactor geometry params"),
+            "A19": (set(), 2, "≥ 2 runs"),
+            "A20": (set(), 3, "≥ 3 runs"),
+            "A21": (set(), 5, "≥ 5 runs"),
+            "B6":  ({"biomass"}, 1, "biomass + a byproduct trajectory"),
+            "B10": ({"our", "cer"}, 1, "OUR + CER trajectories"),
+            "B16": ({"biomass"}, 1, "substrate + biomass + (products or CO2 from CER)"),
+            "C2":  ({"biomass"}, 1, "A8 result + organism in priors"),
+            "C3":  ({"temperature"}, 1, "temperature_C (convert from K if needed)"),
+            "C4":  ({"agitation"}, 1, "P/V from A18 + superficial gas velocity"),
+            "C5":  (set(), 1, "organism in priors (observed_qs optional)"),
+            "C9":  ({"our"}, 1, "OUR + kLa + C* + DO"),
+            "C10": (set(), 1, "organism in priors + observed qs"),
+        }
+
+        lines = []
+        for entry in ready_entries():
+            mid = entry.metric_id
+            if mid not in applicability:
+                # Defensive: any future ready entry without an applicability
+                # rule still gets surfaced so the agent can decide.
+                lines.append(f"  [?] {mid}  {entry.short_description}  (run anyway, decide applicability)")
+                continue
+            needed_vars, min_runs, hint = applicability[mid]
+            verdict = "APPLICABLE" if (
+                _vars_present(needed_vars) and n_runs >= min_runs
+            ) else "DATA_GAP"
+            lines.append(
+                f"  [{verdict}] {mid}  {entry.short_description}  ({hint})"
+            )
+        return "\n".join(lines)
 
     @staticmethod
     def _compose_user_text(

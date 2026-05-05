@@ -43,11 +43,17 @@ class ConfidenceBasis(str, Enum):
     PROCESS_PRIORS: registered-process priors invoked. Validator soft-downgrades
                     to SCHEMA_ONLY when an UNKNOWN flag is present.
     CROSS_RUN: pattern that requires multiple runs to assert.
+    STATISTICAL_TOOLKIT: claim cites trajectory_pattern findings whose math
+                        came from a verified catalog toolkit_fn (compute_mu,
+                        compute_rq, etc). Stronger than SCHEMA_ONLY because
+                        the numbers are deterministic; orthogonal to
+                        PROCESS_PRIORS (which depends on organism registry).
     """
 
     SCHEMA_ONLY = "schema_only"
     PROCESS_PRIORS = "process_priors"
     CROSS_RUN = "cross_run"
+    STATISTICAL_TOOLKIT = "statistical_toolkit"
 
 
 class TrajectoryRef(BaseModel):
