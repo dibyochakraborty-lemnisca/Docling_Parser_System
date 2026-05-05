@@ -88,6 +88,68 @@ CRITIC_INVARIANTS = (
     " on retry — different reasons need different fixes.",
 )
 
+def make_followup_critic_invariants(view: CriticView) -> tuple[str, ...]:
+    """Drive-posture rejection axes for follow-up runs.
+
+    Layered on top of CRITIC_INVARIANTS. Fires only when
+    view.user_question.raised_by == 'user_followup'. Returns empty
+    tuple on bias-posture / legacy runs, preserving back-compat.
+
+    Tagged with [followup-axis] prefix so the synthesizer (commit 4
+    feedback loop) can distinguish these from evidence-shape reasons
+    on retry — different reasons need different fixes.
+
+    Per shape:
+      - mechanistic: reject when the hypothesis (a) restates the
+        mechanism without testing it, or (b) cites only confirming
+        evidence and never engages with disconfirming alternatives.
+      - comparative: reject when the hypothesis describes only one
+        side of the comparison.
+      - scoping: reject when the hypothesis extrapolates beyond the
+        user's cited scope (runs / variables they didn't ask about).
+    """
+    q = view.user_question
+    if q is None or q.raised_by != "user_followup":
+        return ()
+
+    rules: list[str] = []
+
+    if q.shape == "mechanistic":
+        rules.append(
+            "[FOLLOWUP-AXIS] MECHANISTIC: the user proposed a mechanism."
+            " The hypothesis must TEST it, not restate it. File red with"
+            " reason '[followup-axis]: hypothesis restated the mechanism"
+            " without testing it' when the summary just paraphrases the"
+            " user's mechanism without citing evidence FOR or AGAINST."
+            " Also file red with '[followup-axis]: hypothesis ignored"
+            " disconfirming evidence' when the hypothesis cites ONLY"
+            " confirming evidence and the bundle has visible findings"
+            " or narratives that would contradict the mechanism."
+        )
+    elif q.shape == "comparative":
+        rules.append(
+            "[FOLLOWUP-AXIS] COMPARATIVE: the user asked for a contrast"
+            " between named groups (affected_runs). The hypothesis must"
+            " describe BOTH sides explicitly. File red with"
+            " '[followup-axis]: hypothesis covered only one group of the"
+            " requested comparison' when the summary mentions only one"
+            " of the user's named runs/groups, or describes one side"
+            " without contrasting it against the other."
+        )
+    elif q.shape == "scoping":
+        rules.append(
+            "[FOLLOWUP-AXIS] SCOPING: the user narrowed the question to"
+            " specific runs/variables. The hypothesis must stay inside"
+            " that scope. File red with '[followup-axis]: hypothesis"
+            " extrapolated beyond the user-cited scope' when the summary"
+            " or citations include runs/variables the user did NOT ask"
+            " about. Out-of-scope citations on a scoping follow-up are"
+            " noise, not support."
+        )
+
+    return tuple(rules)
+
+
 CRITIC_TASK = """\
 Read the hypothesis in the view. Optionally call tools to verify
 citations / numerics / alternative explanations. Then file a critique.
@@ -203,12 +265,16 @@ class CriticAgent:
         total_in = 0
         total_out = 0
 
+        # Compose drive-mode rules once per critique call. Empty tuple
+        # on bias-posture / legacy runs → identical prompt to PR-A.
+        invariants = CRITIC_INVARIANTS + make_followup_critic_invariants(view)
+
         for call_idx in range(MAX_CRITIC_TOOL_CALLS + 1):
             must_critique = call_idx >= MAX_CRITIC_TOOL_CALLS
             user_text = self._build_user_text(view, tool_history, must_critique)
             parts = build_prompt(
                 system_identity=CRITIC_SYSTEM,
-                invariants=CRITIC_INVARIANTS,
+                invariants=invariants,
                 task_spec=CRITIC_TASK,
                 view_obj=view,
                 tool_hints=CRITIC_TOOL_HINTS,
@@ -264,9 +330,10 @@ class CriticAgent:
         tool_history: list[dict[str, Any]],
         must_critique: bool,
     ) -> str:
+        invariants = CRITIC_INVARIANTS + make_followup_critic_invariants(view)
         parts = build_prompt(
             system_identity=CRITIC_SYSTEM,
-            invariants=CRITIC_INVARIANTS,
+            invariants=invariants,
             task_spec=CRITIC_TASK,
             view_obj=view,
             tool_hints=CRITIC_TOOL_HINTS,
