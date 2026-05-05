@@ -31,6 +31,7 @@ export default function Home() {
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [userQuestion, setUserQuestion] = useState("");
 
   async function refreshRuns() {
     try {
@@ -54,7 +55,10 @@ export default function Home() {
     setError(null);
     try {
       const up = await uploadFile(file);
-      const run = await createRun(up.upload_id);
+      // Empty question = legacy run. Trim before sending so a textarea
+      // full of whitespace doesn't trip the "non-empty" gate downstream.
+      const trimmed = userQuestion.trim();
+      const run = await createRun(up.upload_id, trimmed || undefined);
       router.push(`/runs/${run.run_id}`);
     } catch (e: any) {
       setError(String(e.message ?? e));
@@ -77,7 +81,30 @@ export default function Home() {
             any open questions it raises.
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
+          <div>
+            <label
+              htmlFor="user-question"
+              className="block text-sm font-medium mb-1"
+            >
+              Your question (optional)
+            </label>
+            <textarea
+              id="user-question"
+              value={userQuestion}
+              onChange={(e) => setUserQuestion(e.target.value)}
+              placeholder="e.g. Why did pigment loss happen earlier in BATCH-04 than BATCH-05?"
+              maxLength={2000}
+              rows={3}
+              disabled={uploading}
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring resize-none"
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              Leave empty to run as today. When provided, the system biases
+              every stage toward addressing your question and reports
+              whether it could answer.
+            </p>
+          </div>
           <label className="inline-flex items-center gap-3">
             <input
               type="file"

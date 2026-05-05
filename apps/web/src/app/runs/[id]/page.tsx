@@ -128,6 +128,33 @@ export default function RunPage({ params }: { params: { id: string } }) {
                 </div>
               </CardHeader>
               <CardContent>
+                {h.question_answered && (
+                  <div className="mb-3 rounded-md border bg-accent/40 px-3 py-2">
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="font-medium">Your question:</span>
+                      <Badge
+                        variant={
+                          h.question_answered === "yes"
+                            ? "success"
+                            : h.question_answered === "partial"
+                            ? "warning"
+                            : "secondary"
+                        }
+                      >
+                        {h.question_answered === "yes"
+                          ? "Answered"
+                          : h.question_answered === "partial"
+                          ? "Partially answered"
+                          : "Insufficient data"}
+                      </Badge>
+                    </div>
+                    {h.question_response_summary && (
+                      <p className="mt-2 text-sm leading-relaxed">
+                        {h.question_response_summary}
+                      </p>
+                    )}
+                  </div>
+                )}
                 <p className="text-sm leading-relaxed">{h.summary}</p>
                 <div className="mt-3 flex flex-wrap gap-1">
                   {h.affected_variables.map((v) => (

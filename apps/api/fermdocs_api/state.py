@@ -60,6 +60,9 @@ class Run:
     hypothesis_dir: Path | None = None
     global_md: Path | None = None
     error: str | None = None
+    # PR-A on caisc-hitl: optional human-typed question that biases the
+    # debate. Empty string and None both mean "no question, run as today".
+    user_question_text: str | None = None
     # Live event subscribers — WebSockets connect and receive future events.
     # We keep one queue per subscriber.
     subscribers: list[asyncio.Queue] = field(default_factory=list, repr=False)
@@ -102,9 +105,16 @@ class RunStore:
 
     # ---- runs ----
 
-    def create_run(self, upload_id: str) -> Run:
+    def create_run(
+        self, upload_id: str, *, user_question_text: str | None = None
+    ) -> Run:
         run_id = str(uuid.uuid4())
-        run = Run(run_id=run_id, upload_id=upload_id)
+        # Empty/whitespace string = legacy run (no question), normalize to None
+        # so downstream code only checks `is None`.
+        cleaned = (user_question_text or "").strip() or None
+        run = Run(
+            run_id=run_id, upload_id=upload_id, user_question_text=cleaned
+        )
         self._runs[run_id] = run
         return run
 

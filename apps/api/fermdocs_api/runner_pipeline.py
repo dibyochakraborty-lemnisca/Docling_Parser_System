@@ -295,6 +295,27 @@ async def _build_bundle_from_raw(
         )
     bundle_dir = bundles[0]
 
+    # 2b. Classify user question (PR-A) once we know the bundle's actual
+    # run_ids and variables. Write the resulting UserQuestion JSON into
+    # the bundle so diagnose's CLI can load it via --user-question-path
+    # and the in-process hypothesis stage can re-load it from the same
+    # path. Empty/None question_text → no file written, no flag passed.
+    user_question_path: Path | None = None
+    if run.user_question_text:
+        try:
+            user_question_path = await asyncio.to_thread(
+                _classify_and_persist_user_question,
+                question_text=run.user_question_text,
+                bundle_dir=bundle_dir,
+                char_path=char_path,
+            )
+        except Exception as exc:  # never block the run on classifier issues
+            _log.warning(
+                "user_question classification failed (%s: %s); continuing without it",
+                exc.__class__.__name__, str(exc)[:200],
+            )
+            user_question_path = None
+
     # 3. Diagnose
     run.status = RunStatus.DIAGNOSING
     await store.publish(
@@ -302,19 +323,70 @@ async def _build_bundle_from_raw(
         {"type": "status", "status": run.status.value, "bundle_dir": str(bundle_dir)},
     )
     diagnosis_path = bundle_dir / "diagnosis" / "diagnosis.json"
+    diagnose_cmd = [
+        sys.executable, "-m", "fermdocs_diagnose.cli", "run",
+        "--dossier", str(dossier_path),
+        "--characterization", str(char_path),
+        "--output", str(diagnosis_path),
+    ]
+    if user_question_path is not None:
+        diagnose_cmd.extend(["--user-question-path", str(user_question_path)])
     await _run_subprocess(
-        [
-            sys.executable, "-m", "fermdocs_diagnose.cli", "run",
-            "--dossier", str(dossier_path),
-            "--characterization", str(char_path),
-            "--output", str(diagnosis_path),
-        ],
+        diagnose_cmd,
         cwd=Path(os.environ.get("FERMDOCS_REPO_ROOT", Path.cwd())),
     )
     if not diagnosis_path.exists():
         raise RuntimeError(f"diagnose did not produce {diagnosis_path}")
 
     return bundle_dir
+
+
+def _classify_and_persist_user_question(
+    *,
+    question_text: str,
+    bundle_dir: Path,
+    char_path: Path,
+) -> Path:
+    """Classify the question against the bundle's actual metadata, write
+    the resulting UserQuestion JSON to <bundle_dir>/user_question.json.
+
+    Returns the path. Pure function (deterministic given inputs + LLM
+    response). Lives outside _build_bundle_from_raw so the asyncio
+    event loop doesn't block on the LLM call.
+    """
+    import json as _json
+
+    from fermdocs.domain.user_question import UserQuestion
+    from fermdocs_hypothesis.question_classifier import (
+        GeminiQuestionClassifierClient,
+        classify_user_question,
+    )
+
+    # Pull run_ids + variables from the just-written characterization.
+    char_data = _json.loads(char_path.read_text())
+    run_ids = sorted({t.get("run_id") for t in char_data.get("trajectories") or [] if t.get("run_id")})
+    variables = sorted({t.get("variable") for t in char_data.get("trajectories") or [] if t.get("variable")})
+
+    # Production: Gemini classifier. Stub mode (no API key) falls back
+    # cleanly to UserQuestion(shape='open', no hints) inside the function.
+    client: GeminiQuestionClassifierClient | None
+    try:
+        client = GeminiQuestionClassifierClient()
+    except Exception:
+        client = None
+
+    question = classify_user_question(
+        text=question_text,
+        available_run_ids=run_ids,
+        available_variables=variables,
+        client=client,
+    )
+
+    target = bundle_dir / "user_question.json"
+    target.write_text(
+        _json.dumps(question.model_dump(mode="json"), indent=2)
+    )
+    return target
 
 
 async def _run_subprocess(cmd: list[str], cwd: Path | None = None) -> None:

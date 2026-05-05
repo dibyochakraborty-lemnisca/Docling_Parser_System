@@ -74,7 +74,12 @@ def load_bundle(bundle_dir: str | Path) -> LoadedBundle:
     dossier = reader.get_dossier()
     organism, process_family = _extract_organism_and_family(dossier)
 
-    seed_topics = extract_seed_topics(diagnosis)
+    # PR-A on caisc-hitl: bundle dir may contain a user_question.json
+    # written by the API runner after characterize. Load it if present;
+    # absent → legacy run, hyp_input.user_question stays None.
+    user_question = _load_user_question(reader.dir)
+
+    seed_topics = extract_seed_topics(diagnosis, user_question=user_question)
 
     findings_pool = _build_findings_pool(characterization)
     narratives_pool = _build_narratives_pool(characterization)
@@ -89,6 +94,7 @@ def load_bundle(bundle_dir: str | Path) -> LoadedBundle:
         seed_topics=seed_topics,
         organism=organism,
         process_family=process_family,
+        user_question=user_question,
     )
     return LoadedBundle(
         hyp_input=hyp_input,
@@ -110,6 +116,32 @@ def _extract_organism_and_family(dossier: dict) -> tuple[str | None, str | None]
     organism = (observed.get("organism") or "").strip() or None
     process_family = (registered.get("process_family") or registered.get("name") or "").strip() or None
     return organism, process_family
+
+
+def _load_user_question(bundle_dir):
+    """Load <bundle_dir>/user_question.json if it exists, else None.
+
+    PR-A on caisc-hitl. Bundles produced by the API runner with a
+    user-typed question carry this file; legacy bundles don't, and
+    bundle_loader returns None — back-compat preserved.
+
+    Errors during load are logged and treated as None — never blocks
+    the hypothesis stage.
+    """
+    from fermdocs.domain.user_question import UserQuestion
+
+    path = Path(bundle_dir) / "user_question.json"
+    if not path.exists():
+        return None
+    try:
+        return UserQuestion.model_validate_json(path.read_text())
+    except (json.JSONDecodeError, OSError, ValueError) as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            "bundle_loader: failed to load user_question.json (%s: %s); proceeding without it",
+            exc.__class__.__name__, str(exc)[:200],
+        )
+        return None
 
 
 def _build_findings_pool(char: CharacterizationOutput) -> list[FindingRef]:

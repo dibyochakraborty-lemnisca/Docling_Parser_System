@@ -50,6 +50,9 @@ export interface FinalHypothesis {
   confidence_basis: string;
   critic_flag: "red" | "green";
   judge_ruled_criticism_valid: boolean;
+  // PR-A user-question fields. Null on legacy runs.
+  question_answered?: "yes" | "partial" | "insufficient_data" | null;
+  question_response_summary?: string | null;
 }
 
 export interface RejectedHypothesis {
@@ -94,17 +97,24 @@ export async function uploadFile(file: File): Promise<UploadResponse> {
   return r.json();
 }
 
-export async function createRun(uploadId: string): Promise<{ run_id: string }> {
+export async function createRun(
+  uploadId: string,
+  userQuestion?: string,
+): Promise<{ run_id: string; user_question?: string | null }> {
+  const body: Record<string, unknown> = { upload_id: uploadId };
+  if (userQuestion && userQuestion.trim()) {
+    body.user_question = userQuestion.trim();
+  }
   const r = await fetch(`${BASE}/runs`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ upload_id: uploadId }),
+    body: JSON.stringify(body),
   });
   if (!r.ok) {
     let detail = `${r.status}`;
     try {
-      const body = await r.text();
-      detail = `${r.status}: ${body}`;
+      const text = await r.text();
+      detail = `${r.status}: ${text}`;
     } catch {}
     throw new Error(`createRun failed: ${detail}`);
   }

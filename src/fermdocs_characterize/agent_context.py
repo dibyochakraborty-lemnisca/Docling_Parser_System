@@ -92,12 +92,17 @@ def build_agent_context(
     output: CharacterizationOutput,
     *,
     specs_provider: SpecsProvider | None = None,
+    user_question: UserQuestion | None = None,
 ) -> AgentContext:
     """Project (dossier, output) into an AgentContext.
 
     Pure function. specs_provider defaults match the CharacterizationPipeline's
     resolution: schema-with-overrides when the schema is loadable, falling
     back to dossier-only specs for offline tests / fixtures.
+
+    When user_question is non-None, it threads through to the AgentContext
+    so the diagnose-stage prompt prefix surfaces the question (PR-A
+    commit 5).
     """
     if specs_provider is not None:
         specs = specs_provider
@@ -151,6 +156,7 @@ def build_agent_context(
         ],
         flags=compute_flags(dossier, summary, trajectories),
         finding_ids=[f.finding_id for f in output.findings],
+        user_question=user_question,
     )
 
 

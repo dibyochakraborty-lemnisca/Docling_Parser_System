@@ -76,6 +76,18 @@ def cli() -> None:
     default=True,
     help="After exit, prompt to answer open questions and resume.",
 )
+@click.option(
+    "--question",
+    "question_text",
+    type=str,
+    default=None,
+    help=(
+        "Optional user question (PR-A). When provided, the question"
+        " is classified against the bundle's run_ids/variables, written"
+        " to <bundle_dir>/user_question.json, and threaded through"
+        " every agent's view. Empty/None = legacy run."
+    ),
+)
 def run(
     bundle_dir: Path,
     out_root: Path,
@@ -85,8 +97,40 @@ def run(
     max_total_input_tokens: int,
     no_validate: bool,
     hitl: bool,
+    question_text: str | None,
 ) -> None:
     """Run the hypothesis stage on a diagnose BUNDLE_DIR."""
+    if question_text is not None and question_text.strip():
+        # Classify against the bundle's actual run_ids/variables; persist
+        # for downstream load_bundle() to pick up. We re-load the bundle
+        # below so the question shows up in hyp_input.user_question.
+        from fermdocs.domain.user_question import UserQuestion as _UQ
+        from fermdocs_hypothesis.question_classifier import (
+            GeminiQuestionClassifierClient,
+            classify_user_question,
+        )
+        char_dict = json.loads((bundle_dir / "characterization" / "characterization.json").read_text())
+        run_ids = sorted({t.get("run_id") for t in char_dict.get("trajectories") or [] if t.get("run_id")})
+        variables = sorted({t.get("variable") for t in char_dict.get("trajectories") or [] if t.get("variable")})
+        try:
+            client = GeminiQuestionClassifierClient()
+        except Exception:
+            client = None
+        question = classify_user_question(
+            text=question_text.strip(),
+            available_run_ids=run_ids,
+            available_variables=variables,
+            client=client,
+        )
+        (bundle_dir / "user_question.json").write_text(
+            json.dumps(question.model_dump(mode="json"), indent=2)
+        )
+        click.echo(
+            f"  user_question: shape={question.shape!r}"
+            f" affected_runs={question.affected_runs}"
+            f" affected_variables={question.affected_variables}"
+        )
+
     click.echo(f"loading bundle: {bundle_dir}")
     loaded = load_bundle(bundle_dir)
     click.echo(

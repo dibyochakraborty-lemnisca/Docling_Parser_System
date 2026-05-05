@@ -34,7 +34,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from fermdocs_api.runner_pipeline import execute_resume, execute_run
 from fermdocs_api.state import RunStatus, RunStore
@@ -48,6 +48,11 @@ from fermdocs_api.state import RunStatus, RunStore
 
 class CreateRunRequest(BaseModel):
     upload_id: str
+    # PR-A on caisc-hitl: optional question typed by the user above the
+    # upload box. Empty string and None both mean "no question, run as
+    # today". Capped at 2000 chars per UserQuestion schema; FastAPI rejects
+    # longer with 422.
+    user_question: str | None = Field(default=None, max_length=2000)
 
 
 class Answer(BaseModel):
@@ -108,9 +113,15 @@ def create_app() -> FastAPI:
         upload = STORE.get_upload(body.upload_id)
         if upload is None:
             raise HTTPException(404, f"upload {body.upload_id} not found")
-        run = STORE.create_run(body.upload_id)
+        run = STORE.create_run(
+            body.upload_id, user_question_text=body.user_question
+        )
         background.add_task(execute_run, store=STORE, run=run, upload=upload)
-        return {"run_id": run.run_id, "status": run.status.value}
+        return {
+            "run_id": run.run_id,
+            "status": run.status.value,
+            "user_question": run.user_question_text,
+        }
 
     @app.get("/api/runs")
     async def list_runs() -> dict:

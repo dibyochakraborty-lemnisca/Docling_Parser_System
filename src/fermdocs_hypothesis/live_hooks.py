@@ -61,6 +61,15 @@ class LiveHooks:
         client: GeminiHypothesisClient | None = None,
     ):
         self._bundle = bundle
+        # PR-A: cache user_question from hyp_input so every project_*
+        # call can thread it without re-walking bundle internals. None
+        # on legacy runs — projectors short-circuit to back-compat path.
+        # Defensive getattr so legacy test mocks (MagicMock-shaped bundles)
+        # that don't provide a real UserQuestion fall through to None
+        # rather than passing a Mock into Pydantic validation.
+        from fermdocs.domain.user_question import UserQuestion as _UQ
+        raw_q = getattr(bundle.hyp_input, "user_question", None)
+        self._user_question: _UQ | None = raw_q if isinstance(raw_q, _UQ) else None
         self._client = client or GeminiHypothesisClient()
         self._tools: HypothesisToolBundle = make_tool_bundle(bundle)
         self._orchestrator = OrchestratorAgent(self._client)
@@ -88,6 +97,7 @@ class LiveHooks:
             seed_topics=list(state.seed_topics),
             budget=state.budget,
             current_turn=state.current_turn + 1,
+            user_question=self._user_question,
         )
         used = set(state.used_topic_ids)
         view = view.model_copy(
@@ -118,6 +128,7 @@ class LiveHooks:
             available_trajectories=self._bundle.trajectories_pool,
             available_priors=self._bundle.priors_pool,
             available_analyses=self._bundle.analyses_pool,
+            user_question=self._user_question,
         )
         result = agent.contribute(view, facet_id=facet_id)
         return result.facet, result.input_tokens, result.output_tokens
@@ -136,6 +147,7 @@ class LiveHooks:
             current_topic=state.current_topic,
             facets=list(state.current_facets),
             events=events,
+            user_question=self._user_question,
         )
         result = self._synthesizer.synthesize(view, hyp_id=hyp_id)
         return result.hypothesis, result.input_tokens, result.output_tokens
@@ -153,6 +165,7 @@ class LiveHooks:
             relevant_priors=self._bundle.priors_pool,
             events=events,
             topic_id=state.current_topic.topic_id,
+            user_question=self._user_question,
         )
         result = self._critic.critique(view)
         return result.critique, result.input_tokens, result.output_tokens
@@ -171,6 +184,7 @@ class LiveHooks:
             citation_lookups=self._build_citation_lookups(state.current_hypothesis),
             events=events,
             topic_id=state.current_topic.topic_id,
+            user_question=self._user_question,
         )
         result = self._judge.rule(view)
         return (

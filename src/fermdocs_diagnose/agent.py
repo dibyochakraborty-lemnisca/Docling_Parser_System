@@ -33,6 +33,7 @@ from fermdocs_characterize.agent_context import (
     build_agent_context,
     serialize_for_agent,
 )
+from fermdocs.domain.user_question import UserQuestion
 from fermdocs_characterize.schema import (
     CharacterizationOutput,
     ExtractedVia,
@@ -420,6 +421,7 @@ class DiagnosisAgent:
         diagnosis_id: uuid.UUID | None = None,
         generation_timestamp: datetime | None = None,
         bundle: BundleReader | None = None,
+        user_question: UserQuestion | None = None,
     ) -> DiagnosisOutput:
         """Run the diagnosis ReAct loop.
 
@@ -432,11 +434,14 @@ class DiagnosisAgent:
                 (execute_python + bundle fetches). Trace is persisted under
                 <bundle>/audit/. Without `bundle`, the legacy 3-tool surface
                 is used; behavior matches Wave 1.
+            user_question: PR-A user-question directive. Threads into
+                AgentContext so the prompt prefix carries the question.
+                None = legacy run (no question).
         """
         diagnosis_id = diagnosis_id or uuid.uuid4()
         generation_timestamp = generation_timestamp or datetime.utcnow()
         specs = specs_provider or DictSpecsProvider.from_dossier(dossier)
-        ctx = build_agent_context(dossier, output)
+        ctx = build_agent_context(dossier, output, user_question=user_question)
 
         if self._client is None:
             return self._error_output(
