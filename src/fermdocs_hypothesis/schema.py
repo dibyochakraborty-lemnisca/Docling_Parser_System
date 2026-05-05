@@ -56,6 +56,12 @@ class TopicSourceType(str, Enum):
     ANALYSIS = "analysis"
     TREND = "trend"
     OPEN_QUESTION = "open_question"
+    # PR-A2 drive posture: synthetic topics manufactured from the user's
+    # follow-up question itself, not from the diagnose output. Specialists
+    # see them as "the user proposes / asks about X — test it."
+    USER_MECHANISM = "user_mechanism"
+    USER_COMPARISON = "user_comparison"
+    USER_SCOPE = "user_scope"  # placeholder for empty-scope path (D3)
 
 
 class SeedTopic(BaseModel):

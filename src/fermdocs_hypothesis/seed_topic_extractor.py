@@ -205,6 +205,137 @@ def extract_seed_topics(
     return topics
 
 
+def extract_seed_topics_for_followup(
+    diag: DiagnosisOutput,
+    *,
+    question: UserQuestion,
+    prior_accepted_hyp_ids: list[str] | None = None,
+) -> list[SeedTopic]:
+    """Drive-posture topic extraction (PR-A2).
+
+    Branches on `question.shape`:
+
+      - `mechanistic`: ignore diag entirely. Emit ONE synthetic SeedTopic
+        whose summary IS the user's mechanism. Specialists try to support
+        OR refute it. Source type = USER_MECHANISM.
+
+      - `comparative`: same shape — one synthetic topic, source type
+        USER_COMPARISON. Specialists structure their facets as
+        side-by-side group contrasts.
+
+      - `scoping`: filter the bias-posture seed topics to those overlapping
+        question.affected_runs / affected_variables. If at least one
+        survives, return the filtered list (with the user-question priority
+        bump applied so they sort to the top). If NONE survive, return a
+        single placeholder topic with source_type=USER_SCOPE that
+        signals the synthesizer to emit a single FinalHypothesis with
+        question_answered='insufficient_data' (D3 in the plan).
+
+      - `open` (or shape=None): fall back to the bias-posture path —
+        full extract_seed_topics with the priority bump. Drive-posture
+        wraps bias here.
+
+    On `mechanistic` and `comparative`, the diag-derived topics are
+    intentionally dropped: the user's question becomes the entire topic
+    set so the debate stays focused. If the user wants to see other
+    angles, they ask a separate follow-up.
+
+    `prior_accepted_hyp_ids` is reserved for the synthesizer prompt's
+    'don't redo work' rule (commit 4); the seed-topic layer doesn't
+    consume it directly today, but the parameter is here so the
+    upstream call site doesn't have to special-case shapes.
+    """
+    shape = question.shape
+
+    if shape == "mechanistic":
+        return [_synthetic_user_topic(question, TopicSourceType.USER_MECHANISM, idx=1)]
+
+    if shape == "comparative":
+        return [_synthetic_user_topic(question, TopicSourceType.USER_COMPARISON, idx=1)]
+
+    if shape == "scoping":
+        bias_topics = extract_seed_topics(diag, user_question=question)
+        in_scope = [t for t in bias_topics if _topic_in_scope(t, question)]
+        if in_scope:
+            return in_scope
+        # D3 empty-filter case: synthesize a placeholder so the debate
+        # cycle still completes with one FinalHypothesis whose
+        # question_answered='insufficient_data'.
+        return [_empty_scope_placeholder(question)]
+
+    # `open` (or shape=None): bias path is exactly what we want.
+    return extract_seed_topics(diag, user_question=question)
+
+
+def _synthetic_user_topic(
+    q: UserQuestion, source_type: TopicSourceType, *, idx: int
+) -> SeedTopic:
+    """Build a single SeedTopic whose summary IS the user's question text.
+
+    Priority is set to 1.0 so the orchestrator picks it first; severity
+    is MAJOR so the ranker doesn't downweight it. cited_finding_ids and
+    cited_narrative_ids are intentionally empty — specialists pull
+    citations from the bundle on their own pass.
+    """
+    return SeedTopic(
+        topic_id=_topic_id(idx),
+        summary=q.text[:200],
+        source_type=source_type,
+        source_id=f"user-q-{source_type.value}",
+        cited_finding_ids=[],
+        cited_narrative_ids=[],
+        cited_trajectories=[],
+        affected_variables=list(q.affected_variables),
+        severity=Severity.MAJOR,
+        priority=1.0,
+    )
+
+
+def _empty_scope_placeholder(q: UserQuestion) -> SeedTopic:
+    """D3 case: user's scope didn't match any bundle data.
+
+    Synthesizer recognizes USER_SCOPE source_type and emits exactly one
+    FinalHypothesis with question_answered='insufficient_data', listing
+    available runs/variables so the user knows their scope was off.
+    """
+    return SeedTopic(
+        topic_id=_topic_id(1),
+        summary=f"User scope did not match bundle data: {q.text[:160]}",
+        source_type=TopicSourceType.USER_SCOPE,
+        source_id="user-q-empty-scope",
+        cited_finding_ids=[],
+        cited_narrative_ids=[],
+        cited_trajectories=[],
+        affected_variables=list(q.affected_variables),
+        severity=Severity.INFO,
+        priority=1.0,
+    )
+
+
+def _topic_in_scope(topic: SeedTopic, q: UserQuestion) -> bool:
+    """A topic is 'in scope' for a scoping question if it overlaps either
+    the question's affected_variables OR affected_runs (via cited
+    trajectory run_ids). Empty question scope = no filter (everything
+    in scope) but the caller short-circuits that case before us.
+    """
+    if q.affected_variables:
+        var_overlap = bool(set(topic.affected_variables) & set(q.affected_variables))
+        if var_overlap:
+            return True
+    if q.affected_runs:
+        topic_runs = {
+            ref.run_id for ref in topic.cited_trajectories
+            if hasattr(ref, "run_id") and ref.run_id
+        }
+        if topic_runs & set(q.affected_runs):
+            return True
+    # No question scope at all → vacuously in-scope. Edge case the caller
+    # generally avoids but worth being explicit.
+    if not q.affected_variables and not q.affected_runs:
+        return True
+    return False
+
+
 def _apply_user_question_bump(
     topic: SeedTopic, q: UserQuestion
 ) -> SeedTopic:
