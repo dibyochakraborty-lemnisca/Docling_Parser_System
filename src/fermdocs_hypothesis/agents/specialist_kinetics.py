@@ -12,7 +12,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from fermdocs_hypothesis.agents.specialist_base import SpecialistAgent
+from fermdocs_hypothesis.agents.specialist_base import (
+    SpecialistAgent,
+    make_user_question_invariant,
+)
 from fermdocs_hypothesis.llm_clients import GeminiHypothesisClient
 from fermdocs_hypothesis.prompts import ToolHint
 from fermdocs_hypothesis.tools_bundle.factory import (
@@ -58,6 +61,7 @@ priors. Never make causal claims you cannot ground in cited evidence.\
         " metric_ids in your facet summary so the synthesizer can"
         " triangulate across specialists; the math is verified, treat the"
         " numbers as authoritative and don't recompute.",
+        make_user_question_invariant("kinetics"),
     ),
     "task_spec": """\
 Read the view, optionally call tools to fetch more data, then contribute

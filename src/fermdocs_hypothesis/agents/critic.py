@@ -73,6 +73,19 @@ CRITIC_INVARIANTS = (
     "Do not rewrite the hypothesis. Do not propose a fix. Just flag problems.",
     "If previous_attempts is non-empty, the synthesizer was asked to address those prior reasons. Check whether it actually did. If a prior reason was addressed (claim narrowed, overreach removed), acknowledge that — do not raise the same objection again.",
     "If a new attempt fixes the prior critic_reasons but is otherwise sound, file green. Iterative narrowing is the goal.",
+    "USER QUESTION (when view.user_question is non-null): one additional"
+    " rejection axis. The hypothesis MUST address the user's question. If"
+    " hypothesis.question_answered is 'yes' or 'partial', verify the cited"
+    " evidence actually supports that — when the cited findings/narratives"
+    " do NOT establish what the answer claims, file red with reason"
+    " '[question-axis]: hypothesis claims to answer the question but the"
+    " cited evidence does not support that claim'. If question_answered is"
+    " 'insufficient_data', do NOT reject on this axis (honest answer is"
+    " always acceptable). If question_answered is null while user_question"
+    " is non-null, file red: '[question-axis]: hypothesis ignored the user"
+    " question'. Tag question-axis reasons with the [question-axis] prefix"
+    " so the synthesizer can distinguish them from evidence-shape reasons"
+    " on retry — different reasons need different fixes.",
 )
 
 CRITIC_TASK = """\

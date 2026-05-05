@@ -11,7 +11,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from fermdocs_hypothesis.agents.specialist_base import SpecialistAgent
+from fermdocs_hypothesis.agents.specialist_base import (
+    SpecialistAgent,
+    make_user_question_invariant,
+)
 from fermdocs_hypothesis.llm_clients import GeminiHypothesisClient
 from fermdocs_hypothesis.prompts import ToolHint
 from fermdocs_hypothesis.tools_bundle.factory import (
@@ -56,6 +59,7 @@ priors. Never make causal claims you cannot ground in cited evidence.\
         " kLa), C9 (O2 demand-vs-supply), C13 (dissolved-CO2 inhibition)."
         " Cite metric_ids in facet summaries; treat catalog math as"
         " authoritative and don't recompute.",
+        make_user_question_invariant("mass_transfer"),
     ),
     "task_spec": """\
 Read the view, optionally call tools to fetch more data, then contribute

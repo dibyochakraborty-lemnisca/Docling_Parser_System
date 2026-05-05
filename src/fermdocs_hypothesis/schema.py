@@ -176,6 +176,22 @@ class HypothesisFull(BaseModel):
     confidence: float = Field(ge=0.0, le=LLM_CONFIDENCE_CAP)
     confidence_basis: ConfidenceBasis
     provenance_downgraded: bool = False
+    question_answered: Literal["yes", "partial", "insufficient_data"] | None = Field(
+        default=None,
+        description=(
+            "Synthesizer populates when view.user_question is non-null."
+            " Carries forward to FinalHypothesis untouched. None on legacy"
+            " runs."
+        ),
+    )
+    question_response_summary: str | None = Field(
+        default=None,
+        max_length=800,
+        description=(
+            "One-paragraph response to the user's question. Synthesizer"
+            " populates when user_question is non-null. Carries forward."
+        ),
+    )
 
     @field_validator("hyp_id")
     @classmethod

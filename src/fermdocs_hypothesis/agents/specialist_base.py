@@ -98,6 +98,29 @@ SPECIALIST_SCHEMA: dict[str, Any] = {
 MAX_SPECIALIST_TOOL_CALLS = 6
 
 
+def make_user_question_invariant(role: str) -> str:
+    """Shared invariant string surfaced to all 3 specialists.
+
+    Tells the persona how to read view.user_question and how to frame its
+    facet. The role name is interpolated so each specialist names its
+    own domain — keeps the rule concrete instead of a vague "address the
+    question" handwave.
+
+    PR-A on caisc-hitl. Plan: plans/2026-05-04-user-question-and-hitl.md.
+    """
+    return (
+        f"USER QUESTION (when view.user_question is non-null): the user's"
+        f" question is a binding directive. Frame your facet to address"
+        f" whether the question is consistent with what you see in the"
+        f" {role} domain. If your domain doesn't bear on the question,"
+        f" SAY SO EXPLICITLY in your facet summary ('the {role} angle"
+        f" doesn't speak to this question; deferring to peers') so the"
+        f" synthesizer knows you considered it. Do NOT silently skip"
+        f" the question. When user_question is None, follow the normal"
+        f" topic-driven flow."
+    )
+
+
 @dataclass
 class SpecialistResult:
     facet: FacetFull

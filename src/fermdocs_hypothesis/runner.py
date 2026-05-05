@@ -775,6 +775,11 @@ def _build_final(
         supporting_specialists=list(SPECIALIST_ORDER),
         critic_flag=crit.flag,
         judge_ruled_criticism_valid=judge_valid,
+        # Carry the synthesizer-populated question response forward unchanged.
+        # Both fields are None on legacy runs (no user_question in view) →
+        # FinalHypothesis stays back-compat.
+        question_answered=hyp.question_answered,
+        question_response_summary=hyp.question_response_summary,
     )
 
 

@@ -113,6 +113,18 @@ SYNTHESIZER_INVARIANTS = (
     " evidence converge — overflow metabolism (B10) coincides with carbon"
     " balance failure (B16) and growth arrest (A10) in the same window.'"
     " Multiple metric_ids triangulating beats a single metric_id alone.",
+    "USER QUESTION (when view.user_question is non-null): your hypothesis"
+    " MUST address it. Frame the summary as a response to the question's"
+    " premise. Populate two NEW fields on the emitted hypothesis:"
+    " question_answered ∈ {'yes', 'partial', 'insufficient_data'} —"
+    " 'yes' when the cited evidence directly addresses the question, 'partial'"
+    " when only some aspects are covered, 'insufficient_data' when the"
+    " bundle doesn't support an answer (don't fake an answer to look"
+    " responsive — 'insufficient_data' is the honest call). And"
+    " question_response_summary: one paragraph (≤ 800 chars) stating what"
+    " we learned about the question. The two fields are gated on"
+    " user_question being non-null; when it's None, leave both as null"
+    " — back-compat with legacy runs.",
 )
 
 SYNTHESIZER_TASK = """\
@@ -171,7 +183,16 @@ _SYNTHESIZER_SCHEMA: dict[str, Any] = {
         "confidence": {"type": "NUMBER"},
         "confidence_basis": {
             "type": "STRING",
-            "enum": ["schema_only", "process_priors", "cross_run"],
+            "enum": ["schema_only", "process_priors", "cross_run", "statistical_toolkit"],
+        },
+        "question_answered": {
+            "type": "STRING",
+            "enum": ["yes", "partial", "insufficient_data"],
+            "nullable": True,
+        },
+        "question_response_summary": {
+            "type": "STRING",
+            "nullable": True,
         },
     },
     "required": ["summary", "facet_ids", "confidence", "confidence_basis"],
@@ -251,6 +272,21 @@ class SynthesizerAgent:
 
         summary = (parsed.get("summary") or "").strip() or "No synthesis provided."
 
+        # User-question response fields. Only honored when the view actually
+        # carried a user_question — otherwise force null even if the LLM
+        # tried to populate them (avoids fabrication on no-question runs).
+        q_answered: str | None = None
+        q_response_summary: str | None = None
+        if view.user_question is not None:
+            raw_answered = parsed.get("question_answered")
+            if isinstance(raw_answered, str) and raw_answered in (
+                "yes", "partial", "insufficient_data"
+            ):
+                q_answered = raw_answered
+            raw_summary = parsed.get("question_response_summary")
+            if isinstance(raw_summary, str) and raw_summary.strip():
+                q_response_summary = raw_summary.strip()[:800]
+
         return HypothesisFull(
             hyp_id=hyp_id,
             summary=summary,
@@ -261,6 +297,8 @@ class SynthesizerAgent:
             affected_variables=affected,
             confidence=confidence,
             confidence_basis=basis,
+            question_answered=q_answered,  # type: ignore[arg-type]
+            question_response_summary=q_response_summary,
         )
 
 
