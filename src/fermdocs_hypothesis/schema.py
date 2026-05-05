@@ -477,6 +477,7 @@ class OrchestratorView(BaseModel):
     open_questions: list[OpenQuestionRef]
     last_turn_outcome: TurnOutcome | None = None
     accepted_hypotheses_so_far: list[HypothesisRef] = Field(default_factory=list)
+    user_question: UserQuestion | None = None
 
 
 class SpecialistView(BaseModel):
@@ -497,6 +498,7 @@ class SpecialistView(BaseModel):
     )
     open_questions_in_domain: list[OpenQuestionRef] = Field(default_factory=list)
     prior_facets_this_topic: list[FacetSummary] = Field(default_factory=list)
+    user_question: UserQuestion | None = None
 
 
 class SynthesizerView(BaseModel):
@@ -520,6 +522,7 @@ class SynthesizerView(BaseModel):
             " context."
         ),
     )
+    user_question: UserQuestion | None = None
 
 
 class CriticView(BaseModel):
@@ -535,6 +538,7 @@ class CriticView(BaseModel):
         ),
     )
     cross_topic_lessons: LessonsDigest | None = None
+    user_question: UserQuestion | None = None
 
 
 class JudgeView(BaseModel):
@@ -547,6 +551,7 @@ class JudgeView(BaseModel):
     # + critique pair.
     previous_attempts: list[AttemptRecord] = Field(default_factory=list)
     cross_topic_lessons: LessonsDigest | None = None
+    user_question: UserQuestion | None = None
 
 
 # ---------- Output (final + rejected) ----------

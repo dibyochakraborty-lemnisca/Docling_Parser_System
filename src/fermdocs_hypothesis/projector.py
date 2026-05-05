@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+from fermdocs.domain.user_question import UserQuestion
 from fermdocs_characterize.agents.metric_catalog import (
     DATA_QUALITY_METRICS,
     KINETICS_METRICS,
@@ -73,6 +74,7 @@ def project_orchestrator(
     seed_topics: list[SeedTopic],
     budget: BudgetSnapshot,
     current_turn: int,
+    user_question: UserQuestion | None = None,
 ) -> OrchestratorView:
     events_list = list(events)
     top = rank_topics(seed_topics, events_list, k=VIEW_CAPS["top_topics_k"])
@@ -87,6 +89,7 @@ def project_orchestrator(
         open_questions=unresolved,
         last_turn_outcome=last_turn_outcome(events_list),
         accepted_hypotheses_so_far=accepted,
+        user_question=user_question,
     )
 
 
@@ -113,6 +116,7 @@ def project_specialist(
     available_trajectories: list[TrajectoryViewRef],
     available_priors: list[ResolvedPriorRef],
     available_analyses: list[AnalysisRef] | None = None,
+    user_question: UserQuestion | None = None,
 ) -> SpecialistView:
     """Filter the upstream pools to what's relevant for this specialist on
     this topic.
@@ -199,6 +203,7 @@ def project_specialist(
         relevant_analyses=analyses[: VIEW_CAPS["analyses_per_specialist"]],
         open_questions_in_domain=questions[: VIEW_CAPS["questions_per_specialist"]],
         prior_facets_this_topic=facets[: VIEW_CAPS["facets_per_topic"]],
+        user_question=user_question,
     )
 
 
@@ -207,6 +212,7 @@ def project_synthesizer(
     current_topic: TopicSpec,
     facets: list[FacetFull],
     events: Iterable[Event] | None = None,
+    user_question: UserQuestion | None = None,
 ) -> SynthesizerView:
     """Synthesizer sees full facets, a unioned citation catalog, and on
     retries also its prior rejected attempts on this topic + any
@@ -260,6 +266,7 @@ def project_synthesizer(
         ),
         previous_attempts=previous_attempts,
         cross_topic_lessons=cross_lessons,
+        user_question=user_question,
     )
 
 
@@ -271,6 +278,7 @@ def project_critic(
     debate_summary_one_line: str = "",
     events: Iterable[Event] | None = None,
     topic_id: str | None = None,
+    user_question: UserQuestion | None = None,
 ) -> CriticView:
     """`events` + `topic_id` populate previous_attempts and the cross-topic
     lessons digest. Both default to None to preserve existing test calls.
@@ -292,6 +300,7 @@ def project_critic(
         debate_summary_one_line=debate_summary_one_line,
         previous_attempts=previous_attempts,
         cross_topic_lessons=cross_lessons,
+        user_question=user_question,
     )
 
 
@@ -302,6 +311,7 @@ def project_judge(
     citation_lookups: dict[str, object] | None = None,
     events: Iterable[Event] | None = None,
     topic_id: str | None = None,
+    user_question: UserQuestion | None = None,
 ) -> JudgeView:
     """Judge sees previous_attempts on the same topic to avoid contradicting
     its own prior rulings. Cross-topic lessons help with consistency.
@@ -326,6 +336,7 @@ def project_judge(
         citation_lookups=dict(citation_lookups or {}),
         previous_attempts=previous_attempts,
         cross_topic_lessons=cross_lessons,
+        user_question=user_question,
     )
 
 
