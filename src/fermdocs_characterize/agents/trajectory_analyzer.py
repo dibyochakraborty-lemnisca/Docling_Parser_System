@@ -54,6 +54,7 @@ from typing import Any
 from uuid import UUID
 
 from fermdocs_characterize.agents.llm_client import GeminiCharacterizeClient
+from fermdocs_characterize.agents.metric_catalog import CATALOG, ready_entries
 from fermdocs_characterize.schema import (
     EvidenceStrength,
     ExtractedVia,
@@ -76,6 +77,13 @@ LLM_CONFIDENCE_CAP = 0.85
 """Mirror of the global LLM-judged cap. Schema enforces the Finding
 validator; we clamp here too so we never construct a Finding that
 fails validation."""
+
+STATISTICAL_CONFIDENCE_CAP = 0.95
+"""Cap for findings whose math came from a verified toolkit function
+(metric_id-grounded). Higher than LLM_JUDGED because the numbers are
+deterministic; still <1.0 because human review remains the ground truth."""
+
+_TIER_FROM_CATALOG: dict[str, Tier] = {"A": Tier.A, "B": Tier.B, "C": Tier.C}
 
 
 TRAJECTORY_ANALYZER_SYSTEM = """\
@@ -133,6 +141,56 @@ HOW TO USE execute_python:
   - Output is capped at 50KB. Don't dump the whole DataFrame; print
     summary statistics, head/tail, or specific rows.
   - You have up to 8 execute_python calls before being forced to emit.
+
+CATALOG + TOOLKIT (preferred path for any metric we have a function for):
+
+  A declarative catalog of standard fermentation metrics is available at
+  `fermdocs_characterize.agents.metric_catalog.CATALOG` (dict keyed by
+  metric_id like "A8", "A10", "B10"). Each entry tells you:
+    - tier (A/B/C), short/long description, applies_to rule
+    - required_inputs (which trajectory variables must be present)
+    - required_parameters (defaults sourced from literature)
+    - toolkit_fn (importable Python path) when status == "ready"
+
+  When a metric_id has status="ready", you should PREFER calling its
+  toolkit_fn over writing your own derivation. The math is verified,
+  the audit trail is cleaner (we record the metric_id), and findings
+  emitted with metric_id break out of the LLM-judged 0.85 confidence
+  cap because the numbers come from a deterministic function.
+
+  Example: bundle has biomass trajectories. Catalog A8 (specific growth
+  rate) and A10 (phase segmentation) are ready. Call them:
+
+    ```python
+    import pandas as pd
+    from fermdocs_characterize.toolkit.kinetics import (
+        compute_mu, segment_growth_phases,
+    )
+    df = pd.read_csv("OBS_PATH")
+    bio = df[df["variable"] == "biomass_g_l"].dropna(subset=["value"])
+    rows = []
+    for rid, g in bio.groupby("run_id"):
+        g = g.sort_values("time_h")
+        if len(g) < 5:
+            continue
+        res = compute_mu(g["time_h"], g["value"])
+        rows.append({"run_id": rid, "mu_max": res.mu_max, "t_mu_max": res.t_mu_max_h})
+    print(rows)
+    ```
+
+  Then emit ONE pattern per run with `metric_id="A8"`,
+  `statistics={"mu_max": <number>, "t_mu_max_h": <number>}`. Do NOT
+  invent numbers. Cite the run_id + the toolkit function name in
+  your summary.
+
+  When emitting a pattern grounded in a ready catalog entry, include
+  `metric_id` in your output JSON. This routes the finding through
+  the verified-statistical path with confidence allowed up to 0.95
+  (still < 1.0 because human review is the gold standard).
+
+  When a metric isn't in the catalog OR status is "pending", fall
+  back to the open-ended pattern detection below — emit without
+  `metric_id` and confidence ≤ 0.85.
 
 FEW-SHOT EXAMPLES (see one shape per analysis kind; combine and adapt):
 
@@ -214,12 +272,13 @@ When done:
     "patterns": [
       {
         "pattern_kind": "<short snake_case kind, e.g. 'phase_boundary'>",
+        "metric_id": "A8" or null,
         "summary": "<one-line, ≤200 chars, cite run_ids and variables>",
         "variables_involved": ["var1", "var2"],
         "run_ids": ["RUN-0001", "RUN-0002"],
         "time_window": {"start": <float>, "end": <float>} or null,
         "severity": "minor|major|critical|info",
-        "confidence": <float 0.0-0.85>,
+        "confidence": <float 0.0-0.95 if metric_id, else 0.0-0.85>,
         "caveats": ["..."],
         "statistics": {"<key>": <value>, ...}
       }
@@ -227,11 +286,14 @@ When done:
   }
 
 Hard rules:
-  - confidence ≤ 0.85.
+  - confidence ≤ 0.85 when metric_id is null; ≤ 0.95 when metric_id is set.
   - Each pattern's summary must reference at least one run_id OR variable.
   - statistics dict must include at least one numeric key sourced from
     your execute_python computation (e.g. "z_score", "p_value", "cv",
-    "n_runs", "r_pearson"). This is the audit trail.
+    "n_runs", "r_pearson", or the catalog-defined output columns). This
+    is the audit trail.
+  - When metric_id is set, statistics SHOULD include the catalog entry's
+    output_columns as keys.
   - Empty patterns list is acceptable when nothing recurs.\
 """
 
@@ -249,6 +311,7 @@ _ANALYZER_SCHEMA: dict[str, Any] = {
                 "type": "OBJECT",
                 "properties": {
                     "pattern_kind": {"type": "STRING"},
+                    "metric_id": {"type": "STRING", "nullable": True},
                     "summary": {"type": "STRING"},
                     "variables_involved": {
                         "type": "ARRAY", "items": {"type": "STRING"}, "nullable": True,
@@ -575,8 +638,18 @@ class TrajectoryAnalyzerAgent:
         except ValueError:
             severity = Severity.MINOR
 
+        # Catalog grounding: if metric_id matches a ready entry, this is
+        # a STATISTICAL finding (verified toolkit math) and gets the higher
+        # confidence cap. Unknown / pending metric_ids fall through to
+        # LLM_JUDGED with the 0.85 cap.
+        metric_id_raw = p.get("metric_id")
+        metric_id = str(metric_id_raw).strip() if metric_id_raw else ""
+        catalog_entry = CATALOG.get(metric_id) if metric_id else None
+        is_statistical = bool(catalog_entry and catalog_entry.is_ready())
+
+        cap = STATISTICAL_CONFIDENCE_CAP if is_statistical else LLM_CONFIDENCE_CAP
         confidence = float(p.get("confidence") or 0.6)
-        confidence = max(0.0, min(confidence, LLM_CONFIDENCE_CAP))
+        confidence = max(0.0, min(confidence, cap))
 
         caveats = [str(c) for c in (p.get("caveats") or []) if c]
 
@@ -584,6 +657,10 @@ class TrajectoryAnalyzerAgent:
         # Always record pattern_kind in statistics for downstream
         # discrimination — D6b/(ii) contract.
         statistics["pattern_kind"] = pattern_kind
+        if metric_id:
+            statistics["metric_id"] = metric_id
+        if catalog_entry is not None:
+            statistics["tier"] = catalog_entry.tier
 
         # evidence_observation_ids must be REAL ingestion observation IDs
         # (e.g. "OBS-0042"), NOT run_ids — the validator resolves them
@@ -618,14 +695,23 @@ class TrajectoryAnalyzerAgent:
                 variables,
             )
 
+        tier = (
+            _TIER_FROM_CATALOG[catalog_entry.tier]
+            if catalog_entry is not None
+            else Tier.B  # default for un-tagged trajectory patterns
+        )
+        extracted_via = (
+            ExtractedVia.STATISTICAL if is_statistical else ExtractedVia.LLM_JUDGED
+        )
+
         return Finding(
             finding_id=f"{char_id}:F-{idx:04d}",
             type=FindingType.TRAJECTORY_PATTERN,
             severity=severity,
-            tier=Tier.B,  # derived from measurements
+            tier=tier,
             summary=summary,
             confidence=confidence,
-            extracted_via=ExtractedVia.LLM_JUDGED,
+            extracted_via=extracted_via,
             caveats=caveats,
             competing_explanations=[],
             evidence_strength=EvidenceStrength(

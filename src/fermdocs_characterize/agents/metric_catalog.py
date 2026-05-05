@@ -1,0 +1,602 @@
+"""Declarative menu of fermentation metrics, ported from the langgraph
+reference repo (`src/tools/analysis_catalog.py`) into our naming.
+
+Architectural role: the trajectory analyzer's *planner-side* surface.
+The LLM reads the catalog to decide which metrics apply to the current
+bundle, then writes `execute_python` code that imports the corresponding
+verified toolkit function and prints the result. Math never runs in the
+LLM hot path; the catalog is the bridge from "metric_id" -> import path.
+
+Tiering convention:
+  A — pure trajectory math, organism-agnostic (mu, doubling, phases, ...)
+  B — mass-balance / yield math, requires measured inputs (RQ, yields, C-balance)
+  C — literature-assisted estimates with citations (Verduyn yields, Van't Riet kLa)
+
+PR 1 scope: all 60 entries declared so the catalog is a complete
+schema, but `toolkit_fn` is only populated for the kinetics functions
+shipped in this PR (A8, A9, A10, A11). Other entries carry
+`toolkit_fn=None` with `status="pending"`; roundtrip test only checks
+non-None entries.
+"""
+
+from __future__ import annotations
+
+import importlib
+from dataclasses import dataclass, field
+from typing import Literal
+
+Tier = Literal["A", "B", "C"]
+OutputShape = Literal[
+    "scalar",
+    "scalar_with_metadata",
+    "timecourse_csv",
+    "table_csv",
+    "multi_run_summary",
+    "per_run_scalar",
+]
+EntryStatus = Literal["ready", "pending"]
+
+
+@dataclass(frozen=True)
+class InputSpec:
+    """A required trajectory variable for a catalog entry.
+
+    `variable` matches the golden_schema variable name (e.g.
+    'biomass_g_l', 'glucose_g_l'). `min_points` is the smallest
+    number of non-imputed observations the toolkit needs to compute
+    a meaningful result; analyzer should emit a data-gap finding
+    rather than calling the toolkit with too few points.
+    """
+
+    variable: str
+    min_points: int = 5
+    description: str = ""
+
+
+@dataclass(frozen=True)
+class ParamSpec:
+    """A configurable parameter the analyzer may pass to the toolkit.
+
+    Defaults are sourced from literature (cited in `note`) and should
+    rarely be overridden. When overridden, the analyzer must record
+    `params_used` in Finding.statistics so the audit trail is complete.
+    """
+
+    name: str
+    default: float | int | str | None
+    note: str = ""
+
+
+@dataclass(frozen=True)
+class CatalogEntry:
+    metric_id: str
+    tier: Tier
+    short_description: str
+    long_description: str
+    applies_to: str
+    output_shape: OutputShape
+    output_columns: tuple[str, ...] = ()
+    required_inputs: tuple[InputSpec, ...] = ()
+    required_parameters: tuple[ParamSpec, ...] = ()
+    toolkit_fn: str | None = None
+    status: EntryStatus = "pending"
+    literature_source: str | None = None
+
+    def is_ready(self) -> bool:
+        return self.status == "ready" and self.toolkit_fn is not None
+
+    def resolve_toolkit_fn(self):
+        """Import + return the toolkit callable. Raises if not ready."""
+        if not self.toolkit_fn:
+            raise ValueError(f"{self.metric_id}: no toolkit_fn declared")
+        module_path, _, fn_name = self.toolkit_fn.partition(":")
+        if not module_path or not fn_name:
+            raise ValueError(
+                f"{self.metric_id}: malformed toolkit_fn '{self.toolkit_fn}' "
+                f"(expected 'module.path:function_name')"
+            )
+        module = importlib.import_module(module_path)
+        return getattr(module, fn_name)
+
+
+# -----------------------------------------------------------------------------
+# Catalog
+#
+# IDs are stable across runs: A8 always means specific growth rate, B10
+# always means RQ. Adding/removing entries is a code change. Renumbering
+# is forbidden — downstream Finding.statistics["metric_id"] joins assume
+# the IDs are immutable.
+# -----------------------------------------------------------------------------
+
+
+_CATALOG: dict[str, CatalogEntry] = {}
+
+
+def _register(entry: CatalogEntry) -> None:
+    if entry.metric_id in _CATALOG:
+        raise ValueError(f"duplicate metric_id: {entry.metric_id}")
+    _CATALOG[entry.metric_id] = entry
+
+
+# ---------------- Tier A — kinetics (organism-agnostic trajectory math) ----------------
+
+
+_register(
+    CatalogEntry(
+        metric_id="A1",
+        tier="A",
+        short_description="Run-level KPI summary",
+        long_description=(
+            "Per-run summary table: max biomass, max product, final yield, "
+            "duration, time-to-plateau. Assembled from raw trajectories with "
+            "no model assumptions."
+        ),
+        applies_to="any bundle with at least one biomass or product trajectory",
+        output_shape="table_csv",
+        output_columns=("run_id", "kpi_name", "value", "unit"),
+        required_inputs=(InputSpec(variable="biomass_g_l", min_points=3),),
+        status="pending",
+    )
+)
+
+_register(
+    CatalogEntry(
+        metric_id="A2",
+        tier="A",
+        short_description="Trajectory completeness map",
+        long_description=(
+            "Per-(run, variable) coverage report: count of non-null points, "
+            "min/max time, gaps over 4h. Surfaces measurement-frequency "
+            "variation across batches before any modelling."
+        ),
+        applies_to="any bundle",
+        output_shape="table_csv",
+        output_columns=("run_id", "variable", "n_points", "first_h", "last_h", "max_gap_h"),
+        status="pending",
+    )
+)
+
+_register(
+    CatalogEntry(
+        metric_id="A3",
+        tier="A",
+        short_description="Per-run final values vs cohort",
+        long_description=(
+            "Z-score of each run's final biomass/product against the cohort. "
+            "Flags runs more than 2 sigma from the population."
+        ),
+        applies_to="cohorts with 5+ runs",
+        output_shape="multi_run_summary",
+        status="pending",
+    )
+)
+
+_register(
+    CatalogEntry(
+        metric_id="A4",
+        tier="A",
+        short_description="Time-to-target curves",
+        long_description=(
+            "For each run, time to reach 50/75/95% of that run's max biomass. "
+            "Useful for cross-batch comparison of growth speed."
+        ),
+        applies_to="bundles with biomass trajectories",
+        output_shape="table_csv",
+        status="pending",
+    )
+)
+
+_register(
+    CatalogEntry(
+        metric_id="A5",
+        tier="A",
+        short_description="Maximum value timing",
+        long_description="Time at which each run reaches its maximum for each tracked variable.",
+        applies_to="any bundle with trajectories",
+        output_shape="table_csv",
+        status="pending",
+    )
+)
+
+_register(
+    CatalogEntry(
+        metric_id="A6",
+        tier="A",
+        short_description="Sampling density profile",
+        long_description="Per-run inter-sample interval distribution; flags runs with sparse sampling that limits derivative-based metrics.",
+        applies_to="any bundle",
+        output_shape="multi_run_summary",
+        status="pending",
+    )
+)
+
+_register(
+    CatalogEntry(
+        metric_id="A7",
+        tier="A",
+        short_description="Imputation density",
+        long_description="Fraction of imputed-vs-measured points per run, per variable. Caps confidence on downstream derived metrics.",
+        applies_to="any bundle",
+        output_shape="table_csv",
+        status="pending",
+    )
+)
+
+_register(
+    CatalogEntry(
+        metric_id="A8",
+        tier="A",
+        short_description="Specific growth rate mu(t)",
+        long_description=(
+            "Time-resolved specific growth rate from biomass trajectory: "
+            "mu = d(ln X)/dt computed via Savitzky-Golay smoothing of ln(biomass). "
+            "Returns the timecourse plus mu_max and time-of-max."
+        ),
+        applies_to="any run with >= 5 biomass measurements",
+        output_shape="scalar_with_metadata",
+        output_columns=("mu_max", "t_mu_max_h", "n_points"),
+        required_inputs=(
+            InputSpec(
+                variable="biomass_g_l",
+                min_points=5,
+                description="Cell biomass concentration over time",
+            ),
+        ),
+        required_parameters=(
+            ParamSpec(
+                name="window",
+                default=7,
+                note="Savitzky-Golay window length (odd integer); 7 ≈ 4-7h smoothing on hourly data.",
+            ),
+            ParamSpec(
+                name="poly",
+                default=2,
+                note="Savitzky-Golay polynomial order; 2 keeps curvature in growth phase.",
+            ),
+        ),
+        toolkit_fn="fermdocs_characterize.toolkit.kinetics:compute_mu",
+        status="ready",
+    )
+)
+
+_register(
+    CatalogEntry(
+        metric_id="A9",
+        tier="A",
+        short_description="Doubling time t_d",
+        long_description=(
+            "Doubling time during exponential growth: t_d = ln(2) / mu_max. "
+            "Reports both the value and the time window over which mu_max held."
+        ),
+        applies_to="any run with a computable mu_max from A8",
+        output_shape="scalar_with_metadata",
+        output_columns=("t_doubling_h", "mu_max", "phase_start_h", "phase_end_h"),
+        required_inputs=(InputSpec(variable="biomass_g_l", min_points=5),),
+        toolkit_fn="fermdocs_characterize.toolkit.kinetics:doubling_time",
+        status="ready",
+    )
+)
+
+_register(
+    CatalogEntry(
+        metric_id="A10",
+        tier="A",
+        short_description="Growth phase segmentation",
+        long_description=(
+            "Partitions the run into lag / exponential / linear / stationary / "
+            "decline phases by thresholding mu(t). Returns per-phase start, "
+            "end, mean mu, and biomass delta."
+        ),
+        applies_to="any run with biomass trajectory >= 8 points",
+        output_shape="table_csv",
+        output_columns=("phase", "start_h", "end_h", "mean_mu", "biomass_delta_g_l"),
+        required_inputs=(InputSpec(variable="biomass_g_l", min_points=8),),
+        required_parameters=(
+            ParamSpec(
+                name="lag_threshold",
+                default=0.05,
+                note="mu below this counts as lag phase. Units: 1/h.",
+            ),
+            ParamSpec(
+                name="exp_threshold",
+                default=0.15,
+                note="mu above this counts as exponential. Units: 1/h.",
+            ),
+            ParamSpec(
+                name="decline_threshold",
+                default=-0.02,
+                note="mu below this (negative) counts as decline.",
+            ),
+        ),
+        toolkit_fn="fermdocs_characterize.toolkit.kinetics:segment_growth_phases",
+        status="ready",
+    )
+)
+
+_register(
+    CatalogEntry(
+        metric_id="A11",
+        tier="A",
+        short_description="Phasewise mu summary",
+        long_description=(
+            "Mean specific growth rate within each segmented phase from A10. "
+            "Used to compare cohorts on phase-resolved kinetics rather than "
+            "single-number mu_max."
+        ),
+        applies_to="any run that produces phases via A10",
+        output_shape="table_csv",
+        output_columns=("phase", "mean_mu", "n_points"),
+        required_inputs=(InputSpec(variable="biomass_g_l", min_points=8),),
+        toolkit_fn="fermdocs_characterize.toolkit.kinetics:phasewise_mu",
+        status="ready",
+    )
+)
+
+_register(
+    CatalogEntry(
+        metric_id="A12",
+        tier="A",
+        short_description="Volumetric productivity Qp",
+        long_description="Whole-run volumetric productivity: (P_final - P_init) / duration. Reports g/L/h.",
+        applies_to="runs with product concentration trajectory",
+        output_shape="scalar",
+        status="pending",
+    )
+)
+
+_register(
+    CatalogEntry(
+        metric_id="A13",
+        tier="A",
+        short_description="Phasewise volumetric productivity",
+        long_description="Volumetric productivity within each growth phase from A10.",
+        applies_to="runs that produce A10 phases and have product trajectory",
+        output_shape="table_csv",
+        status="pending",
+    )
+)
+
+_register(
+    CatalogEntry(
+        metric_id="A14",
+        tier="A",
+        short_description="DO margin profile",
+        long_description="Per-run minimum dissolved-oxygen margin over the run; flags windows of O2 limitation.",
+        applies_to="runs with dissolved_o2 trajectory",
+        output_shape="scalar_with_metadata",
+        status="pending",
+    )
+)
+
+_register(
+    CatalogEntry(
+        metric_id="A15",
+        tier="A",
+        short_description="Controller excursion count",
+        long_description="Count and duration of windows where controller (pH, temperature, DO) deviated outside ±tolerance from setpoint.",
+        applies_to="runs with controller setpoint + measured trajectories",
+        output_shape="multi_run_summary",
+        status="pending",
+    )
+)
+
+_register(
+    CatalogEntry(
+        metric_id="A16",
+        tier="A",
+        short_description="Foam-related agitation drops",
+        long_description="Detect agitation_rpm dips correlated with foam events when foam pressure measurement available.",
+        applies_to="runs with agitation + foam telemetry",
+        output_shape="table_csv",
+        status="pending",
+    )
+)
+
+_register(
+    CatalogEntry(
+        metric_id="A17",
+        tier="A",
+        short_description="Impeller tip speed",
+        long_description="Tip speed = pi * D * N. Flags shear-stress windows. Requires impeller diameter from process_priors / dossier.",
+        applies_to="bioreactor runs with agitation_rpm and impeller_diameter_m",
+        output_shape="timecourse_csv",
+        status="pending",
+    )
+)
+
+_register(
+    CatalogEntry(
+        metric_id="A18",
+        tier="A",
+        short_description="Power per volume P/V",
+        long_description="Volumetric power input from agitation_rpm + impeller geometry; bridges to kLa estimates.",
+        applies_to="bioreactor runs with agitation + reactor geometry",
+        output_shape="timecourse_csv",
+        status="pending",
+    )
+)
+
+_register(
+    CatalogEntry(
+        metric_id="A19",
+        tier="A",
+        short_description="Cross-run KPI table",
+        long_description="One row per run with all A1 KPIs side-by-side. Backbone for cohort-level outlier detection.",
+        applies_to="cohorts of 2+ runs",
+        output_shape="multi_run_summary",
+        status="pending",
+    )
+)
+
+_register(
+    CatalogEntry(
+        metric_id="A20",
+        tier="A",
+        short_description="Pairwise deviation matrix",
+        long_description="For each KPI, pairwise |xi - xj| / mean across runs. Surfaces the most divergent run pairs.",
+        applies_to="cohorts of 3+ runs",
+        output_shape="multi_run_summary",
+        status="pending",
+    )
+)
+
+_register(
+    CatalogEntry(
+        metric_id="A21",
+        tier="A",
+        short_description="Variance decomposition",
+        long_description="Decomposes total KPI variance into (between-run) vs (within-run-window) components. Tells whether spread comes from batch identity or measurement noise.",
+        applies_to="cohorts of 5+ runs",
+        output_shape="multi_run_summary",
+        status="pending",
+    )
+)
+
+_register(
+    CatalogEntry(
+        metric_id="A22",
+        tier="A",
+        short_description="Trajectory shape clustering",
+        long_description="Hierarchical clustering of biomass trajectory shapes (Euclidean on resampled curves). Surfaces qualitatively different batch behaviours.",
+        applies_to="cohorts of 5+ runs with biomass",
+        output_shape="multi_run_summary",
+        status="pending",
+    )
+)
+
+_register(
+    CatalogEntry(
+        metric_id="A23",
+        tier="A",
+        short_description="Productivity reduction signature",
+        long_description="Detects runs where productivity drops sharply mid-run (slope inversion in product timecourse).",
+        applies_to="runs with product trajectory >= 10 points",
+        output_shape="scalar_with_metadata",
+        status="pending",
+    )
+)
+
+_register(
+    CatalogEntry(
+        metric_id="A24",
+        tier="A",
+        short_description="Data quality flags",
+        long_description="Per-run/per-variable flags for sensor saturation, frozen-value windows, and physical impossibility (e.g. biomass decreasing during stated growth phase). Caps downstream confidence.",
+        applies_to="any bundle",
+        output_shape="table_csv",
+        status="pending",
+    )
+)
+
+
+# ---------------- Tier B — mass balance / yields (require measured inputs) ----------------
+
+
+for _id, _short in [
+    ("B1", "Substrate consumption rate qs"),
+    ("B2", "Product formation rate qp"),
+    ("B3", "Oxygen uptake rate OUR"),
+    ("B4", "Carbon dioxide evolution rate CER"),
+    ("B5", "Biomass yield Yxs"),
+    ("B6", "Byproduct yields (ethanol/acetate/lactate per substrate)"),
+    ("B7", "Product yield Yps"),
+    ("B8", "Oxygen yield Yxo"),
+    ("B9", "Maintenance coefficient ms"),
+    ("B10", "Respiratory quotient RQ + overflow flag"),
+    ("B11", "kLa back-calculation from OUR"),
+    ("B12", "Substrate-to-product carbon split"),
+    ("B13", "Ash-corrected dry-cell-weight balance"),
+    ("B14", "Volumetric oxygen transfer OTR"),
+    ("B15", "Volumetric mass transfer coefficient kLa"),
+    ("B16", "Carbon balance closure"),
+    ("B17", "Nitrogen balance closure"),
+    ("B18", "Degree-of-reduction (gamma) balance"),
+    ("B19", "Specific heat generation"),
+    ("B20", "Energy balance closure"),
+]:
+    _register(
+        CatalogEntry(
+            metric_id=_id,
+            tier="B",
+            short_description=_short,
+            long_description=f"{_short}. Implementation deferred to PR 2 of plans/2026-05-04-metric-catalog-and-toolkit.md.",
+            applies_to="depends on metric; inputs declared in PR 2",
+            output_shape="scalar_with_metadata",
+            status="pending",
+        )
+    )
+
+
+# ---------------- Tier C — literature-assisted (require organism priors) ----------------
+
+
+for _id, _short in [
+    ("C1", "Theoretical Yxs from Verduyn yields"),
+    ("C2", "mu_max reference vs observed"),
+    ("C3", "Henry's-law-derived saturation O2 C*"),
+    ("C4", "Van't Riet kLa estimate"),
+    ("C5", "qs estimated from Verduyn yields"),
+    ("C6", "Theoretical qp from Yps_max"),
+    ("C7", "Maintenance vs Verduyn ms reference"),
+    ("C8", "Glucose uptake reference window"),
+    ("C9", "Oxygen demand vs supply ratio"),
+    ("C10", "Overflow threshold (Crabtree / acetate switch)"),
+    ("C11", "Heat generation vs metabolic prediction"),
+    ("C12", "CO2 stripping efficiency"),
+    ("C13", "Dissolved-CO2 inhibition flag"),
+    ("C14", "Reference doubling time vs observed"),
+    ("C15", "Substrate inhibition window"),
+    ("C16", "Product inhibition window"),
+]:
+    _register(
+        CatalogEntry(
+            metric_id=_id,
+            tier="C",
+            short_description=_short,
+            long_description=(
+                f"{_short}. Implementation deferred to PR 3. Requires "
+                "fermdocs.domain.process_priors lookup; emits data-gap when "
+                "organism missing from registry."
+            ),
+            applies_to="organism present in process_priors registry",
+            output_shape="scalar_with_metadata",
+            status="pending",
+        )
+    )
+
+
+# -----------------------------------------------------------------------------
+# Public surface
+# -----------------------------------------------------------------------------
+
+
+CATALOG: dict[str, CatalogEntry] = dict(_CATALOG)
+
+
+def get_entry(metric_id: str) -> CatalogEntry:
+    if metric_id not in CATALOG:
+        raise KeyError(f"unknown metric_id: {metric_id!r}")
+    return CATALOG[metric_id]
+
+
+def entries_by_tier(tier: Tier) -> list[CatalogEntry]:
+    return [e for e in CATALOG.values() if e.tier == tier]
+
+
+def ready_entries() -> list[CatalogEntry]:
+    return [e for e in CATALOG.values() if e.is_ready()]
+
+
+# Specialist routing — used in PR 3 by the hypothesis projector. Declared
+# here so the metric_id -> domain mapping lives next to the catalog itself.
+
+KINETICS_METRICS: frozenset[str] = frozenset(
+    {"A8", "A9", "A10", "A11", "A13", "A23", "B10"}
+)
+MASS_TRANSFER_METRICS: frozenset[str] = frozenset(
+    {"A14", "A15", "A17", "A18", "B8", "B11", "B14", "B15", "C3", "C4", "C9", "C13"}
+)
+METABOLIC_METRICS: frozenset[str] = frozenset(
+    {"B6", "B10", "B16", "B17", "B18", "C5", "C6", "C7", "C10"}
+)
+DATA_QUALITY_METRICS: frozenset[str] = frozenset({"A24"})
