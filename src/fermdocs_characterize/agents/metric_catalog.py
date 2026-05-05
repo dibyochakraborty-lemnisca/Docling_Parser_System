@@ -46,11 +46,35 @@ class InputSpec:
     number of non-imputed observations the toolkit needs to compute
     a meaningful result; analyzer should emit a data-gap finding
     rather than calling the toolkit with too few points.
+
+    `accepted_proxies` lists alternative variable names that satisfy
+    this input. Used when the math is scale-invariant (e.g. specific
+    growth rate μ = d ln(X)/dt is identical whether X is biomass_g_l,
+    wcw_g_l, or od600_au — only the ratio matters). Analyzer is
+    expected to pick the strongest available proxy and record which
+    one in Finding.statistics so downstream consumers can reason
+    about the citation honestly.
     """
 
     variable: str
     min_points: int = 5
     description: str = ""
+    accepted_proxies: tuple[str, ...] = ()
+
+
+# Biomass-equivalent proxies for scale-invariant kinetics (μ, doubling
+# time, phase segmentation, phasewise μ). All three measure the same
+# underlying quantity (cell mass) at different scales and with different
+# constants, so derivative-based metrics work identically. ABSOLUTE-
+# magnitude metrics (B6 byproduct yield, B16 carbon balance) still need
+# biomass_g_l specifically and don't list these proxies.
+BIOMASS_PROXIES: tuple[str, ...] = ("wcw_g_l", "od600_au")
+
+# Dissolved oxygen proxies. dissolved_o2_mg_l is the absolute concentration
+# but industrial probes typically report do_pct_saturation; the
+# 30%-saturation threshold for O2 limitation IS in % saturation, so for
+# A14 (DO margin profile) the proxy is arguably preferable.
+DO_PROXIES: tuple[str, ...] = ("do_pct_saturation",)
 
 
 @dataclass(frozen=True)
@@ -240,6 +264,7 @@ _register(
                 variable="biomass_g_l",
                 min_points=5,
                 description="Cell biomass concentration over time",
+                accepted_proxies=BIOMASS_PROXIES,
             ),
         ),
         required_parameters=(
@@ -271,7 +296,11 @@ _register(
         applies_to="any run with a computable mu_max from A8",
         output_shape="scalar_with_metadata",
         output_columns=("t_doubling_h", "mu_max", "phase_start_h", "phase_end_h"),
-        required_inputs=(InputSpec(variable="biomass_g_l", min_points=5),),
+        required_inputs=(
+            InputSpec(
+                variable="biomass_g_l", min_points=5, accepted_proxies=BIOMASS_PROXIES
+            ),
+        ),
         toolkit_fn="fermdocs_characterize.toolkit.kinetics:doubling_time",
         status="ready",
     )
@@ -290,7 +319,11 @@ _register(
         applies_to="any run with biomass trajectory >= 8 points",
         output_shape="table_csv",
         output_columns=("phase", "start_h", "end_h", "mean_mu", "biomass_delta_g_l"),
-        required_inputs=(InputSpec(variable="biomass_g_l", min_points=8),),
+        required_inputs=(
+            InputSpec(
+                variable="biomass_g_l", min_points=8, accepted_proxies=BIOMASS_PROXIES
+            ),
+        ),
         required_parameters=(
             ParamSpec(
                 name="lag_threshold",
@@ -326,7 +359,11 @@ _register(
         applies_to="any run that produces phases via A10",
         output_shape="table_csv",
         output_columns=("phase", "mean_mu", "n_points"),
-        required_inputs=(InputSpec(variable="biomass_g_l", min_points=8),),
+        required_inputs=(
+            InputSpec(
+                variable="biomass_g_l", min_points=8, accepted_proxies=BIOMASS_PROXIES
+            ),
+        ),
         toolkit_fn="fermdocs_characterize.toolkit.kinetics:phasewise_mu",
         status="ready",
     )
@@ -365,10 +402,24 @@ _register(
             "Profiles dissolved oxygen against an O2-limitation threshold. "
             "Returns frac_below, min_margin, time_below_h. Margin = DO - threshold."
         ),
-        applies_to="runs with dissolved_o2_pct trajectory",
+        applies_to="runs with dissolved_o2 trajectory (mg/L or % saturation)",
         output_shape="scalar_with_metadata",
         output_columns=("frac_below", "min_margin", "min_do", "mean_do", "time_below_h"),
-        required_inputs=(InputSpec(variable="dissolved_o2_pct", min_points=2),),
+        required_inputs=(
+            InputSpec(
+                variable="dissolved_o2_mg_l",
+                min_points=2,
+                accepted_proxies=DO_PROXIES,
+                description=(
+                    "Either dissolved_o2_mg_l (absolute concentration) or "
+                    "do_pct_saturation (% air saturation, more common in "
+                    "industrial reports). The 30%-saturation default "
+                    "threshold IS in % units, so do_pct_saturation is "
+                    "actually the more appropriate input when both are "
+                    "available."
+                ),
+            ),
+        ),
         required_parameters=(
             ParamSpec(
                 name="critical_threshold_pct",
@@ -598,6 +649,7 @@ _register(
         output_shape="scalar_with_metadata",
         output_columns=("byproduct", "delta_p", "delta_x", "yield_g_per_g"),
         required_inputs=(
+            # No accepted_proxies — yield needs absolute g/L.
             InputSpec(variable="biomass_g_l", min_points=2),
         ),
         required_parameters=(
@@ -627,6 +679,10 @@ _register(
             "frac_over_overflow_threshold",
             "overflow_flag",
         ),
+        required_inputs=(
+            InputSpec(variable="our_mmol_per_l_per_h", min_points=3),
+            InputSpec(variable="cer_mmol_per_l_per_h", min_points=3),
+        ),
         required_parameters=(
             ParamSpec(name="overflow_threshold", default=1.1, note="RQ above this counts as overflow (Crabtree literature)."),
             ParamSpec(name="overflow_fraction_floor", default=0.2, note="Fraction-of-run above threshold needed to set overflow_flag."),
@@ -654,6 +710,11 @@ _register(
             "c_in_biomass_g",
             "c_in_products_g",
             "c_in_co2_g",
+        ),
+        required_inputs=(
+            # NOTE: no accepted_proxies — carbon balance is absolute math.
+            InputSpec(variable="biomass_g_l", min_points=2),
+            InputSpec(variable="substrate_g_l", min_points=2),
         ),
         toolkit_fn="fermdocs_characterize.toolkit.balances:compute_carbon_balance_closure",
         status="ready",
@@ -725,6 +786,14 @@ _register(
         applies_to="any bundle with temperature + pressure recorded",
         output_shape="scalar_with_metadata",
         output_columns=("c_star_mg_per_l", "henry_constant_mol_per_l_per_atm"),
+        required_inputs=(
+            InputSpec(
+                variable="temperature_c",
+                min_points=1,
+                accepted_proxies=("temperature_k",),
+                description="temperature in Celsius (or Kelvin — auto-converted).",
+            ),
+        ),
         toolkit_fn="fermdocs_characterize.toolkit.literature:saturation_o2_concentration",
         status="ready",
         literature_source="Schumpe 1982; Sander 2015 review",
@@ -784,6 +853,12 @@ _register(
         applies_to="bundles with OUR (B3), kLa (B15 or C4), DO trajectory, C* (C3)",
         output_shape="scalar_with_metadata",
         output_columns=("ratio_demand_over_supply", "otr_max_mg_per_l_per_h"),
+        required_inputs=(
+            InputSpec(variable="our_mmol_per_l_per_h", min_points=3),
+            InputSpec(
+                variable="dissolved_o2_mg_l", min_points=3, accepted_proxies=DO_PROXIES
+            ),
+        ),
         toolkit_fn="fermdocs_characterize.toolkit.literature:oxygen_demand_vs_supply",
         status="ready",
         literature_source="Mass-transfer envelope (textbook)",

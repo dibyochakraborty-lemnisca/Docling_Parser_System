@@ -155,11 +155,28 @@ class CharacterizationPipeline:
         # findings that get IDs after the spec findings.
         if self._trajectory_analyzer is not None and trajectories:
             try:
+                # Surface the dossier's identity layer to the analyzer so
+                # Tier C metric calls (mu_max_reference_vs_observed,
+                # qs_from_verduyn_yields, overflow_threshold) can pass the
+                # organism string to process_priors lookup. Without this the
+                # analyzer hardcodes organism=None and every Tier C metric
+                # data-gaps even when priors registry has the entry.
+                observed = (
+                    (dossier.get("experiment") or {})
+                    .get("process", {})
+                    .get("observed", {})
+                )
+                organism = (observed.get("organism") or "").strip() or None
+                process_family = (
+                    observed.get("process_family_hint") or ""
+                ).strip() or None
                 analyzer_result = self._trajectory_analyzer.analyze(
                     char_id=char_id,
                     trajectories=trajectories,
                     spec_findings=findings,
                     starting_index=len(findings) + 1,
+                    organism=organism,
+                    process_family=process_family,
                 )
                 findings.extend(analyzer_result.findings)
             except Exception as exc:

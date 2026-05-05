@@ -205,6 +205,33 @@ CATALOG + TOOLKIT — PRIMARY PATH (HARD CHECKLIST CONTRACT):
     C9 oxygen_demand_vs_supply    — needs OUR + kLa + C* + DO
     C10 overflow_threshold        — needs observed qs + organism in priors
 
+  BIOMASS PROXIES — μ-family metrics are scale-invariant:
+
+    A8/A9/A10/A11 (specific growth rate, doubling time, phase
+    segmentation, phasewise μ) all compute on d ln(X)/dt — RATIOS, not
+    absolute concentrations. So when a bundle has only 'wcw_g_l' (wet
+    cell weight) or 'od600_au' (optical density) instead of
+    'biomass_g_l' (DCW), the math works IDENTICALLY. Use whichever
+    proxy is present.
+
+    When you do, set `statistics["biomass_proxy"]` in the emitted
+    pattern to the proxy column name ("wcw_g_l" or "od600_au"). This
+    keeps the audit trail honest: μ from OD vs DCW will produce the
+    same number but the reader needs to know which the toolkit ate.
+
+    The same logic applies to A14 DO margin: prefer dissolved_o2_mg_l
+    when present, fall back to do_pct_saturation. Default 30% threshold
+    IS in % saturation, so the proxy is arguably the better input
+    when both exist; record `statistics["do_units"]` either way.
+
+    ABSOLUTE-MAGNITUDE METRICS — proxies do NOT work:
+    B6 byproduct yield, B16 carbon balance, C5 qs vs Verduyn, C10
+    overflow threshold — all compute against absolute g/L, so they
+    require biomass_g_l (DCW) specifically. If the bundle has only
+    OD or WCW, emit a data_gap pattern explaining: "B16 carbon
+    balance requires absolute biomass_g_l (DCW); only wcw_g_l (wet
+    weight) is available, ratio ~4x but strain-specific."
+
   CALLING PATTERN (study and adapt):
 
     ```python
@@ -442,6 +469,8 @@ class TrajectoryAnalyzerAgent:
         trajectories: list[Trajectory],
         spec_findings: list[Finding],
         starting_index: int = 1,
+        organism: str | None = None,
+        process_family: str | None = None,
     ) -> TrajectoryAnalyzerResult:
         """Run pattern analysis. Returns findings to be appended to the
         pipeline's spec findings.
@@ -449,6 +478,10 @@ class TrajectoryAnalyzerAgent:
         `starting_index`: the next available F-NNNN index. Pipeline uses
         this so trajectory_pattern findings get IDs after spec findings
         without collision.
+
+        `organism` / `process_family`: the dossier's identity layer.
+        Surfaces in the user prompt so Tier C catalog calls (which need
+        process_priors lookups) can pass the right organism string.
         """
         if self._client is None:
             return TrajectoryAnalyzerResult()
@@ -464,6 +497,8 @@ class TrajectoryAnalyzerAgent:
                 obs_path=obs_path,
                 trajectories=trajectories,
                 spec_findings=spec_findings,
+                organism=organism,
+                process_family=process_family,
             )
 
         findings = self._build_findings(
@@ -487,6 +522,8 @@ class TrajectoryAnalyzerAgent:
         obs_path: Path,
         trajectories: list[Trajectory],
         spec_findings: list[Finding],
+        organism: str | None = None,
+        process_family: str | None = None,
     ) -> tuple[list[dict[str, Any]], int, int, int]:
         tool_history: list[dict[str, Any]] = []
         total_in = 0
@@ -496,6 +533,8 @@ class TrajectoryAnalyzerAgent:
             obs_path=obs_path,
             trajectories=trajectories,
             spec_findings=spec_findings,
+            organism=organism,
+            process_family=process_family,
         )
 
         for call_idx in range(MAX_TOOL_CALLS + 1):
@@ -544,6 +583,8 @@ class TrajectoryAnalyzerAgent:
         obs_path: Path,
         trajectories: list[Trajectory],
         spec_findings: list[Finding],
+        organism: str | None = None,
+        process_family: str | None = None,
     ) -> str:
         # Compact context: don't dump full trajectories (that's what
         # observations.csv is for). Just metadata so the agent knows what's
@@ -568,12 +609,21 @@ class TrajectoryAnalyzerAgent:
             )
 
         checklist = self._build_metric_checklist(
-            variables=set(variables), n_runs=len(run_ids)
+            variables=set(variables),
+            n_runs=len(run_ids),
+            organism=organism,
+        )
+
+        identity_block = (
+            f"[IDENTITY]\n"
+            f"organism: {organism or '(unknown — Tier C metric calls will data_gap)'}\n"
+            f"process_family: {process_family or '(unknown)'}\n\n"
         )
 
         return (
             f"[OBSERVATIONS_CSV]\n{obs_path}\n\n"
-            f"[TRAJECTORY METADATA]\n"
+            + identity_block
+            + f"[TRAJECTORY METADATA]\n"
             f"run_ids ({len(run_ids)}): {', '.join(run_ids[:50])}"
             f"{' ...' if len(run_ids) > 50 else ''}\n"
             f"variables ({len(variables)}): {', '.join(variables[:50])}"
@@ -592,7 +642,9 @@ class TrajectoryAnalyzerAgent:
         )
 
     @staticmethod
-    def _build_metric_checklist(*, variables: set[str], n_runs: int) -> str:
+    def _build_metric_checklist(
+        *, variables: set[str], n_runs: int, organism: str | None = None
+    ) -> str:
         """Render a deterministic per-bundle checklist of ready catalog
         entries with applicability marked from this bundle's variables.
 
@@ -600,6 +652,10 @@ class TrajectoryAnalyzerAgent:
         prompt so it can't claim ignorance of which metrics apply. Each
         line is one catalog entry: id, short_description, applicability
         verdict, and the inputs the toolkit_fn needs.
+
+        `organism` is required for the Tier C metrics that look up priors
+        (C2, C5, C10). When None, those entries data-gap with an explicit
+        "no organism in dossier" reason.
         """
         # Lazy import to avoid circulars; metric_catalog imports nothing
         # from trajectory_analyzer.
@@ -607,50 +663,88 @@ class TrajectoryAnalyzerAgent:
 
         var_lower = {v.lower() for v in variables}
 
-        def _vars_present(needed: set[str]) -> bool:
-            # Loose substring match — bundle column names vary slightly
-            # (dissolved_o2_mg_l vs dissolved_o2_pct, etc.).
-            return all(
-                any(n in v or v in n for v in var_lower) for n in needed
-            )
+        def _resolve_input(spec) -> tuple[bool, str | None]:
+            """Return (present, matched_variable_name) for an InputSpec.
 
-        # Map metric_id → minimum required variable substrings + run count.
-        # Cross-run metrics get min_runs > 1.
-        applicability: dict[str, tuple[set[str], int, str]] = {
-            "A8":  ({"biomass"}, 1, "biomass_g_l ≥ 5 points/run"),
-            "A9":  ({"biomass"}, 1, "biomass_g_l ≥ 5 points/run"),
-            "A10": ({"biomass"}, 1, "biomass_g_l ≥ 8 points/run"),
-            "A11": ({"biomass"}, 1, "biomass_g_l ≥ 8 points/run"),
-            "A14": ({"dissolved_o2"}, 1, "dissolved_o2 trajectory"),
-            "A15": (set(), 1, "any controlled variable + setpoint pair"),
-            "A17": ({"agitation"}, 1, "agitation_rpm + impeller_diameter_m param"),
-            "A18": ({"agitation"}, 1, "agitation_rpm + reactor geometry params"),
-            "A19": (set(), 2, "≥ 2 runs"),
-            "A20": (set(), 3, "≥ 3 runs"),
-            "A21": (set(), 5, "≥ 5 runs"),
-            "B6":  ({"biomass"}, 1, "biomass + a byproduct trajectory"),
-            "B10": ({"our", "cer"}, 1, "OUR + CER trajectories"),
-            "B16": ({"biomass"}, 1, "substrate + biomass + (products or CO2 from CER)"),
-            "C2":  ({"biomass"}, 1, "A8 result + organism in priors"),
-            "C3":  ({"temperature"}, 1, "temperature_C (convert from K if needed)"),
-            "C4":  ({"agitation"}, 1, "P/V from A18 + superficial gas velocity"),
-            "C5":  (set(), 1, "organism in priors (observed_qs optional)"),
-            "C9":  ({"our"}, 1, "OUR + kLa + C* + DO"),
-            "C10": (set(), 1, "organism in priors + observed qs"),
+            Tries the primary `variable` first, then each `accepted_proxy`.
+            Substring match in either direction so 'biomass' in the hint
+            picks up 'biomass_g_l', and 'do_pct_saturation' in the bundle
+            picks up the 'dissolved_o2' hint.
+            """
+            candidates = [spec.variable, *spec.accepted_proxies]
+            for candidate in candidates:
+                cand_low = candidate.lower()
+                # Bare-keyword match too (e.g. spec.variable="biomass_g_l"
+                # should match if the bundle has any column containing
+                # "biomass" — keeps older bundles compatible).
+                key = cand_low.split("_")[0] if "_" in cand_low else cand_low
+                for v in var_lower:
+                    if cand_low == v or cand_low in v or v in cand_low or key in v:
+                        return True, candidate
+            return False, None
+
+        # Per-metric extras the catalog can't express (min_runs for
+        # cross-run metrics, free-form notes about extra inputs).
+        # min_runs default is 1; entries below override only when needed.
+        min_runs_overrides: dict[str, int] = {
+            "A19": 2, "A20": 3, "A21": 5,
         }
+        extra_hint: dict[str, str] = {
+            "A15": "needs setpoint trajectory paired with measured value",
+            "A17": "also needs impeller_diameter_m param from dossier",
+            "A18": "also needs reactor geometry params from dossier",
+            "B6":  "also needs a byproduct trajectory (ethanol/acetate/lactate)",
+            "B10": "needs both OUR and CER trajectories",
+            "B16": "needs substrate + biomass + (products and/or CO2 from CER)",
+            "C2":  "also needs A8 result + organism in priors",
+            "C3":  "needs temperature (Kelvin auto-converts to C)",
+            "C4":  "also needs P/V from A18 + superficial gas velocity",
+            "C5":  "also needs organism in priors registry",
+            "C9":  "needs OUR + kLa + C* + DO",
+            "C10": "also needs organism in priors registry",
+        }
+
+        # Tier C metrics that need an organism for process_priors lookup.
+        # When the dossier didn't extract an organism (or the LLM identity
+        # extractor failed), these can't compute even if the trajectory
+        # math would otherwise be applicable.
+        organism_required: frozenset[str] = frozenset({"C2", "C5", "C10"})
 
         lines = []
         for entry in ready_entries():
             mid = entry.metric_id
-            if mid not in applicability:
-                # Defensive: any future ready entry without an applicability
-                # rule still gets surfaced so the agent can decide.
-                lines.append(f"  [?] {mid}  {entry.short_description}  (run anyway, decide applicability)")
-                continue
-            needed_vars, min_runs, hint = applicability[mid]
-            verdict = "APPLICABLE" if (
-                _vars_present(needed_vars) and n_runs >= min_runs
-            ) else "DATA_GAP"
+            min_runs = min_runs_overrides.get(mid, 1)
+            # Build a per-entry hint: variable inputs with proxy match info.
+            input_parts: list[str] = []
+            inputs_satisfied = True
+            for spec in entry.required_inputs:
+                present, matched = _resolve_input(spec)
+                if not present:
+                    inputs_satisfied = False
+                    proxy_hint = (
+                        f" (or proxies: {', '.join(spec.accepted_proxies)})"
+                        if spec.accepted_proxies else ""
+                    )
+                    input_parts.append(f"needs {spec.variable}{proxy_hint}")
+                else:
+                    if matched and matched != spec.variable:
+                        input_parts.append(
+                            f"{spec.variable} via proxy '{matched}'"
+                        )
+                    else:
+                        input_parts.append(f"{spec.variable}")
+            if mid in extra_hint:
+                input_parts.append(extra_hint[mid])
+            hint = "; ".join(input_parts) if input_parts else extra_hint.get(mid, "")
+            organism_ok = (mid not in organism_required) or bool(organism)
+            applicable = inputs_satisfied and n_runs >= min_runs and organism_ok
+            if not applicable and n_runs < min_runs:
+                hint = (hint + f"; needs ≥ {min_runs} runs (have {n_runs})").strip("; ")
+            if not organism_ok:
+                hint = (
+                    hint + "; no organism in dossier identity layer"
+                ).strip("; ")
+            verdict = "APPLICABLE" if applicable else "DATA_GAP"
             lines.append(
                 f"  [{verdict}] {mid}  {entry.short_description}  ({hint})"
             )
