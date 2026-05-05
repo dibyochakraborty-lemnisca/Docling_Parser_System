@@ -343,8 +343,16 @@ def _build_blob(
 
     Stable key order so prompt-cache prefixes are byte-stable for matching
     inputs.
+
+    user_question is rendered AT THE TOP when present so the agent reads
+    it before the rest of the context. Absent (key missing) on no-question
+    runs — preserves byte-identical JSON for legacy bundles, so the
+    prompt-prefix cache still hits.
     """
-    return {
+    blob: dict[str, Any] = {}
+    if ctx.user_question is not None:
+        blob["user_question"] = ctx.user_question.model_dump(mode="json")
+    blob.update({
         "process": ctx.process,
         "posture": {
             "schema_version": ctx.schema_version,
@@ -363,4 +371,5 @@ def _build_blob(
             "by_severity": _severity_rollup(ctx.finding_ids, by_id),
             "top": [_finding_summary(by_id[fid]) for fid in top_finding_ids if fid in by_id],
         },
-    }
+    })
+    return blob
