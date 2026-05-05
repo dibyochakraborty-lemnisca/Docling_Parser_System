@@ -823,16 +823,47 @@ class TrajectoryAnalyzerAgent:
                         seen.add(oid)
                         evidence_obs.append(oid)
         if not evidence_obs:
-            # Pattern cited runs/variables we have no trajectory for.
-            # Schema requires non-empty; log and let the validator drop
-            # the finding downstream so the failure is loud.
-            evidence_obs = ["trajectory_pattern_unanchored"]
+            # Pattern cites runs/variables we have no trajectory for. Try a
+            # last-resort anchor: any observation from any cited run (drops
+            # the variable filter). This handles data_gap patterns that name
+            # the missing variable in the pattern but legitimately can't cite
+            # observations for it.
+            for (rid, _var), obs_ids in traj_obs_index.items():
+                if not run_set or rid in run_set:
+                    for oid in obs_ids:
+                        if oid not in seen:
+                            seen.add(oid)
+                            evidence_obs.append(oid)
+
+        if not evidence_obs:
+            # Still nothing — fall back to ANY trajectory's observation IDs
+            # (the run citation didn't match either). This keeps catalog
+            # data_gap entries valid on bundles with no per-run anchor (e.g.
+            # PDF-only bundles where trajectories were stripped during ingest).
+            for obs_ids in traj_obs_index.values():
+                for oid in obs_ids:
+                    if oid not in seen:
+                        seen.add(oid)
+                        evidence_obs.append(oid)
+                if evidence_obs:
+                    break
+
+        if not evidence_obs:
+            # Truly no observations exist in the bundle — pattern is
+            # un-anchorable. Drop it via ValueError; the caller's try/except
+            # in _build_findings already handles this cleanly without
+            # corrupting validation. Previously we emitted a sentinel
+            # "trajectory_pattern_unanchored" which the diagnose validator
+            # rejected as an unknown observation_id, hard-crashing the run.
             _log.info(
-                "trajectory_analyzer: pattern cites runs=%s vars=%s but no "
-                "matching trajectory; emitting unanchored marker",
+                "trajectory_analyzer: dropping unanchorable pattern "
+                "(runs=%s vars=%s, %d trajectories indexed); "
+                "bundle likely has no trajectories at all",
                 run_ids,
                 variables,
+                len(traj_obs_index),
             )
+            raise ValueError("pattern unanchorable: no trajectory observations")
 
         tier = (
             _TIER_FROM_CATALOG[catalog_entry.tier]
