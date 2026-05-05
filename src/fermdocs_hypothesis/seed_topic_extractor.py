@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import re
 
+from fermdocs.domain.user_question import UserQuestion, question_relevance
 from fermdocs_characterize.schema import Severity
 from fermdocs_diagnose.schema import (
     AnalysisClaim,
@@ -32,6 +33,16 @@ from fermdocs_hypothesis.schema import (
     SeedTopic,
     TopicSourceType,
 )
+
+# Multiplier applied to a SeedTopic's priority when it overlaps the
+# user's question (variable / run / text-substring overlap detected by
+# question_relevance). Non-starvation: cap is 1.0 so a question-relevant
+# trivial topic never outranks a critical-severity unrelated topic
+# (whose priority floor is already 0.5 + 0.4 * 1.0 + ... ≈ 0.9-1.0).
+# A 1.3x bump on a 0.5-priority topic moves it to 0.65 — still below a
+# critical failure's 0.9, so we don't starve real anomalies. See PR-A
+# Step 0 / S2 in plans/2026-05-04-user-question-and-hitl.md.
+USER_QUESTION_PRIORITY_MULTIPLIER = 1.3
 
 _SEV_WEIGHT = {
     Severity.CRITICAL: 1.0,
@@ -132,7 +143,11 @@ def _is_spec_only_open_question(q: OpenQuestion) -> bool:
     return bool(_SPEC_LANGUAGE_RE.search(text))
 
 
-def extract_seed_topics(diag: DiagnosisOutput) -> list[SeedTopic]:
+def extract_seed_topics(
+    diag: DiagnosisOutput,
+    *,
+    user_question: UserQuestion | None = None,
+) -> list[SeedTopic]:
     """Project every claim/question into a SeedTopic. Topic IDs are
     assigned in deterministic order: failures, then analyses, then trends,
     then open questions.
@@ -153,6 +168,14 @@ def extract_seed_topics(diag: DiagnosisOutput) -> list[SeedTopic]:
 
     Failures that mix spec language WITH narrative/trajectory citations
     are kept — the real evidence makes them debatable.
+
+    User-question priority bump (PR-A): when `user_question` is provided,
+    every SeedTopic that overlaps the question's affected_variables /
+    affected_runs / text gets its priority multiplied by
+    USER_QUESTION_PRIORITY_MULTIPLIER. Capped at 1.0 by the per-builder
+    `min(priority, 1.0)` so the bump never pushes past the global
+    ceiling. Non-starvation: a 1.3x multiplier on a low-priority
+    topic still lands below a critical-severity unrelated topic.
     """
     topics: list[SeedTopic] = []
     counter = 0
@@ -176,7 +199,37 @@ def extract_seed_topics(diag: DiagnosisOutput) -> list[SeedTopic]:
         counter += 1
         topics.append(_from_open_question(q, counter))
 
+    if user_question is not None:
+        topics = [_apply_user_question_bump(t, user_question) for t in topics]
+
     return topics
+
+
+def _apply_user_question_bump(
+    topic: SeedTopic, q: UserQuestion
+) -> SeedTopic:
+    """Scale a SeedTopic's priority by USER_QUESTION_PRIORITY_MULTIPLIER
+    when it overlaps the user question's variables / runs / text.
+
+    Returns a new SeedTopic when the bump fires, or the original topic
+    when relevance is 0 — keeps test diffs tight on no-question runs.
+    """
+    cited_runs: list[str] = []
+    for ref in topic.cited_trajectories:
+        # cited_trajectories are TrajectoryRef(run_id, variable); the
+        # SeedTopic doesn't carry run_ids directly, so we reconstruct.
+        if hasattr(ref, "run_id") and ref.run_id:
+            cited_runs.append(ref.run_id)
+    relevance = question_relevance(
+        affected_variables=list(topic.affected_variables),
+        affected_runs=cited_runs,
+        text=topic.summary,
+        question=q,
+    )
+    if relevance <= 0:
+        return topic
+    new_priority = min(topic.priority * USER_QUESTION_PRIORITY_MULTIPLIER, 1.0)
+    return topic.model_copy(update={"priority": new_priority})
 
 
 def _topic_id(n: int) -> str:
