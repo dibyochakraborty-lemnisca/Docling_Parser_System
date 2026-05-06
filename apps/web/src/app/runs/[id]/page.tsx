@@ -128,8 +128,11 @@ export default function RunPage({ params }: { params: { id: string } }) {
     ? `Running follow-up #${followupIndex}`
     : run.status;
 
+  // Sticky follow-up bar reserves vertical space; pb keeps content above it.
+  const showFollowupBar = run.status === "done" && followupEligible;
+
   return (
-    <div className="space-y-8">
+    <div className={`space-y-8 ${showFollowupBar ? "pb-40" : ""}`}>
       <header className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Run {run.run_id.slice(0, 8)}</h1>
@@ -275,45 +278,6 @@ export default function RunPage({ params }: { params: { id: string } }) {
         </section>
       )}
 
-      {/* Follow-up textarea (PR-A2). Shown only when run is DONE and the
-          bundle is still on disk. Hidden during follow-up runs and when
-          the bundle has been GC'd. */}
-      {run.status === "done" && followupEligible && (
-        <section>
-          <Card>
-            <CardHeader>
-              <CardTitle>Ask a follow-up question</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <p className="text-xs text-muted-foreground">
-                The bundle is frozen — no re-ingest. Your follow-up runs the
-                hypothesis stage again with shape-aware seeding.
-              </p>
-              <Textarea
-                placeholder="e.g. Focus on RUN-0002's RQ peak — was it a sensor artifact?"
-                value={followupQuestion}
-                onChange={(e) => setFollowupQuestion(e.target.value)}
-                maxLength={2000}
-              />
-              {followupError && (
-                <p className="text-sm text-destructive">{followupError}</p>
-              )}
-              <div className="flex items-center gap-3">
-                <Button
-                  onClick={onSubmitFollowup}
-                  disabled={followupSubmitting || !followupQuestion.trim()}
-                >
-                  {followupSubmitting ? "Submitting…" : "Submit follow-up"}
-                </Button>
-                <span className="text-xs text-muted-foreground">
-                  {followupQuestion.length}/2000
-                </span>
-              </div>
-            </CardContent>
-          </Card>
-        </section>
-      )}
-
       {/* Open questions form */}
       {unresolved.length > 0 && (
         <section>
@@ -403,6 +367,51 @@ export default function RunPage({ params }: { params: { id: string } }) {
         <h2 className="text-lg font-semibold mb-3">Debate timeline</h2>
         <Timeline events={events} />
       </section>
+
+      {/* Sticky follow-up bar (PR-A2 drive posture). Always pinned to the
+          viewport bottom while run is DONE and bundle is on disk. Disappears
+          during a follow-up run (status flips to hypothesizing) and when
+          the bundle has been GC'd. */}
+      {showFollowupBar && (
+        <div className="fixed bottom-0 left-0 right-0 z-30 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+          <div className="mx-auto max-w-3xl px-4 py-3">
+            <div className="flex items-end gap-2">
+              <div className="flex-1">
+                <Textarea
+                  placeholder="Ask a follow-up — bundle is frozen, no re-ingest."
+                  value={followupQuestion}
+                  onChange={(e) => setFollowupQuestion(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                      e.preventDefault();
+                      onSubmitFollowup();
+                    }
+                  }}
+                  maxLength={2000}
+                  rows={2}
+                  className="resize-none"
+                />
+                <div className="mt-1 flex items-center justify-between text-xs text-muted-foreground">
+                  <span>
+                    {followupError ? (
+                      <span className="text-destructive">{followupError}</span>
+                    ) : (
+                      <>⌘/Ctrl+Enter to submit</>
+                    )}
+                  </span>
+                  <span>{followupQuestion.length}/2000</span>
+                </div>
+              </div>
+              <Button
+                onClick={onSubmitFollowup}
+                disabled={followupSubmitting || !followupQuestion.trim()}
+              >
+                {followupSubmitting ? "Submitting…" : "Send"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Token report */}
       {run.output?.token_report && (
