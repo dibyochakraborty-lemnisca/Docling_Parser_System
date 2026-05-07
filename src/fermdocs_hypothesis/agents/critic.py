@@ -86,6 +86,20 @@ CRITIC_INVARIANTS = (
     " question'. Tag question-axis reasons with the [question-axis] prefix"
     " so the synthesizer can distinguish them from evidence-shape reasons"
     " on retry — different reasons need different fixes.",
+    "[TOOL-GAP-AXIS] (commit 5 of characterize-determinism plan): one"
+    " more rejection axis when characterize emitted [SYMMETRY] data_gaps"
+    " (statistics.symmetry_violation == True). If the hypothesis sets"
+    " question_answered='insufficient_data' AND its rationale cites"
+    " symmetry-violation findings as the reason, file red with reason"
+    " '[tool-gap-axis]: hypothesis treated tool gaps as data gaps; the"
+    " bundle has the data, the toolchain failed to compute it'. Do NOT"
+    " over-fire: 'insufficient_data' is still acceptable when the"
+    " BUNDLE itself lacks the data (no symmetry_violation findings on"
+    " the relevant metrics; or the relevant trajectories simply don't"
+    " exist for the runs in question). Only file red when the bundle"
+    " demonstrably had the inputs but the synthesizer hid behind a"
+    " tool gap. Tag with [tool-gap-axis] prefix so retry can address"
+    " specifically.",
 )
 
 def make_followup_critic_invariants(view: CriticView) -> tuple[str, ...]:

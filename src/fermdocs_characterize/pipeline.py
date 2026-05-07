@@ -32,6 +32,7 @@ from fermdocs_characterize.agents.catalog_runner import (
     _BundleView,
 )
 from fermdocs_characterize.agents.finding_validator import validate_finding
+from fermdocs_characterize.agents.symmetry_check import check_symmetry
 from fermdocs_characterize.agents.trajectory_analyzer import (
     TrajectoryAnalyzerAgent,
 )
@@ -246,6 +247,23 @@ class CharacterizationPipeline:
         # plans/2026-05-07-characterize-determinism.md (the
         # 'PAA yield 204.5 g/g passed everything' bug class).
         findings = [validate_finding(f) for f in findings]
+
+        # 4d. Symmetry post-condition. Detects (metric, run) pairs the
+        # catalog runner SHOULD have hit but didn't, and emits explicit
+        # [SYMMETRY] data_gap findings so the synthesizer can
+        # distinguish TOOL gaps from DATA gaps. Plan ref: commit 5.
+        if trajectories:
+            symmetry_bundle = _BundleView(
+                characterization_id=str(char_id),
+                run_ids=sorted({t.run_id for t in trajectories}),
+                trajectories=trajectories,
+                organism=organism,
+                process_family=process_family,
+            )
+            symmetry_findings = check_symmetry(
+                symmetry_bundle, findings, starting_index=len(findings),
+            )
+            findings.extend(symmetry_findings)
 
         # 5. Other artifacts
         deviations = build_deviations(summary)
