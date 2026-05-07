@@ -105,22 +105,76 @@ def create_app() -> FastAPI:
     # ---- uploads ----
 
     @app.post("/api/uploads")
-    async def upload(file: UploadFile = File(...)) -> dict:
-        # Single-file route preserved for back-compat. Multi-file lands in
-        # commit 2 with a separate endpoint shape.
-        content = await file.read()
-        upload = STORE.add_upload(
-            files=[(
-                file.filename or "upload.bin",
-                file.content_type or "application/octet-stream",
-                content,
-            )]
-        )
+    async def upload(
+        files: list[UploadFile] = File(...),
+    ) -> dict:
+        """Multipart upload of one OR many files (PR-A3, frontend-redesign).
+
+        Frontend sends `multipart/form-data` with one or more `files=`
+        parts. The endpoint validates:
+          - non-empty (else 400)
+          - extensions in {.csv, .xlsx, .pdf, .zip} (else 400)
+          - if any file is a .zip, it must be the only file (zips are
+            pre-built bundles that bypass ingest; mixing them with raw
+            data has no coherent meaning) (else 400)
+          - duplicate filenames are rejected by RunStore.add_upload
+            (else 400)
+
+        Response carries lists for filenames and content_types so the
+        frontend can show what was actually accepted; size_bytes is the
+        sum across all files. For N=1 the response shape stays
+        compatible with what existed before — the legacy `filename` /
+        `content_type` keys are also returned so any older client
+        doesn't break.
+        """
+        if not files:
+            raise HTTPException(400, "at least one file required")
+
+        # Read all bodies up front so we can validate before touching disk.
+        # This also means a partial upload (network drop mid-stream)
+        # surfaces as a fastapi error before we ever call add_upload.
+        ALLOWED_SUFFIXES = {".csv", ".xlsx", ".pdf", ".zip"}
+        triples: list[tuple[str, str, bytes]] = []
+        for f in files:
+            fname = f.filename or "upload.bin"
+            suffix = ("." + fname.rsplit(".", 1)[-1].lower()) if "." in fname else ""
+            if suffix not in ALLOWED_SUFFIXES:
+                raise HTTPException(
+                    400,
+                    f"unsupported file type {fname!r};"
+                    " supported: .csv, .xlsx, .pdf, .zip",
+                )
+            triples.append((
+                fname,
+                f.content_type or "application/octet-stream",
+                await f.read(),
+            ))
+
+        # Zip-mixing rule: zips are pre-built bundles, must be standalone.
+        zip_count = sum(1 for fname, _, _ in triples if fname.endswith(".zip"))
+        if zip_count > 0 and len(triples) > 1:
+            raise HTTPException(
+                400,
+                "zip uploads must be standalone—cannot mix .zip with other files",
+            )
+
+        try:
+            upload = STORE.add_upload(files=triples)
+        except ValueError as exc:
+            # add_upload raises on empty list (handled above) and
+            # duplicate filenames (defense-in-depth).
+            raise HTTPException(400, str(exc))
+
         return {
             "upload_id": upload.upload_id,
-            "filename": upload.filenames[0],
+            "filenames": list(upload.filenames),
+            "content_types": list(upload.content_types),
             "size_bytes": upload.size_bytes,
-            "content_type": upload.content_types[0],
+            # Legacy single-file keys, populated when N=1 so older
+            # clients keep working. None when N>1 — callers should switch
+            # to filenames/content_types.
+            "filename": upload.filenames[0] if len(upload.filenames) == 1 else None,
+            "content_type": upload.content_types[0] if len(upload.content_types) == 1 else None,
         }
 
     # ---- runs ----
