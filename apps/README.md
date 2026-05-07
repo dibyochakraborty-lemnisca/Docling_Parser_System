@@ -1,46 +1,77 @@
-# apps/ — frontend + backend for the hypothesis stage
+# apps
 
-Plan ref: [plans/2026-05-03-hypothesis-debate-v0.md](../plans/2026-05-03-hypothesis-debate-v0.md) (v0.5).
+Local frontend and backend for the full fermdocs pipeline.
 
 ## Layout
 
-- **`apps/api/`** — FastAPI backend (`fermdocs-api`) that wraps the
-  Python pipeline (ingest → characterize → diagnose → hypothesize)
-  behind an HTTP/WebSocket surface. Local-only by default.
-- **`apps/web/`** — Next.js 14 (App Router) + Tailwind + shadcn/ui
-  frontend. Polished UI for upload, live debate timeline, open-question
-  answers, final hypothesis card, token report.
+```text
+apps/api
+  FastAPI backend. It accepts uploads, starts runs, streams events over
+  websockets, stores local run outputs, resumes paused runs, and launches
+  follow-up hypothesis runs.
 
-## Run locally
+apps/web
+  Next.js 14 app. It provides upload, optional user question input, live
+  event timeline, hypothesis cards, inline Plotly charts, follow-up UI, and
+  browser print-to-PDF.
+```
+
+## Run Locally
+
+From the repo root:
 
 ```bash
-# Backend (port 8000)
-pip install -e apps/api/[dev]
-fermdocs-api
+source .venv/bin/activate
+pip install -e ".[dev,gemini]"
+pip install -e "apps/api[dev]"
 
-# Frontend (port 3000) — proxies /api/* to the backend
+# Optional, needed for PDF extraction.
+pip install -e ".[pdf]"
+
+set -a; source .env; set +a
+alembic upgrade head
+fermdocs-api
+```
+
+In another terminal:
+
+```bash
 cd apps/web
 npm install
 npm run dev
 ```
 
-Then open <http://localhost:3000>.
+Open:
 
-## What v0.5a/b ship
+```text
+http://localhost:3000
+```
 
-- Upload a `.zip` of an existing diagnose bundle (containing `meta.json`)
-- Backend kicks off the hypothesis stage, streams events over WebSocket
-- Frontend shows live debate timeline (topic → facets → synthesis →
-  critique → judge → accept/reject), final hypotheses, rejected
-  hypotheses, open questions form, and per-agent token report
-- Submit answers to open questions to trigger a resume round
+## Supported Uploads
 
-## What's deferred to v1
+- One or more raw `.csv`, `.xlsx`, or `.pdf` files. These run the full
+  ingest -> characterize -> diagnose -> hypothesize pipeline.
+- A single `.zip` containing an existing bundle. Zip uploads bypass upstream
+  stages and run hypothesis directly.
 
-- CSV/PDF upload that runs the full ingest+characterize+diagnose pipeline
-  (today: must upload a pre-built bundle zip)
-- Auth / multi-user / cloud deployment (today: localhost only)
-- Persistent run store (today: in-process; restart = lose runs)
-- SuperMemory / past-insight retrieval
-- Visual debate replay (today: events stream live; replay works but UX
-  could be polished)
+Zip uploads cannot be mixed with raw files in the same request.
+
+## API Endpoints
+
+```text
+GET  /api/health
+POST /api/uploads
+POST /api/runs
+GET  /api/runs
+GET  /api/runs/{run_id}
+WS   /api/runs/{run_id}/events
+POST /api/runs/{run_id}/answers
+POST /api/runs/{run_id}/followup
+```
+
+## Limitations
+
+- Local development only.
+- No auth, user accounts, tenant isolation, or production job queue.
+- Run state is in memory plus files under `FERMDOCS_API_ROOT`.
+- Restarting the backend loses active in-memory run state.
