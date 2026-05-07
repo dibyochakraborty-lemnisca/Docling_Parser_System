@@ -106,17 +106,21 @@ def create_app() -> FastAPI:
 
     @app.post("/api/uploads")
     async def upload(file: UploadFile = File(...)) -> dict:
+        # Single-file route preserved for back-compat. Multi-file lands in
+        # commit 2 with a separate endpoint shape.
         content = await file.read()
         upload = STORE.add_upload(
-            filename=file.filename or "upload.bin",
-            content_type=file.content_type or "application/octet-stream",
-            content=content,
+            files=[(
+                file.filename or "upload.bin",
+                file.content_type or "application/octet-stream",
+                content,
+            )]
         )
         return {
             "upload_id": upload.upload_id,
-            "filename": upload.filename,
+            "filename": upload.filenames[0],
             "size_bytes": upload.size_bytes,
-            "content_type": upload.content_type,
+            "content_type": upload.content_types[0],
         }
 
     # ---- runs ----

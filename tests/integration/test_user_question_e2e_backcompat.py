@@ -103,7 +103,7 @@ def test_run_store_create_run_normalizes_empty_string_to_none(tmp_path: Path) ->
     from apps.api.fermdocs_api.state import RunStore  # type: ignore[import]
 
     store = RunStore(uploads_root=tmp_path / "u", runs_root=tmp_path / "r")
-    upload = store.add_upload(filename="test.csv", content_type="text/csv", content=b"x")
+    upload = store.add_upload(files=[("test.csv", "text/csv", b"x")])
     run_a = store.create_run(upload.upload_id, user_question_text="")
     run_b = store.create_run(upload.upload_id, user_question_text="   ")
     run_c = store.create_run(upload.upload_id, user_question_text=None)
@@ -116,7 +116,7 @@ def test_run_store_create_run_preserves_real_question(tmp_path: Path) -> None:
     from apps.api.fermdocs_api.state import RunStore  # type: ignore[import]
 
     store = RunStore(uploads_root=tmp_path / "u", runs_root=tmp_path / "r")
-    upload = store.add_upload(filename="t.csv", content_type="text/csv", content=b"x")
+    upload = store.add_upload(files=[("t.csv", "text/csv", b"x")])
     run = store.create_run(
         upload.upload_id, user_question_text="  Why did RUN-0002 plateau?  "
     )

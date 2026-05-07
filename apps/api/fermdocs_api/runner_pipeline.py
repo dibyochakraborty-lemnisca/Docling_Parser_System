@@ -377,26 +377,44 @@ def _classify_and_persist_followup_question(
 async def _prepare_bundle_dir(
     *, upload: Upload, store: RunStore, run: Run
 ) -> Path:
-    """Resolve an upload to a bundle directory. Branches by extension."""
-    suffix = upload.path.suffix.lower()
-    if suffix == ".zip":
-        return await asyncio.to_thread(_unzip_bundle, upload)
-    if suffix in (".csv", ".pdf", ".xlsx"):
-        return await _build_bundle_from_raw(
-            upload=upload, store=store, run=run
+    """Resolve an upload to a bundle directory. Branches by extension.
+
+    Multi-file uploads (PR-A3, branch frontend-redesign): when N>1 every
+    file must be a raw data type (.csv/.xlsx/.pdf) — .zip uploads are
+    standalone (one zip per upload) because they're pre-built bundles
+    that bypass ingest entirely. Validation happens upstream at the API
+    boundary; this branch is defense-in-depth.
+    """
+    if len(upload.paths) == 1:
+        suffix = upload.paths[0].suffix.lower()
+        if suffix == ".zip":
+            return await asyncio.to_thread(_unzip_bundle, upload)
+        if suffix in (".csv", ".pdf", ".xlsx"):
+            return await _build_bundle_from_raw(
+                upload=upload, store=store, run=run
+            )
+        raise ValueError(
+            f"upload type not supported: {upload.filenames[0]!r}."
+            " Supported: .csv, .pdf, .xlsx, or .zip of an existing bundle."
         )
-    raise ValueError(
-        f"upload type not supported: {upload.filename!r}."
-        " Supported: .csv, .pdf, .xlsx, or .zip of an existing bundle."
-    )
+    # N > 1: every file must be raw data, never a zip.
+    bad = [p for p in upload.paths if p.suffix.lower() not in (".csv", ".pdf", ".xlsx")]
+    if bad:
+        raise ValueError(
+            f"multi-file upload contained unsupported file: {bad[0].name!r}."
+            " Multi-file uploads must be all .csv/.xlsx/.pdf; zips are standalone."
+        )
+    return await _build_bundle_from_raw(upload=upload, store=store, run=run)
 
 
 def _unzip_bundle(upload: Upload) -> Path:
-    target = upload.path.parent / "bundle"
+    """Single-file zip path. Caller guarantees len(upload.paths)==1."""
+    zip_path = upload.paths[0]
+    target = zip_path.parent / "bundle"
     if target.exists():
         return _find_bundle_root(target)
     target.mkdir(exist_ok=True)
-    with zipfile.ZipFile(upload.path) as zf:
+    with zipfile.ZipFile(zip_path) as zf:
         zf.extractall(target)
     return _find_bundle_root(target)
 
@@ -423,8 +441,11 @@ async def _build_bundle_from_raw(
             " your .env or upload a pre-built bundle .zip instead."
         )
 
-    # All paths absolute so subprocess CLIs work regardless of cwd.
-    work_root = upload.path.parent.resolve()
+    # All paths absolute so subprocess CLIs work regardless of cwd. Every
+    # file in a multi-file upload shares the same parent dir (one upload
+    # group lives in one directory), so paths[0].parent is the work root
+    # for the whole batch.
+    work_root = upload.paths[0].parent.resolve()
     experiment_id = f"web-upload-{uuid.uuid4().hex[:8]}"
     dossier_path = work_root / "dossier.json"
     char_path = work_root / "characterization.json"
@@ -433,17 +454,24 @@ async def _build_bundle_from_raw(
 
     # 1. Ingest
     run.status = RunStatus.INGESTING
+    # Status message lists all filenames so the user sees what's being
+    # ingested; for N=1 this is the original single-file behavior.
+    msg_files = ", ".join(upload.filenames)
     await store.publish(
         run.run_id,
-        {"type": "status", "status": run.status.value, "message": f"ingesting {upload.filename}"},
+        {"type": "status", "status": run.status.value, "message": f"ingesting {msg_files}"},
     )
+    # `fermdocs ingest --files` is multi-valued (`multiple=True` in the
+    # click definition); we expand to one --files <path> per upload file.
+    ingest_cmd = [
+        sys.executable, "-m", "fermdocs.cli", "ingest",
+        "--experiment-id", experiment_id,
+    ]
+    for p in upload.paths:
+        ingest_cmd.extend(["--files", str(p.resolve())])
+    ingest_cmd.extend(["--out", str(dossier_path)])
     await _run_subprocess(
-        [
-            sys.executable, "-m", "fermdocs.cli", "ingest",
-            "--experiment-id", experiment_id,
-            "--files", str(upload.path.resolve()),
-            "--out", str(dossier_path),
-        ],
+        ingest_cmd,
         cwd=Path(os.environ.get("FERMDOCS_REPO_ROOT", Path.cwd())),
     )
     if not dossier_path.exists():

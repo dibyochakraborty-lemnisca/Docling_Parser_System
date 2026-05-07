@@ -42,10 +42,25 @@ class RunStatus(str, Enum):
 
 @dataclass
 class Upload:
+    """One upload group — may carry one or many files.
+
+    Single-file invariant: when N=1 (the path that existed before
+    multi-file landed), all three list fields have len 1. Downstream
+    callers that previously read `upload.path` now read `upload.paths[0]`,
+    and likewise for filename/content_type — there is exactly one item.
+
+    Multi-file invariant: every list has the same length, items in the
+    same index correspond to the same physical file. Order is the order
+    the user picked them.
+
+    `size_bytes` is the SUM across all files (not per-file) — callers
+    that surface 'how big was the upload' want the total.
+    """
+
     upload_id: str
-    filename: str
-    path: Path
-    content_type: str
+    filenames: list[str]
+    paths: list[Path]
+    content_types: list[str]
     size_bytes: int
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -121,18 +136,62 @@ class RunStore:
     # ---- uploads ----
 
     def add_upload(
-        self, *, filename: str, content_type: str, content: bytes
+        self,
+        *,
+        files: list[tuple[str, str, bytes]],
     ) -> Upload:
+        """Register one upload group from N files. files is a list of
+        (filename, content_type, content) tuples. Atomic: writes to a
+        tempdir first, only moves to the final destination on full
+        success. On any failure, no Upload record is created and the
+        partial tempdir is cleaned up.
+
+        Raises:
+          ValueError("at least one file required") on empty list.
+          ValueError("duplicate filename: <name>") on collisions — we
+            don't auto-suffix because silent renames are surprising.
+            Frontend pre-validates so this should be a defense-in-depth
+            backend 400 rather than a user-facing path.
+        """
+        import shutil
+        import tempfile
+
+        if not files:
+            raise ValueError("at least one file required")
+
+        # Duplicate-name check first — cheaper than disk I/O.
+        seen: set[str] = set()
+        for filename, _, _ in files:
+            if filename in seen:
+                raise ValueError(f"duplicate filename: {filename!r}")
+            seen.add(filename)
+
         upload_id = str(uuid.uuid4())
-        target = self.uploads_root / upload_id / filename
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(content)
+        final_dir = self.uploads_root / upload_id
+
+        # Atomic write: stage to tempdir, move into place only when every
+        # file has succeeded. shutil.move handles cross-filesystem moves
+        # via copy-then-delete fallback (slower but correct).
+        with tempfile.TemporaryDirectory(
+            prefix=f"upload-{upload_id}-", dir=self.uploads_root
+        ) as staging:
+            staging_path = Path(staging)
+            for filename, _content_type, content in files:
+                (staging_path / filename).write_bytes(content)
+            # All files written successfully; promote to final location.
+            final_dir.mkdir(parents=True, exist_ok=False)
+            for filename, _, _ in files:
+                shutil.move(
+                    str(staging_path / filename), str(final_dir / filename)
+                )
+
+        paths = [final_dir / fname for fname, _, _ in files]
         upload = Upload(
             upload_id=upload_id,
-            filename=filename,
-            path=target,
-            content_type=content_type,
-            size_bytes=len(content),
+            filenames=[fname for fname, _, _ in files],
+            paths=paths,
+            content_types=[ct for _, ct, _ in files],
+            size_bytes=sum(len(c) for _, _, c in files),
         )
         self._uploads[upload_id] = upload
         return upload

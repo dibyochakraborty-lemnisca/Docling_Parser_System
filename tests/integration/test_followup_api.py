@@ -71,7 +71,7 @@ def _app_with_store(tmp_path: Path):
 def _make_done_run(store, tmp_path: Path):
     from apps.api.fermdocs_api.state import RunStatus  # type: ignore[import]
 
-    upload = store.add_upload(filename="t.csv", content_type="text/csv", content=b"x")
+    upload = store.add_upload(files=[("t.csv", "text/csv", b"x")])
     run = store.create_run(upload.upload_id)
     bundle_dir = tmp_path / f"bundle-{run.run_id[:8]}"
     bundle_dir.mkdir()

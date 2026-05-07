@@ -39,7 +39,7 @@ def _arun(coro):
 def _make_done_run(tmp_path: Path) -> tuple[RunStore, "Run", Path]:  # type: ignore[name-defined]
     """A RunStore + Run in DONE state with a real bundle_dir on disk."""
     store = RunStore(uploads_root=tmp_path / "u", runs_root=tmp_path / "r")
-    upload = store.add_upload(filename="t.csv", content_type="text/csv", content=b"x")
+    upload = store.add_upload(files=[("t.csv", "text/csv", b"x")])
     run = store.create_run(upload.upload_id)
 
     bundle_dir = tmp_path / "bundle"

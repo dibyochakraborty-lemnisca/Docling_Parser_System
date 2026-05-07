@@ -95,7 +95,7 @@ def test_followup_result_shape() -> None:
 
 def test_run_store_add_followup_appends(tmp_path: Path) -> None:
     store = RunStore(uploads_root=tmp_path / "u", runs_root=tmp_path / "r")
-    upload = store.add_upload(filename="t.csv", content_type="text/csv", content=b"x")
+    upload = store.add_upload(files=[("t.csv", "text/csv", b"x")])
     run = store.create_run(upload.upload_id)
 
     fr1 = FollowupResult(followup_index=1, user_question_text="q1", output=None)
