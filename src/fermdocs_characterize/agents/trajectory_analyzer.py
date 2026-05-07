@@ -471,6 +471,7 @@ class TrajectoryAnalyzerAgent:
         starting_index: int = 1,
         organism: str | None = None,
         process_family: str | None = None,
+        catalog_findings: list[Finding] | None = None,
     ) -> TrajectoryAnalyzerResult:
         """Run pattern analysis. Returns findings to be appended to the
         pipeline's spec findings.
@@ -499,6 +500,7 @@ class TrajectoryAnalyzerAgent:
                 spec_findings=spec_findings,
                 organism=organism,
                 process_family=process_family,
+                catalog_findings=catalog_findings or [],
             )
 
         findings = self._build_findings(
@@ -524,6 +526,7 @@ class TrajectoryAnalyzerAgent:
         spec_findings: list[Finding],
         organism: str | None = None,
         process_family: str | None = None,
+        catalog_findings: list[Finding] | None = None,
     ) -> tuple[list[dict[str, Any]], int, int, int]:
         tool_history: list[dict[str, Any]] = []
         total_in = 0
@@ -535,6 +538,7 @@ class TrajectoryAnalyzerAgent:
             spec_findings=spec_findings,
             organism=organism,
             process_family=process_family,
+            catalog_findings=catalog_findings or [],
         )
 
         for call_idx in range(MAX_TOOL_CALLS + 1):
@@ -585,6 +589,7 @@ class TrajectoryAnalyzerAgent:
         spec_findings: list[Finding],
         organism: str | None = None,
         process_family: str | None = None,
+        catalog_findings: list[Finding] | None = None,
     ) -> str:
         # Compact context: don't dump full trajectories (that's what
         # observations.csv is for). Just metadata so the agent knows what's
@@ -614,6 +619,15 @@ class TrajectoryAnalyzerAgent:
             organism=organism,
         )
 
+        # [ALREADY COMPUTED]: A1-fix from plan-eng-review on the
+        # characterize-determinism plan. Lists every (metric_id, run_id)
+        # pair the deterministic catalog runner already produced a
+        # finding for. The LLM is told NOT to re-emit any of these in
+        # the [TASK] section below.
+        already_computed_block = self._build_already_computed_block(
+            catalog_findings=catalog_findings or []
+        )
+
         identity_block = (
             f"[IDENTITY]\n"
             f"organism: {organism or '(unknown — Tier C metric calls will data_gap)'}\n"
@@ -632,14 +646,76 @@ class TrajectoryAnalyzerAgent:
             f"[CATALOG CHECKLIST FOR THIS BUNDLE]\n{checklist}\n\n"
             f"[SPEC FINDINGS — context only, do not re-emit]\n"
             + ("\n".join(spec_summaries) if spec_summaries else "  (none)")
-            + "\n\n[TASK]\nWork the catalog checklist top-to-bottom. For each "
-            "ready metric, EITHER call its toolkit_fn via execute_python and "
-            "emit a pattern with metric_id set, OR emit a data_gap pattern "
-            "naming the missing input. Silent skipping is a contract "
-            "violation. After the checklist is complete you may add open-"
-            "ended patterns (without metric_id) for anything the catalog "
-            "doesn't cover."
+            + "\n\n"
+            + already_computed_block
+            + "[TASK]\n"
+            "The deterministic catalog runner has ALREADY computed every"
+            " metric_id listed in [ALREADY COMPUTED] above for the runs"
+            " shown. Your job here is OPEN-ENDED findings ONLY —"
+            " trajectory patterns the catalog doesn't cover.\n\n"
+            "HARD RULE: Do NOT emit any pattern with a metric_id from the"
+            " [ALREADY COMPUTED] block. The catalog runner is the source of"
+            " truth for those metrics; re-emitting them creates duplicates"
+            " and confuses downstream agents. If a catalog metric was"
+            " needed but not computed (the [ALREADY COMPUTED] block is"
+            " empty for some metric), check the runner's data_gap findings"
+            " in [SPEC FINDINGS] above; do NOT manually rerun the"
+            " toolkit_fn.\n\n"
+            "What you SHOULD emit: outlier batches, unusual oscillations,"
+            " cross-batch variance the catalog metric_ids don't capture,"
+            " trajectory shape anomalies (sudden discontinuities, plateau"
+            " patterns, late-phase decay) that aren't a single named"
+            " metric in the catalog. Ground every pattern in execute_python"
+            " output and cite specific run_ids/variables."
         )
+
+    @staticmethod
+    def _build_already_computed_block(
+        *, catalog_findings: list[Finding]
+    ) -> str:
+        """Render the [ALREADY COMPUTED] section the LLM sees.
+
+        Lists every (metric_id, run_id) pair for which the deterministic
+        catalog runner emitted a `computed_metric` finding. data_gap
+        findings are NOT included — if the catalog runner couldn't
+        compute B10 on RUN-2, the LLM should NOT try to fill the gap by
+        re-running the toolkit (that's the bug we're trying to prevent).
+        Tool gaps are surfaced separately in [SPEC FINDINGS] and the
+        symmetry validator (commit 5) emits explicit data_gaps for them.
+
+        Empty list → 'none' line so the prompt explicitly says nothing
+        was pre-computed; signals to the LLM that this is back-compat
+        territory (no catalog runner ran).
+
+        Plan ref: A1 fix in plans/2026-05-07-characterize-determinism.md.
+        """
+        # Group: metric_id → sorted run_ids list
+        by_metric: dict[str, list[str]] = {}
+        for f in catalog_findings:
+            stats = f.statistics or {}
+            if stats.get("pattern_kind") != "computed_metric":
+                continue
+            mid = stats.get("metric_id")
+            if not isinstance(mid, str):
+                continue
+            run_ids = list(f.run_ids) if f.run_ids else ["(cross-run)"]
+            by_metric.setdefault(mid, []).extend(run_ids)
+
+        if not by_metric:
+            return (
+                "[ALREADY COMPUTED — do NOT re-emit these metric_ids]\n"
+                "  (none — catalog runner produced no findings on this bundle)\n\n"
+            )
+
+        lines = [
+            "[ALREADY COMPUTED — do NOT re-emit these metric_ids]",
+        ]
+        for mid in sorted(by_metric):
+            runs = sorted(set(by_metric[mid]))
+            run_str = ", ".join(runs[:8]) + (" ..." if len(runs) > 8 else "")
+            lines.append(f"  - {mid}  on  [{run_str}]")
+        lines.append("")
+        return "\n".join(lines) + "\n"
 
     @staticmethod
     def _build_metric_checklist(

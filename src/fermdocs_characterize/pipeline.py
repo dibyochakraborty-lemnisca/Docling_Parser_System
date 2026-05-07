@@ -27,6 +27,10 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from fermdocs_characterize import CHARACTERIZATION_VERSION, SCHEMA_VERSION
+from fermdocs_characterize.agents.catalog_runner import (
+    MetricCatalogRunner,
+    _BundleView,
+)
 from fermdocs_characterize.agents.trajectory_analyzer import (
     TrajectoryAnalyzerAgent,
 )
@@ -153,6 +157,60 @@ class CharacterizationPipeline:
         # trajectories + spec findings, runs execute_python over a tmp
         # observations.csv, and emits FindingType.TRAJECTORY_PATTERN
         # findings that get IDs after the spec findings.
+        # Pre-step: deterministic catalog runner. Iterates every
+        # (metric, run) pair and emits Findings deterministically. This
+        # fixes the IndPenSim multi-run asymmetry bug where the LLM
+        # analyzer would compute B10/A8/etc on RUN-1 only and skip
+        # RUN-2 silently. Plan ref:
+        # plans/2026-05-07-characterize-determinism.md commit 1.
+        observed = (
+            (dossier.get("experiment") or {})
+            .get("process", {})
+            .get("observed", {})
+        )
+        organism = (observed.get("organism") or "").strip() or None
+        process_family = (
+            observed.get("process_family_hint") or ""
+        ).strip() or None
+
+        # `catalog_findings` is visible to the LLM analyzer below so it
+        # can render an [ALREADY COMPUTED] block (A1 fix). Empty list on
+        # back-compat / no-trajectories runs.
+        catalog_findings: list[Finding] = []
+        if trajectories:
+            try:
+                catalog_bundle = _BundleView(
+                    characterization_id=str(char_id),
+                    run_ids=sorted({t.run_id for t in trajectories}),
+                    trajectories=trajectories,
+                    organism=organism,
+                    process_family=process_family,
+                )
+                catalog_runner = MetricCatalogRunner()
+                raw_catalog_findings = catalog_runner.compute_all(catalog_bundle)
+                # Re-namespace IDs to follow the bundle convention; keep
+                # the renamed list as `catalog_findings` so the analyzer
+                # gets the same-id view downstream agents will see.
+                for i, cf in enumerate(
+                    raw_catalog_findings, start=len(findings) + 1
+                ):
+                    renamed = cf.model_copy(
+                        update={"finding_id": f"{char_id}:F-{i:04d}"}
+                    )
+                    findings.append(renamed)
+                    catalog_findings.append(renamed)
+            except RuntimeError as exc:
+                # Pre-flight import failure (A2) is fatal: don't fall back
+                # silently. Re-raise so characterize aborts loud.
+                raise
+            except Exception as exc:
+                # Other failures (e.g. trajectory edge-cases) are
+                # advisory; log and continue to the LLM analyzer.
+                _log.warning(
+                    "catalog runner raised %s; falling through to LLM analyzer",
+                    exc.__class__.__name__,
+                )
+
         if self._trajectory_analyzer is not None and trajectories:
             try:
                 # Surface the dossier's identity layer to the analyzer so
@@ -161,15 +219,6 @@ class CharacterizationPipeline:
                 # organism string to process_priors lookup. Without this the
                 # analyzer hardcodes organism=None and every Tier C metric
                 # data-gaps even when priors registry has the entry.
-                observed = (
-                    (dossier.get("experiment") or {})
-                    .get("process", {})
-                    .get("observed", {})
-                )
-                organism = (observed.get("organism") or "").strip() or None
-                process_family = (
-                    observed.get("process_family_hint") or ""
-                ).strip() or None
                 analyzer_result = self._trajectory_analyzer.analyze(
                     char_id=char_id,
                     trajectories=trajectories,
@@ -177,6 +226,7 @@ class CharacterizationPipeline:
                     starting_index=len(findings) + 1,
                     organism=organism,
                     process_family=process_family,
+                    catalog_findings=catalog_findings,
                 )
                 findings.extend(analyzer_result.findings)
             except Exception as exc:
