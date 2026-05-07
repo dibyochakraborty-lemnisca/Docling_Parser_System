@@ -48,9 +48,15 @@ UNKNOWN_FAMILY_NAME = "unknown"
 class ProcessFamilyConfig:
     """One row of process_families.yaml resolved to a typed shape.
 
-    `product_variable`: canonical golden-schema name of the trajectory
-        the run aims to maximize. None when no single product variable
-        applies (e.g. discovery experiments).
+    `product_variable`: canonical golden-schema name of the EXCRETED
+        product trajectory (g/L) that the run aims to maximize. Used
+        by P1-P4. None when no excreted product applies.
+    `intracellular_product_variable`: canonical golden-schema name of
+        the INTRACELLULAR product trajectory in mg per g dry cell
+        weight (mg/g DCW). Used by P_INTRACELLULAR_PRODUCT_YIELD for
+        carotenoid, lipid, terpenoid, intracellular-protein
+        processes. None when product is excreted (Tier P routes via
+        product_variable instead) or no product applies.
     `precursor_variables`: variables that are CONSUMED into the product,
         not byproducts. PAA in penicillin fermentations: feeding it goes
         into the product, residual unconsumed PAA is waste. Yield is
@@ -65,6 +71,7 @@ class ProcessFamilyConfig:
     precursor_variables: tuple[str, ...]
     overflow_byproducts: tuple[str, ...]
     description: str | None = None
+    intracellular_product_variable: str | None = None
 
     @property
     def is_unknown(self) -> bool:
@@ -78,6 +85,9 @@ def _config_from_dict(name: str, data: dict[str, Any]) -> ProcessFamilyConfig:
         precursor_variables=tuple(data.get("precursor_variables") or ()),
         overflow_byproducts=tuple(data.get("overflow_byproducts") or ()),
         description=data.get("description"),
+        intracellular_product_variable=(
+            data.get("intracellular_product_variable") or None
+        ),
     )
 
 

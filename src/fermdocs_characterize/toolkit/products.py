@@ -227,6 +227,100 @@ def compute_integral_productivity(
     )
 
 
+@dataclass(frozen=True)
+class IntracellularYieldResult:
+    """P_INTRACELLULAR_PRODUCT_YIELD: specific yield of an intracellular
+    product (mg product / g dry cell weight) over the run.
+
+    Used for processes where the product accumulates inside cells rather
+    than being secreted to the broth: carotenoids in S. cerevisiae,
+    triglycerides in oleaginous yeasts, terpenoids, intracellular
+    proteins, polyhydroxyalkanoates in bacteria. The catalog metric is
+    organism-agnostic; the family YAML routes the right column name per
+    process family (e.g. astaxanthin_mg_per_g_dcw,
+    beta_carotene_mg_per_g_dcw, lipid_mg_per_g_dcw).
+
+    Output fields:
+      `final_yield_mg_per_g_dcw`: last observed specific yield.
+      `peak_yield_mg_per_g_dcw`: max observed specific yield.
+      `t_peak_h`: time of peak.
+      `final_volumetric_yield_mg_per_l`: specific × biomass at last
+        timepoint, normalized to mg/L. Useful for cross-bundle
+        comparison of total product made.
+      `yield_decline_after_peak`: (peak - final) / peak when peak > 0.
+        Flags 'cells lost product post-peak' — the carotenoid
+        white-cells signature, the lipid-reabsorption signature, etc.
+      `is_yield_declining`: True when decline > 5%.
+    """
+
+    final_yield_mg_per_g_dcw: float
+    peak_yield_mg_per_g_dcw: float
+    t_peak_h: float
+    t_final_h: float
+    final_volumetric_yield_mg_per_l: float | None
+    yield_decline_after_peak: float
+    is_yield_declining: bool
+    n_points: int
+
+
+def compute_intracellular_yield(
+    time_h,
+    product_mg_per_g_dcw,
+    biomass_g_l=None,
+    *,
+    decline_threshold: float = 0.05,
+) -> IntracellularYieldResult:
+    """Specific yield of an intracellular product, plus optional
+    volumetric yield when a paired biomass trajectory is available.
+
+    Polarity matches secreted-product P-tier metrics: higher peak +
+    higher final + smaller decline = better. The decline_after_peak
+    field is the intracellular analogue of P3 titer-decline (the lysis /
+    pigment-loss / re-absorption signature).
+
+    `biomass_g_l` is optional. When provided, computes
+    final_volumetric_yield_mg_per_l = (specific yield) × (biomass at
+    final timepoint). When None, returns None for that field.
+
+    Raises ValueError on fewer than 2 finite (time, yield) pairs.
+    """
+    t, v = _clean_pair(time_h, product_mg_per_g_dcw)
+    peak_idx = int(np.argmax(v))
+    peak = float(v[peak_idx])
+    final = float(v[-1])
+    if peak <= 0:
+        decline = 0.0
+        is_declining = False
+    else:
+        decline = max(0.0, (peak - final) / peak)
+        is_declining = bool(decline > decline_threshold)
+
+    final_volumetric: float | None = None
+    if biomass_g_l is not None:
+        try:
+            t_b, b = _clean_pair(time_h, biomass_g_l)
+        except ValueError:
+            t_b, b = None, None
+        if t_b is not None and len(b) >= 1:
+            # Use the biomass value closest to the final-yield timepoint.
+            # Simplest: nearest-time match.
+            i = int(np.argmin(np.abs(t_b - t[-1])))
+            biomass_at_final = float(b[i])
+            if biomass_at_final > 0:
+                final_volumetric = final * biomass_at_final
+
+    return IntracellularYieldResult(
+        final_yield_mg_per_g_dcw=final,
+        peak_yield_mg_per_g_dcw=peak,
+        t_peak_h=float(t[peak_idx]),
+        t_final_h=float(t[-1]),
+        final_volumetric_yield_mg_per_l=final_volumetric,
+        yield_decline_after_peak=float(decline),
+        is_yield_declining=is_declining,
+        n_points=int(len(t)),
+    )
+
+
 def compute_precursor_utilization(
     time_h,
     precursor_values,

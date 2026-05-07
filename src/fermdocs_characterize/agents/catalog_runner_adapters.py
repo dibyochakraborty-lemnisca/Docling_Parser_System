@@ -49,6 +49,7 @@ from fermdocs_characterize.toolkit.operational import compute_do_margin
 from fermdocs_characterize.toolkit.products import (
     compute_final_titer,
     compute_integral_productivity,
+    compute_intracellular_yield,
     compute_peak_titer,
     compute_precursor_utilization,
     compute_titer_decline,
@@ -596,6 +597,87 @@ def _adapter_p4(bundle: _BundleView, run_id: str | None) -> dict | None:
             f" over {result.duration_h:.1f}h."
         ),
     }
+
+
+@_register_adapter("P_INTRACELLULAR_YIELD")
+def _adapter_p_intracellular_yield(
+    bundle: _BundleView, run_id: str | None
+) -> dict | None:
+    """P_INTRACELLULAR_YIELD: specific yield of an intracellular product.
+
+    Routes via family.intracellular_product_variable. Returns:
+      - dict with computed_metric statistics on success
+      - None on precondition fail (variable not in bundle, < 2 points)
+      - config_mismatch sentinel when the family declares a variable
+        but the bundle has no such column on this run
+    """
+    if run_id is None:
+        return None
+    family = _resolve_family(bundle)
+    if family.intracellular_product_variable is None:
+        # Family doesn't declare an intracellular product (e.g. penicillin,
+        # SCP). Not applicable; emit a generic precondition data_gap so
+        # the runner-side soft-skip is consistent. NOT a config mismatch —
+        # nothing's mismatched, the family just doesn't have this metric.
+        return None
+
+    var = family.intracellular_product_variable
+    traj = bundle.trajectory(run_id, var)
+    if traj is None:
+        avail = sorted(bundle.variables_for(run_id))
+        return _config_mismatch(
+            f"process_families.yaml routes {family.name} to"
+            f" intracellular_product_variable={var!r}, but this bundle"
+            f" has no such trajectory on {run_id}. Available variables:"
+            f" {avail or '(none)'}."
+        )
+
+    time_h = [t for t, v in zip(traj.time_grid, traj.values) if v is not None]
+    values = [v for v in traj.values if v is not None]
+    if len(time_h) < 2:
+        return None
+
+    # Optional biomass for volumetric yield calculation.
+    biomass_traj = bundle.trajectory(run_id, "biomass_g_l")
+    biomass_vals = None
+    if biomass_traj is not None:
+        biomass_vals = [
+            v for v in biomass_traj.values if v is not None
+        ]
+        # Only pass biomass if it's on a comparable time grid.
+        if len(biomass_vals) != len(time_h):
+            biomass_vals = None
+
+    try:
+        result = compute_intracellular_yield(
+            time_h, values, biomass_g_l=biomass_vals,
+        )
+    except ValueError:
+        return None
+
+    out = {
+        "final_yield_mg_per_g_dcw": result.final_yield_mg_per_g_dcw,
+        "peak_yield_mg_per_g_dcw": result.peak_yield_mg_per_g_dcw,
+        "t_peak_h": result.t_peak_h,
+        "t_final_h": result.t_final_h,
+        "yield_decline_after_peak": result.yield_decline_after_peak,
+        "is_yield_declining": bool(result.is_yield_declining),
+        "intracellular_product_variable": var,
+        "n_observations": result.n_points,
+        "_variables_used": [var]
+        + (["biomass_g_l"] if biomass_vals is not None else []),
+    }
+    if result.final_volumetric_yield_mg_per_l is not None:
+        out["final_volumetric_yield_mg_per_l"] = (
+            result.final_volumetric_yield_mg_per_l
+        )
+    out["_summary"] = (
+        f"{var} on {run_id}: peak={result.peak_yield_mg_per_g_dcw:.2f}"
+        f" mg/g DCW → final={result.final_yield_mg_per_g_dcw:.2f}"
+        f" ({result.yield_decline_after_peak*100:.1f}% drop;"
+        f" {'flagged' if result.is_yield_declining else 'held'})."
+    )
+    return out
 
 
 @_register_adapter("P5")

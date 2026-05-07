@@ -992,6 +992,44 @@ _register(
 
 _register(
     CatalogEntry(
+        metric_id="P_INTRACELLULAR_YIELD",
+        tier="P",
+        short_description="Intracellular product specific yield (mg/g DCW)",
+        long_description=(
+            "For processes where product accumulates inside cells"
+            " rather than the broth (carotenoids, lipids, terpenoids,"
+            " intracellular protein, vitamin K2). Reports peak +"
+            " final specific yield (mg per g dry cell weight),"
+            " yield_decline_after_peak (the post-peak loss signature"
+            " — carotenoid white-cells, lipid re-absorption, etc.),"
+            " and final volumetric yield when paired biomass"
+            " trajectory is available. Routes via process-family"
+            " YAML's intracellular_product_variable."
+        ),
+        applies_to=(
+            "runs whose process family declares"
+            " intracellular_product_variable AND the bundle has that"
+            " trajectory present"
+        ),
+        output_shape="scalar_with_metadata",
+        output_columns=(
+            "final_yield_mg_per_g_dcw",
+            "peak_yield_mg_per_g_dcw",
+            "t_peak_h",
+            "t_final_h",
+            "final_volumetric_yield_mg_per_l",
+            "yield_decline_after_peak",
+            "is_yield_declining",
+        ),
+        toolkit_fn=(
+            "fermdocs_characterize.toolkit.products:compute_intracellular_yield"
+        ),
+        status="ready",
+    )
+)
+
+_register(
+    CatalogEntry(
         metric_id="P5",
         tier="P",
         short_description="Precursor utilization fraction",

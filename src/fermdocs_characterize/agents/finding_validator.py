@@ -86,6 +86,16 @@ _PHYSICAL_BOUNDS: dict[str, tuple[float | None, float | None]] = {
     # negative.
     "integral_g_l_h": (0.0, None),
     "mean_productivity_g_l_per_h": (0.0, None),
+    # Intracellular yield: mg product per g dry cell weight. Carotenoids
+    # in S. cerevisiae usually 0.1–50 mg/g; oleaginous yeasts hit ~200 mg/g
+    # for lipids; intracellular protein in well-engineered strains can
+    # approach ~300 mg/g. 500 mg/g is a generous ceiling that catches
+    # units mismatches (someone reporting g/g as mg/g → 1000× over) and
+    # garbage data while admitting every realistic process.
+    "final_yield_mg_per_g_dcw": (0.0, 500.0),
+    "peak_yield_mg_per_g_dcw": (0.0, 500.0),
+    "yield_decline_after_peak": (0.0, 1.0),
+    "final_volumetric_yield_mg_per_l": (0.0, None),
 }
 
 

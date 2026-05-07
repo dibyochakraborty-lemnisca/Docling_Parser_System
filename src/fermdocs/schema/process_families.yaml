@@ -56,6 +56,22 @@ process_families:
     overflow_byproducts:
       - ethanol_g_l
 
+  yeast_intracellular_product_fedbatch:
+    description: >
+      Generic intracellular-product yeast fed-batch — product
+      accumulates inside cells rather than being secreted. Covers
+      carotenoids (astaxanthin, beta-carotene), lipids / TAG, terpenoids,
+      intracellular recombinant proteins, vitamin K2 (menaquinone-7).
+      Uploads must include a column quantifying specific yield in
+      mg-product-per-gram-DCW; the column name is operator-chosen
+      and routed via intracellular_product_variable below.
+      Substitute the placeholder for your actual measurement column.
+    product_variable: null
+    intracellular_product_variable: product_mg_per_g_dcw
+    precursor_variables: []
+    overflow_byproducts:
+      - ethanol_g_l
+
   melanin_batch:
     description: >
       Melanin biosynthesis (e.g. tyrosinase pathway). Tyrosine is
