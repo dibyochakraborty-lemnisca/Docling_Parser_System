@@ -678,6 +678,14 @@ _register(
             "rq_min",
             "frac_over_overflow_threshold",
             "overflow_flag",
+            # Commit 4 robust-stats fields (catalog runner emits these
+            # alongside mean for the synthesizer to prefer median when
+            # the time-series is skewed):
+            "median_rq",
+            "p25_rq",
+            "p75_rq",
+            "iqr_rq",
+            "recommended_summary",
         ),
         required_inputs=(
             InputSpec(variable="our_mmol_per_l_per_h", min_points=3),

@@ -33,6 +33,7 @@ from fermdocs.domain.process_families import (
     ProcessFamilyConfig,
     lookup_family,
 )
+from fermdocs_characterize.toolkit._stats import central_tendency
 from fermdocs_characterize.toolkit.balances import (
     compute_byproduct_yield,
     compute_carbon_balance_closure,
@@ -359,7 +360,17 @@ def _adapter_b10(bundle: _BundleView, run_id: str | None) -> dict | None:
         result = compute_rq(time_h, our, cer)
     except ValueError:
         return None
-    return {
+    # Commit 4 (robust stats): mean RQ over-reports overflow when there
+    # are transient spikes (IndPenSim case: mean 1.21, median 0.98).
+    # Compute the pointwise RQ time-series ourselves and report
+    # central_tendency stats so the synthesizer can prefer median when
+    # the signal is skewed.
+    pointwise = []
+    for o, c in zip(our, cer):
+        if o > 0 and c is not None:
+            pointwise.append(c / o)
+    ct = central_tendency(pointwise) if len(pointwise) >= 2 else None
+    out = {
         "mean_rq": result.rq_mean,
         "max_rq": result.rq_max,
         "min_rq": result.rq_min,
@@ -367,13 +378,32 @@ def _adapter_b10(bundle: _BundleView, run_id: str | None) -> dict | None:
         "overflow_flag": bool(result.overflow_flag),
         "n_observations": len(time_h),
         "_variables_used": ["our_mmol_per_l_per_h", "cer_mmol_per_l_per_h"],
-        "_summary": (
+    }
+    if ct is not None:
+        out["median_rq"] = ct.median
+        out["p25_rq"] = ct.p25
+        out["p75_rq"] = ct.p75
+        out["iqr_rq"] = ct.iqr
+        out["recommended_summary"] = ct.recommended_summary
+        # Synthesizer reads recommended_summary; surface the actual
+        # 'preferred' value as a top-level key for the prose summary.
+        preferred = ct.median if ct.recommended_summary == "median" else ct.mean
+        out["_summary"] = (
+            f"RQ on {run_id}: "
+            f"{ct.recommended_summary}={preferred:.2f}"
+            f" (mean={ct.mean:.2f}, median={ct.median:.2f},"
+            f" IQR={ct.iqr:.2f}),"
+            f" {result.frac_over_overflow_threshold*100:.1f}% over 1.1"
+            f" → overflow={'yes' if result.overflow_flag else 'no'}."
+        )
+    else:
+        out["_summary"] = (
             f"RQ on {run_id}: mean={result.rq_mean:.2f},"
             f" max={result.rq_max:.2f},"
             f" {result.frac_over_overflow_threshold*100:.1f}% over 1.1"
             f" → overflow={'yes' if result.overflow_flag else 'no'}."
-        ),
-    }
+        )
+    return out
 
 
 # ---------------------------------------------------------------------------

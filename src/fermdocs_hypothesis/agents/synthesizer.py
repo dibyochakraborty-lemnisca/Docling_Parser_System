@@ -125,6 +125,18 @@ SYNTHESIZER_INVARIANTS = (
     " we learned about the question. The two fields are gated on"
     " user_question being non-null; when it's None, leave both as null"
     " — back-compat with legacy runs.",
+    "ROBUST STATISTICS — prefer median when divergent: when a finding's"
+    " statistics include both `mean` and `median` for the same metric"
+    " (e.g. mean_rq + median_rq from B10), check whether the finding"
+    " also carries `recommended_summary`. When `recommended_summary`"
+    " is 'median', surface the median as the headline number; the"
+    " mean is misleading on skewed time-series (e.g. RQ with feed-event"
+    " spikes). When `recommended_summary` is 'mean' OR absent, use the"
+    " mean. ALWAYS cite both numbers when they differ by more than"
+    " 15% — 'mean RQ 1.21, median 0.98' tells the reader something the"
+    " headline alone hides. The IndPenSim case: mean RQ 1.21"
+    " suggested overflow; median 0.98 said clean aerobic. Do not pick"
+    " one and bury the other when they disagree materially.",
 )
 
 def make_followup_invariants(view: SynthesizerView) -> tuple[str, ...]:
