@@ -96,16 +96,32 @@ export interface HypothesisOutput {
 
 export interface UploadResponse {
   upload_id: string;
-  filename: string;
+  filenames: string[];
+  content_types: string[];
   size_bytes: number;
-  content_type: string;
+  // Legacy single-file keys, populated when N=1, null on N>1.
+  // New code reads filenames/content_types instead.
+  filename: string | null;
+  content_type: string | null;
 }
 
-export async function uploadFile(file: File): Promise<UploadResponse> {
+export async function uploadFiles(files: File[]): Promise<UploadResponse> {
+  if (files.length === 0) {
+    throw new Error("uploadFiles called with empty list");
+  }
   const fd = new FormData();
-  fd.append("file", file);
+  for (const f of files) {
+    fd.append("files", f);
+  }
   const r = await fetch(`${BASE}/uploads`, { method: "POST", body: fd });
-  if (!r.ok) throw new Error(`upload failed: ${r.status}`);
+  if (!r.ok) {
+    let detail = `${r.status}`;
+    try {
+      const text = await r.text();
+      detail = `${r.status}: ${text}`;
+    } catch {}
+    throw new Error(`uploadFiles failed: ${detail}`);
+  }
   return r.json();
 }
 
