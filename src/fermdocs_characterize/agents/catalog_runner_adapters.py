@@ -28,6 +28,11 @@ from fermdocs_characterize.agents.catalog_runner import (
     _register_adapter,
 )
 from fermdocs_characterize.agents.metric_catalog import BIOMASS_PROXIES, DO_PROXIES
+from fermdocs.domain.process_families import (
+    UNKNOWN_FAMILY_NAME,
+    ProcessFamilyConfig,
+    lookup_family,
+)
 from fermdocs_characterize.toolkit.balances import (
     compute_byproduct_yield,
     compute_carbon_balance_closure,
@@ -40,6 +45,13 @@ from fermdocs_characterize.toolkit.kinetics import (
     segment_growth_phases,
 )
 from fermdocs_characterize.toolkit.operational import compute_do_margin
+from fermdocs_characterize.toolkit.products import (
+    compute_final_titer,
+    compute_integral_productivity,
+    compute_peak_titer,
+    compute_precursor_utilization,
+    compute_titer_decline,
+)
 
 
 def _resolve_variable(
@@ -362,6 +374,259 @@ def _adapter_b10(bundle: _BundleView, run_id: str | None) -> dict | None:
             f" → overflow={'yes' if result.overflow_flag else 'no'}."
         ),
     }
+
+
+# ---------------------------------------------------------------------------
+# Tier P — product KPIs (process-family routed)
+# ---------------------------------------------------------------------------
+#
+# Plan ref: plans/2026-05-07-characterize-determinism.md commit 2.
+#
+# These adapters resolve the product/precursor variable through
+# `lookup_family()` at runtime. When the family is `unknown` (no
+# routing) or the routed variable isn't present in the bundle, the
+# adapter returns a special config-mismatch sentinel that the runner
+# converts into ONE [CONFIG_MISMATCH] data_gap (NOT five per-metric
+# data_gaps — A3 fix from plan-eng-review).
+
+
+_CONFIG_MISMATCH_SENTINEL = "_CONFIG_MISMATCH_"
+
+
+def _resolve_family(bundle: _BundleView) -> ProcessFamilyConfig:
+    return lookup_family(bundle.process_family)
+
+
+def _config_mismatch(reason: str) -> dict:
+    """Return a stats dict that the runner recognizes as 'this should
+    be a CONFIG_MISMATCH data_gap, not a tool-error or precondition
+    data_gap'. The runner uses the `_config_mismatch_reason` key to
+    surface the helpful message instead of a generic 'precondition not
+    met'.
+
+    Returning None would also work (becomes a generic precondition
+    data_gap), but [CONFIG_MISMATCH] is more diagnostic for the user
+    debugging YAML config typos.
+    """
+    return {
+        "_config_mismatch": True,
+        "_config_mismatch_reason": reason,
+        "_summary": f"[CONFIG_MISMATCH] {reason}",
+    }
+
+
+@_register_adapter("P1")
+def _adapter_p1(bundle: _BundleView, run_id: str | None) -> dict | None:
+    """P1: final product titer."""
+    if run_id is None:
+        return None
+    family = _resolve_family(bundle)
+    if family.product_variable is None:
+        # Unknown family or family without product → not applicable.
+        # Fall through to None (precondition not met) rather than
+        # CONFIG_MISMATCH because there's nothing to be mismatched.
+        return None
+    traj = bundle.trajectory(run_id, family.product_variable)
+    if traj is None:
+        avail = sorted(bundle.variables_for(run_id))
+        return _config_mismatch(
+            f"process_families.yaml routes {family.name} to"
+            f" product_variable={family.product_variable!r}, but this"
+            f" bundle has no such trajectory on {run_id}."
+            f" Available variables: {avail or '(none)'}."
+        )
+    time_h = [t for t, v in zip(traj.time_grid, traj.values) if v is not None]
+    values = [v for v in traj.values if v is not None]
+    if len(time_h) < 2:
+        return None
+    result = compute_final_titer(time_h, values)
+    return {
+        "final_titer_g_l": result.final_titer_g_l,
+        "t_final_h": result.t_final_h,
+        "product_variable": family.product_variable,
+        "n_observations": result.n_points,
+        "_variables_used": [family.product_variable],
+        "_summary": (
+            f"final {family.product_variable} on {run_id}:"
+            f" {result.final_titer_g_l:.2f} g/L at {result.t_final_h:.1f}h."
+        ),
+    }
+
+
+@_register_adapter("P2")
+def _adapter_p2(bundle: _BundleView, run_id: str | None) -> dict | None:
+    """P2: peak product titer."""
+    if run_id is None:
+        return None
+    family = _resolve_family(bundle)
+    if family.product_variable is None:
+        return None
+    traj = bundle.trajectory(run_id, family.product_variable)
+    if traj is None:
+        avail = sorted(bundle.variables_for(run_id))
+        return _config_mismatch(
+            f"process_families.yaml routes {family.name} to"
+            f" product_variable={family.product_variable!r}, but this"
+            f" bundle has no such trajectory on {run_id}."
+            f" Available variables: {avail or '(none)'}."
+        )
+    time_h = [t for t, v in zip(traj.time_grid, traj.values) if v is not None]
+    values = [v for v in traj.values if v is not None]
+    if len(time_h) < 2:
+        return None
+    result = compute_peak_titer(time_h, values)
+    return {
+        "peak_titer_g_l": result.peak_titer_g_l,
+        "t_peak_h": result.t_peak_h,
+        "product_variable": family.product_variable,
+        "n_observations": result.n_points,
+        "_variables_used": [family.product_variable],
+        "_summary": (
+            f"peak {family.product_variable} on {run_id}:"
+            f" {result.peak_titer_g_l:.2f} g/L at {result.t_peak_h:.1f}h."
+        ),
+    }
+
+
+@_register_adapter("P3")
+def _adapter_p3(bundle: _BundleView, run_id: str | None) -> dict | None:
+    """P3: titer decline after peak (lysis / hydrolysis flag)."""
+    if run_id is None:
+        return None
+    family = _resolve_family(bundle)
+    if family.product_variable is None:
+        return None
+    traj = bundle.trajectory(run_id, family.product_variable)
+    if traj is None:
+        # P1/P2 already emit the CONFIG_MISMATCH; P3 follows suit so the
+        # user sees the same diagnostic on all three lines.
+        avail = sorted(bundle.variables_for(run_id))
+        return _config_mismatch(
+            f"process_families.yaml routes {family.name} to"
+            f" product_variable={family.product_variable!r}, but this"
+            f" bundle has no such trajectory on {run_id}."
+            f" Available variables: {avail or '(none)'}."
+        )
+    time_h = [t for t, v in zip(traj.time_grid, traj.values) if v is not None]
+    values = [v for v in traj.values if v is not None]
+    if len(time_h) < 2:
+        return None
+    result = compute_titer_decline(time_h, values)
+    return {
+        "decline_fraction": result.decline_fraction,
+        "peak_titer_g_l": result.peak_titer_g_l,
+        "final_titer_g_l": result.final_titer_g_l,
+        "t_peak_h": result.t_peak_h,
+        "t_final_h": result.t_final_h,
+        "is_declining": bool(result.is_declining),
+        "product_variable": family.product_variable,
+        "n_observations": len(time_h),
+        "_variables_used": [family.product_variable],
+        "_summary": (
+            f"{family.product_variable} decline on {run_id}:"
+            f" peak={result.peak_titer_g_l:.2f} → final={result.final_titer_g_l:.2f}"
+            f" g/L ({result.decline_fraction*100:.1f}% drop;"
+            f" {'flagged' if result.is_declining else 'held'})."
+        ),
+    }
+
+
+@_register_adapter("P4")
+def _adapter_p4(bundle: _BundleView, run_id: str | None) -> dict | None:
+    """P4: integral productivity."""
+    if run_id is None:
+        return None
+    family = _resolve_family(bundle)
+    if family.product_variable is None:
+        return None
+    traj = bundle.trajectory(run_id, family.product_variable)
+    if traj is None:
+        avail = sorted(bundle.variables_for(run_id))
+        return _config_mismatch(
+            f"process_families.yaml routes {family.name} to"
+            f" product_variable={family.product_variable!r}, but this"
+            f" bundle has no such trajectory on {run_id}."
+            f" Available variables: {avail or '(none)'}."
+        )
+    time_h = [t for t, v in zip(traj.time_grid, traj.values) if v is not None]
+    values = [v for v in traj.values if v is not None]
+    if len(time_h) < 2:
+        return None
+    result = compute_integral_productivity(time_h, values)
+    return {
+        "integral_g_l_h": result.integral_g_l_h,
+        "mean_productivity_g_l_per_h": result.mean_productivity_g_l_per_h,
+        "duration_h": result.duration_h,
+        "product_variable": family.product_variable,
+        "n_observations": result.n_points,
+        "_variables_used": [family.product_variable],
+        "_summary": (
+            f"{family.product_variable} integral productivity on {run_id}:"
+            f" mean={result.mean_productivity_g_l_per_h:.2f} g/L/h"
+            f" over {result.duration_h:.1f}h."
+        ),
+    }
+
+
+@_register_adapter("P5")
+def _adapter_p5(bundle: _BundleView, run_id: str | None) -> dict | None:
+    """P5: precursor utilization. Iterates the family's precursor list
+    and reports the FIRST precursor present in the bundle for this run.
+    Multiple precursors aren't combined here — each gets its own future
+    metric if needed; for v1 we surface one."""
+    if run_id is None:
+        return None
+    family = _resolve_family(bundle)
+    if not family.precursor_variables:
+        # Family doesn't declare a precursor — P5 is not applicable.
+        return None
+    available = bundle.variables_for(run_id)
+    chosen: str | None = None
+    for precursor in family.precursor_variables:
+        if precursor in available:
+            chosen = precursor
+            break
+    if chosen is None:
+        avail = sorted(available)
+        return _config_mismatch(
+            f"process_families.yaml routes {family.name} to"
+            f" precursor_variables={list(family.precursor_variables)},"
+            f" but this bundle has none of them on {run_id}."
+            f" Available variables: {avail or '(none)'}."
+        )
+    traj = bundle.trajectory(run_id, chosen)
+    if traj is None:
+        return None  # defense-in-depth; can't reach
+    time_h = [t for t, v in zip(traj.time_grid, traj.values) if v is not None]
+    values = [v for v in traj.values if v is not None]
+    if len(time_h) < 2:
+        return None
+    try:
+        result = compute_precursor_utilization(
+            time_h, values, precursor_variable=chosen
+        )
+    except ValueError:
+        return None
+    return {
+        "utilization_fraction": result.utilization_fraction,
+        "peak_value": result.peak_value,
+        "final_value": result.final_value,
+        "utilization_class": result.utilization_class,
+        "precursor_variable": result.precursor_variable,
+        "n_observations": len(time_h),
+        "_variables_used": [chosen],
+        "_summary": (
+            f"{chosen} utilization on {run_id}:"
+            f" {result.utilization_fraction*100:.1f}% consumed"
+            f" (peak={result.peak_value:.0f} → final={result.final_value:.0f},"
+            f" class={result.utilization_class})."
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tier B — carbon balance (continued)
+# ---------------------------------------------------------------------------
 
 
 @_register_adapter("B16")

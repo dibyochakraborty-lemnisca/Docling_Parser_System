@@ -100,6 +100,12 @@ class Tier(str, Enum):
     A: direct measurement violation (range_violation against measured nominal+std_dev)
     B: derived from measurements (rates, yields, ratios)
     C: modeled / process-priors-derived (back-calculated from priors)
+    P: product-side KPIs (final/peak titer, decline, productivity,
+       precursor utilization). Tier P entries are direct measurements
+       on the product variable; trust-equivalent to Tier A but kept
+       distinct so the synthesizer can route product evidence to the
+       'which run was better?' angle without competing with kinetic
+       Tier-A findings.
 
     Hypothesis-stage agents weight evidence by tier; downgrade C in early debate.
     """
@@ -107,6 +113,7 @@ class Tier(str, Enum):
     A = "A"
     B = "B"
     C = "C"
+    P = "P"
 
 
 class NarrativeTag(str, Enum):

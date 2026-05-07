@@ -25,7 +25,7 @@ import importlib
 from dataclasses import dataclass, field
 from typing import Literal
 
-Tier = Literal["A", "B", "C"]
+Tier = Literal["A", "B", "C", "P"]
 OutputShape = Literal[
     "scalar",
     "scalar_with_metadata",
@@ -885,6 +885,128 @@ _register(
     )
 )
 del _C_READY_IN_PR3
+
+
+# ---------------- Tier P — product KPIs (process-family routed) ----------------
+#
+# Plan ref: plans/2026-05-07-characterize-determinism.md commit 2.
+#
+# These entries don't declare `required_inputs` against a specific
+# variable name — the variable is process-family-dependent (penicillin
+# fed-batch → penicillin_g_l, melanin batch → melanin_g_l, etc.).
+# Adapters resolve the variable through `lookup_family()` at runtime
+# and emit a [CONFIG_MISMATCH] data_gap when the routed variable is
+# not in the bundle (A3 fix).
+
+_register(
+    CatalogEntry(
+        metric_id="P1",
+        tier="P",
+        short_description="Final product titer",
+        long_description=(
+            "Last observed value on the process-family product trajectory."
+            " The number that answers 'how much did this run produce?' in"
+            " g/L. Process-family routed: penicillin_g_l, melanin_g_l,"
+            " recombinant_protein_g_l, etc. (see process_families.yaml)."
+        ),
+        applies_to="runs with the family's product trajectory present",
+        output_shape="scalar_with_metadata",
+        output_columns=("final_titer_g_l", "t_final_h"),
+        toolkit_fn="fermdocs_characterize.toolkit.products:compute_final_titer",
+        status="ready",
+    )
+)
+
+_register(
+    CatalogEntry(
+        metric_id="P2",
+        tier="P",
+        short_description="Peak product titer",
+        long_description=(
+            "Maximum observed product titer + time of peak. Together with"
+            " P3 (decline) flags lysis / hydrolysis: a high peak that"
+            " doesn't hold means the product was made then degraded."
+        ),
+        applies_to="runs with the family's product trajectory present",
+        output_shape="scalar_with_metadata",
+        output_columns=("peak_titer_g_l", "t_peak_h"),
+        toolkit_fn="fermdocs_characterize.toolkit.products:compute_peak_titer",
+        status="ready",
+    )
+)
+
+_register(
+    CatalogEntry(
+        metric_id="P3",
+        tier="P",
+        short_description="Titer decline after peak",
+        long_description=(
+            "Fractional drop from peak product titer to final product"
+            " titer: (peak - final) / peak. Range [0, 1]. Above 0.05"
+            " flags 'something happened post-peak' — lysis releasing"
+            " β-lactamase, product hydrolysis, or product re-uptake."
+            " The IndPenSim RUN-1 signature: P peaked at 21.6 g/L @ 168h"
+            " then declined to 14.3 g/L by 228h (decline_fraction=0.34)."
+        ),
+        applies_to="runs with the family's product trajectory present",
+        output_shape="scalar_with_metadata",
+        output_columns=(
+            "decline_fraction", "peak_titer_g_l", "final_titer_g_l",
+            "t_peak_h", "t_final_h", "is_declining",
+        ),
+        toolkit_fn="fermdocs_characterize.toolkit.products:compute_titer_decline",
+        status="ready",
+    )
+)
+
+_register(
+    CatalogEntry(
+        metric_id="P4",
+        tier="P",
+        short_description="Integral productivity ∫P/t dt",
+        long_description=(
+            "Trapezoidal integral of product titer over run duration."
+            " Useful for comparing runs of different durations: a run"
+            " that hits a high peak briefly may have lower integral than"
+            " one that holds a moderate level for longer."
+        ),
+        applies_to="runs with the family's product trajectory present",
+        output_shape="scalar_with_metadata",
+        output_columns=(
+            "integral_g_l_h", "mean_productivity_g_l_per_h", "duration_h",
+        ),
+        toolkit_fn=(
+            "fermdocs_characterize.toolkit.products:compute_integral_productivity"
+        ),
+        status="ready",
+    )
+)
+
+_register(
+    CatalogEntry(
+        metric_id="P5",
+        tier="P",
+        short_description="Precursor utilization fraction",
+        long_description=(
+            "For process families with a named precursor (penicillin's"
+            " PAA, melanin's tyrosine): (peak - final) / peak. Polarity"
+            " OPPOSITE of byproduct yield — high means precursor was"
+            " consumed efficiently into product, low means it accumulated"
+            " as waste. The IndPenSim RUN-2 PAA: peak → 634 mg/L"
+            " (efficient); RUN-1: stayed at 5203 mg/L (wasted)."
+        ),
+        applies_to="runs whose process family declares precursor_variables",
+        output_shape="scalar_with_metadata",
+        output_columns=(
+            "utilization_fraction", "peak_value", "final_value",
+            "utilization_class", "precursor_variable",
+        ),
+        toolkit_fn=(
+            "fermdocs_characterize.toolkit.products:compute_precursor_utilization"
+        ),
+        status="ready",
+    )
+)
 
 
 # -----------------------------------------------------------------------------

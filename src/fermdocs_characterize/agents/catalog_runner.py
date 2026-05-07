@@ -250,6 +250,23 @@ class MetricCatalogRunner:
                 ))
                 continue
 
+            # A3 fix: adapter signaled a config mismatch (process-family
+            # YAML routes to a variable not present in the bundle).
+            # Convert to a [CONFIG_MISMATCH] data_gap so the user sees a
+            # diagnostic message naming the YAML key and the available
+            # variables, not a generic 'precondition not met'.
+            if stats.get("_config_mismatch"):
+                findings.append(self._data_gap(
+                    finding_id=finding_id,
+                    metric_id=metric_id,
+                    run_id=run_id,
+                    reason=stats.get("_config_mismatch_reason")
+                    or "process-family config mismatch",
+                    tier=entry.tier,
+                    pattern_kind="config_mismatch",
+                ))
+                continue
+
             run_ids = [run_id] if run_id is not None else list(bundle.run_ids)
             variables = list(stats.pop("_variables_used", [])) or _infer_variables(
                 entry, bundle, run_id
@@ -290,14 +307,26 @@ class MetricCatalogRunner:
         run_id: str | None,
         reason: str,
         tier: str,
+        pattern_kind: str = "data_gap",
     ) -> Finding:
+        """Emit a non-computed Finding. `pattern_kind` discriminates:
+          - 'data_gap': inputs missing or precondition not met
+          - 'config_mismatch': process-family YAML routes to a variable
+            not in the bundle (A3 fix). The reason carries the helpful
+            'process_families.yaml says X but bundle has Y' message.
+        Severity stays INFO; the synthesizer should treat both as
+        non-evidence, just diagnostic notes.
+        """
         run_label = run_id if run_id is not None else "cross-run"
+        prefix = (
+            "[CONFIG_MISMATCH] " if pattern_kind == "config_mismatch" else ""
+        )
         return Finding(
             finding_id=finding_id,
             type=FindingType.KINETIC_ANOMALY,
             severity=Severity.INFO,
             tier=Tier(tier),
-            summary=f"{metric_id} skipped on {run_label}: {reason}.",
+            summary=f"{prefix}{metric_id} skipped on {run_label}: {reason}.",
             confidence=0.5,
             extracted_via=ExtractedVia.DETERMINISTIC,
             evidence_strength=EvidenceStrength(
@@ -307,7 +336,7 @@ class MetricCatalogRunner:
             variables_involved=[],
             run_ids=[run_id] if run_id is not None else [],
             statistics={
-                "pattern_kind": "data_gap",
+                "pattern_kind": pattern_kind,
                 "metric_id": metric_id,
                 "tier": tier,
                 "reason": reason,
