@@ -194,6 +194,16 @@ export default function RunPage({ params }: { params: { id: string } }) {
                   </div>
                 )}
                 <p className="text-sm leading-relaxed">{h.summary}</p>
+                {h.actionable_recommendation && (
+                  <div className="mt-3 rounded-md border-l-4 border-l-primary bg-primary/5 px-3 py-2">
+                    <div className="text-xs font-medium uppercase tracking-wide text-primary">
+                      Recommendation
+                    </div>
+                    <p className="mt-1 text-sm leading-relaxed">
+                      {h.actionable_recommendation}
+                    </p>
+                  </div>
+                )}
                 <div className="mt-3 flex flex-wrap gap-1">
                   {h.affected_variables.map((v) => (
                     <Badge key={v} variant="secondary" className="font-mono text-xs">
@@ -265,6 +275,16 @@ export default function RunPage({ params }: { params: { id: string } }) {
                       </div>
                     )}
                     <p className="text-sm leading-relaxed">{h.summary}</p>
+                    {h.actionable_recommendation && (
+                      <div className="mt-3 rounded-md border-l-4 border-l-primary bg-primary/5 px-3 py-2">
+                        <div className="text-xs font-medium uppercase tracking-wide text-primary">
+                          Recommendation
+                        </div>
+                        <p className="mt-1 text-sm leading-relaxed">
+                          {h.actionable_recommendation}
+                        </p>
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               ))}

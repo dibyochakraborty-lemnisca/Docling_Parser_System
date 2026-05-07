@@ -138,6 +138,18 @@ SYNTHESIZER_INVARIANTS = (
     " symmetric coverage you have, not 'insufficient_data'. Use"
     " 'insufficient_data' only when the BUNDLE itself lacks the data,"
     " e.g. RUN-2 has no biomass trajectory at all.",
+    "ACTIONABLE RECOMMENDATION (commit 4 of rigour-and-actionability plan):"
+    " your hypothesis MUST end in a concrete next-batch parameter"
+    " change. Populate the field `actionable_recommendation` with one"
+    " sentence (≤ 600 chars) of the form: 'Design Batch N+1 with X' or"
+    " 'Repeat Batch K with X changed to Y'. Name the variable, the"
+    " direction, and the magnitude when the evidence supports it."
+    " Descriptive hypotheses ('the data shows X declining after 144h')"
+    " without a recommendation are insufficient — a process scientist"
+    " wants to know what to do next. If the bundle genuinely doesn't"
+    " support a recommendation, populate the field with the literal"
+    " prefix 'insufficient evidence to recommend: <reason>' — honest"
+    " abstention is acceptable, silence is not.",
     "TRAJECTORY CITATION (commit 1 of rigour-and-actionability plan):"
     " when your summary makes a time-dependent claim — anything about"
     " decline, peak, onset, transient, rate, kinetics, growth dynamics,"
@@ -331,6 +343,10 @@ _SYNTHESIZER_SCHEMA: dict[str, Any] = {
             "type": "STRING",
             "nullable": True,
         },
+        "actionable_recommendation": {
+            "type": "STRING",
+            "nullable": True,
+        },
     },
     "required": ["summary", "facet_ids", "confidence", "confidence_basis"],
 }
@@ -427,6 +443,13 @@ class SynthesizerAgent:
             if isinstance(raw_summary, str) and raw_summary.strip():
                 q_response_summary = raw_summary.strip()[:800]
 
+        # Actionable recommendation. Optional during transition; judge
+        # enforces presence on green-flagged hypotheses.
+        rec_raw = parsed.get("actionable_recommendation")
+        rec: str | None = None
+        if isinstance(rec_raw, str) and rec_raw.strip():
+            rec = rec_raw.strip()[:600]
+
         return HypothesisFull(
             hyp_id=hyp_id,
             summary=summary,
@@ -439,6 +462,7 @@ class SynthesizerAgent:
             confidence_basis=basis,
             question_answered=q_answered,  # type: ignore[arg-type]
             question_response_summary=q_response_summary,
+            actionable_recommendation=rec,
         )
 
 

@@ -780,6 +780,9 @@ def _build_final(
         # FinalHypothesis stays back-compat.
         question_answered=hyp.question_answered,
         question_response_summary=hyp.question_response_summary,
+        # Actionable recommendation flows through unchanged. Judge enforcement
+        # of presence happens at debate-loop time; here we just project.
+        actionable_recommendation=hyp.actionable_recommendation,
     )
 
 

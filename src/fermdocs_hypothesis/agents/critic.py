@@ -86,6 +86,17 @@ CRITIC_INVARIANTS = (
     " question'. Tag question-axis reasons with the [question-axis] prefix"
     " so the synthesizer can distinguish them from evidence-shape reasons"
     " on retry — different reasons need different fixes.",
+    "[ACTIONABILITY-AXIS] (commit 4 of rigour-and-actionability plan):"
+    " rejection axis for descriptive-only hypotheses. If the hypothesis"
+    " is otherwise sound (would receive a green flag) but its"
+    " actionable_recommendation field is null OR empty whitespace,"
+    " file red with reason '[actionability-axis]: hypothesis is"
+    " descriptive but proposes no next step; populate"
+    " actionable_recommendation with a concrete parameter change or the"
+    " literal prefix \"insufficient evidence to recommend\"'. Do NOT"
+    " over-fire when the field starts with 'insufficient evidence' —"
+    " honest abstention is acceptable. Tag with [actionability-axis]"
+    " prefix.",
     "[ROBUSTNESS-AXIS] (commit 2 of rigour-and-actionability plan):"
     " rejection axis for un-caveated correlations on small n. When the"
     " hypothesis cites a Pearson r (e.g. 'r=-0.90 between DO and WCW')"

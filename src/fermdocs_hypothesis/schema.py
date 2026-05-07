@@ -198,6 +198,18 @@ class HypothesisFull(BaseModel):
             " populates when user_question is non-null. Carries forward."
         ),
     )
+    actionable_recommendation: str | None = Field(
+        default=None,
+        max_length=600,
+        description=(
+            "Concrete next-batch parameter change implied by the"
+            " hypothesis (e.g. 'design Batch 7 with DO setpoint ≥40%"
+            " throughout fed-batch'). On green-flagged hypotheses the"
+            " judge enforces presence; the explicit string"
+            " 'insufficient evidence to recommend: <reason>' is also"
+            " valid. None on red-flagged or legacy runs."
+        ),
+    )
 
     @field_validator("hyp_id")
     @classmethod
@@ -613,6 +625,17 @@ class FinalHypothesis(BaseModel):
         description=(
             "One paragraph stating what we learned about the user's"
             " question. None on runs without a UserQuestion."
+        ),
+    )
+    actionable_recommendation: str | None = Field(
+        default=None,
+        max_length=600,
+        description=(
+            "Concrete next-batch parameter change implied by this"
+            " hypothesis. Judge enforces presence on green-flagged"
+            " hypotheses; the literal prefix 'insufficient evidence'"
+            " satisfies the gate when the bundle truly doesn't support"
+            " a recommendation. None on red-flagged or legacy runs."
         ),
     )
     parent_hypothesis_ids: list[str] = Field(

@@ -57,6 +57,14 @@ JUDGE_INVARIANTS = (
     "Green-flag critiques always rule criticism_valid=false.",
     "Provide a one-paragraph rationale (≤500 chars) that names the evidence you weighed.",
     "If previous_attempts shows you ruled the same critic_reason valid before AND the synthesizer has now narrowed the hypothesis to address it, the critique is no longer valid for that reason — rule criticism_valid=false. Consistency across retries.",
+    "[ACTIONABILITY-AXIS] critic reasons: weigh as legitimate. A green"
+    " hypothesis with a null actionable_recommendation leaves the"
+    " reader without a next step. The literal prefix 'insufficient"
+    " evidence to recommend' satisfies the gate; bare descriptive"
+    " hypotheses do not. Uphold the critic when the recommendation is"
+    " missing or empty on a green-flagged hypothesis. Do not uphold"
+    " on red-flagged hypotheses (they're rejected anyway) or when the"
+    " recommendation already names a concrete change.",
     "[TRAJECTORY-AXIS] critic reasons: weigh as legitimate. A"
     " hypothesis claiming time-dependent behavior with no cited"
     " trajectory leaves the highest-information signal on the table."

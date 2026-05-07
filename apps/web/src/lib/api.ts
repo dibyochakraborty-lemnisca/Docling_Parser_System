@@ -65,6 +65,9 @@ export interface FinalHypothesis {
   // PR-A user-question fields. Null on legacy runs.
   question_answered?: "yes" | "partial" | "insufficient_data" | null;
   question_response_summary?: string | null;
+  // Commit 4 of rigour-and-actionability: concrete next-batch parameter
+  // change. Null on red-flagged or legacy runs.
+  actionable_recommendation?: string | null;
 }
 
 export interface RejectedHypothesis {
