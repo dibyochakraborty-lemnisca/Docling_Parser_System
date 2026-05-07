@@ -17,6 +17,15 @@ import numpy as np
 import pandas as pd
 
 
+# n below this threshold flags `weak_n` on correlation results. Below 8
+# the bootstrap CI tends to be wide and the point estimate is unstable;
+# downstream agents must caveat the claim or downgrade to data_gap.
+# 8 is the smallest n where Pearson r=0.95 has a non-trivial probability
+# of arising under the null with two-tailed p<0.05 — below it, even
+# strong-looking correlations carry real chance of being noise.
+WEAK_N_THRESHOLD = 8
+
+
 # -----------------------------------------------------------------------------
 # A19 — Cross-run KPI table assembly
 # -----------------------------------------------------------------------------
@@ -102,6 +111,83 @@ def pairwise_deviation(
                 )
     out.sort(key=lambda d: d.relative_gap, reverse=True)
     return out[:top_k]
+
+
+# -----------------------------------------------------------------------------
+# A25 — Pairwise correlation with bootstrap CI
+# -----------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CorrelationResult:
+    """Pearson r with non-parametric bootstrap CI.
+
+    `weak_n_flag` is True when n < WEAK_N_THRESHOLD; downstream agents
+    must surface that fact in any claim derived from this result.
+    `ci_low` / `ci_high` are the empirical 2.5/97.5 percentiles of the
+    bootstrap distribution. Returns ci_low=ci_high=r when n<3 (no
+    meaningful resampling possible).
+    """
+
+    r: float
+    n: int
+    ci_low: float
+    ci_high: float
+    weak_n_flag: bool
+
+
+def compute_correlation(
+    x,
+    y,
+    *,
+    n_bootstrap: int = 1000,
+    seed: int = 42,
+    ci_alpha: float = 0.05,
+) -> CorrelationResult:
+    """Pearson r between paired samples with bootstrap CI.
+
+    Drops paired NaNs before computing. Deterministic given the seed.
+    Raises ValueError when fewer than 2 finite paired points remain —
+    correlation is undefined.
+    """
+    xa = np.asarray(x, dtype=float)
+    ya = np.asarray(y, dtype=float)
+    if xa.shape != ya.shape:
+        raise ValueError(f"x and y must be same shape; got {xa.shape} vs {ya.shape}")
+    mask = np.isfinite(xa) & np.isfinite(ya)
+    xa, ya = xa[mask], ya[mask]
+    n = int(xa.size)
+    if n < 2:
+        raise ValueError(f"need ≥2 finite paired points; got {n}")
+
+    # Point estimate. np.corrcoef returns NaN for zero-variance input;
+    # in that case r is undefined — surface as 0.0 with weak_n_flag.
+    if xa.std() == 0 or ya.std() == 0:
+        return CorrelationResult(
+            r=0.0, n=n, ci_low=0.0, ci_high=0.0, weak_n_flag=True
+        )
+    r = float(np.corrcoef(xa, ya)[0, 1])
+
+    weak = n < WEAK_N_THRESHOLD
+    if n < 3:
+        return CorrelationResult(
+            r=r, n=n, ci_low=r, ci_high=r, weak_n_flag=weak
+        )
+
+    rng = np.random.default_rng(seed)
+    boot_rs = np.empty(n_bootstrap, dtype=float)
+    for i in range(n_bootstrap):
+        idx = rng.integers(0, n, size=n)
+        xb, yb = xa[idx], ya[idx]
+        if xb.std() == 0 or yb.std() == 0:
+            boot_rs[i] = 0.0
+        else:
+            boot_rs[i] = np.corrcoef(xb, yb)[0, 1]
+    ci_low = float(np.percentile(boot_rs, 100 * ci_alpha / 2))
+    ci_high = float(np.percentile(boot_rs, 100 * (1 - ci_alpha / 2)))
+    return CorrelationResult(
+        r=r, n=n, ci_low=ci_low, ci_high=ci_high, weak_n_flag=weak
+    )
 
 
 # -----------------------------------------------------------------------------

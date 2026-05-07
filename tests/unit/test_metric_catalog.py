@@ -22,9 +22,9 @@ from fermdocs_characterize.agents.metric_catalog import (
 )
 
 
-def test_catalog_has_60_entries() -> None:
-    # 24 Tier A + 20 Tier B + 16 Tier C
-    assert len(CATALOG) == 60
+def test_catalog_has_expected_entries() -> None:
+    # 24 Tier A + 20 Tier B + 16 Tier C + 6 Tier P (P1-P5, P_INTRACELLULAR_YIELD)
+    assert len(CATALOG) == 66
 
 
 def test_metric_ids_unique_and_well_formed() -> None:
@@ -33,9 +33,12 @@ def test_metric_ids_unique_and_well_formed() -> None:
         assert mid == entry.metric_id
         assert mid not in seen
         seen.add(mid)
-        assert entry.tier in {"A", "B", "C"}
+        assert entry.tier in {"A", "B", "C", "P"}
         assert mid[0] == entry.tier
-        assert mid[1:].isdigit()
+        # Tier P uses descriptive ids (P1…P5, P_INTRACELLULAR_YIELD);
+        # other tiers stay strict numeric.
+        if entry.tier != "P":
+            assert mid[1:].isdigit()
 
 
 def test_every_entry_has_description() -> None:
@@ -49,6 +52,7 @@ def test_tier_counts_match_plan() -> None:
     assert len(entries_by_tier("A")) == 24
     assert len(entries_by_tier("B")) == 20
     assert len(entries_by_tier("C")) == 16
+    assert len(entries_by_tier("P")) == 6
 
 
 def test_ready_entries_resolve_toolkit_fn() -> None:
@@ -65,12 +69,15 @@ def test_ready_entries_after_pr3_are_correct_set() -> None:
     # PR 2: A14/A15/A17/A18 (operational), A19/A20/A21 (cross_run),
     #       B6/B10/B16 (balances)
     # PR 3: C2/C3/C4/C5/C9/C10 (literature)
+    # Tier P shipped after PR3 (characterize-determinism + yeast-intracellular).
     expected = {
         "A8", "A9", "A10", "A11",
         "A14", "A15", "A17", "A18",
         "A19", "A20", "A21",
         "B6", "B10", "B16",
         "C2", "C3", "C4", "C5", "C9", "C10",
+        "P1", "P2", "P3", "P4", "P5",
+        "P_INTRACELLULAR_YIELD",
     }
     assert ready_ids == expected
 
