@@ -32,6 +32,9 @@ from fermdocs_characterize.agents.catalog_runner import (
     _BundleView,
 )
 from fermdocs_characterize.agents.finding_validator import validate_finding
+from fermdocs_characterize.agents.metadata_anomaly_check import (
+    check_metadata_anomalies,
+)
 from fermdocs_characterize.agents.symmetry_check import check_symmetry
 from fermdocs_characterize.agents.trajectory_analyzer import (
     TrajectoryAnalyzerAgent,
@@ -264,6 +267,30 @@ class CharacterizationPipeline:
                 symmetry_bundle, findings, starting_index=len(findings),
             )
             findings.extend(symmetry_findings)
+
+        # 4e. Metadata anomaly pre-pass (reviewer A1). Deterministic
+        # findings before any LLM agent sees the data: instrument
+        # changes (Hitachi→LABMAN), header inconsistencies (WCW unit
+        # notation drift), h0 outliers (8× cohort initial value).
+        # Surface as METADATA-ANOMALY findings so synthesizer + critic
+        # treat them as cross-batch confounds.
+        if trajectories:
+            anomaly_bundle = _BundleView(
+                characterization_id=str(char_id),
+                run_ids=sorted({t.run_id for t in trajectories}),
+                trajectories=trajectories,
+                organism=organism,
+                process_family=process_family,
+            )
+            anomaly_findings = check_metadata_anomalies(
+                char_id=char_id,
+                bundle=anomaly_bundle,
+                dossier=dossier,
+                narrative_observations=dossier.get("narrative_observations")
+                or [],
+                starting_index=len(findings),
+            )
+            findings.extend(anomaly_findings)
 
         # 5. Other artifacts
         deviations = build_deviations(summary)
