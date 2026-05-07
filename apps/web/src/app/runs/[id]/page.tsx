@@ -14,6 +14,7 @@ import {
   type RunDetail,
 } from "@/lib/api";
 import { Timeline } from "@/components/Timeline";
+import { HypothesisCharts } from "@/components/HypothesisChart";
 
 export default function RunPage({ params }: { params: { id: string } }) {
   const runId = params.id;
@@ -133,12 +134,24 @@ export default function RunPage({ params }: { params: { id: string } }) {
 
   return (
     <div className={`space-y-8 ${showFollowupBar ? "pb-40" : ""}`}>
-      <header className="flex items-center justify-between">
+      <header className="flex items-center justify-between print:mb-4">
         <div>
           <h1 className="text-2xl font-semibold">Run {run.run_id.slice(0, 8)}</h1>
           <p className="text-sm text-muted-foreground">{run.run_id}</p>
         </div>
-        <Badge>{statusLabel}</Badge>
+        <div className="flex items-center gap-2 print:hidden">
+          <Badge>{statusLabel}</Badge>
+          {run.status === "done" && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => window.print()}
+              title="Use your browser's PDF target in the print dialog to save as PDF"
+            >
+              Download PDF
+            </Button>
+          )}
+        </div>
       </header>
 
       {run.error && (
@@ -204,6 +217,7 @@ export default function RunPage({ params }: { params: { id: string } }) {
                     </p>
                   </div>
                 )}
+                <HypothesisCharts figures={h.plotly_charts} />
                 <div className="mt-3 flex flex-wrap gap-1">
                   {h.affected_variables.map((v) => (
                     <Badge key={v} variant="secondary" className="font-mono text-xs">
@@ -285,6 +299,7 @@ export default function RunPage({ params }: { params: { id: string } }) {
                         </p>
                       </div>
                     )}
+                    <HypothesisCharts figures={h.plotly_charts} />
                   </CardContent>
                 </Card>
               ))}

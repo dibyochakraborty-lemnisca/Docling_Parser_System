@@ -68,6 +68,38 @@ export interface FinalHypothesis {
   // Commit 4 of rigour-and-actionability: concrete next-batch parameter
   // change. Null on red-flagged or legacy runs.
   actionable_recommendation?: string | null;
+  // charts-and-pdf-export branch: synthesizer-emitted chart intents.
+  // The LLM picks kind/runs/variables/story; the backend renders Plotly
+  // JSON which the frontend feeds into react-plotly.js.
+  chart_specs?: ChartSpec[];
+  plotly_charts?: PlotlyFigure[];
+}
+
+export type ChartKind =
+  | "time_series_overlay"
+  | "scatter_correlation"
+  | "faceted_time_series";
+
+export interface ChartAnnotation {
+  text: string;
+  time_h?: number | null;
+  run_id?: string | null;
+}
+
+export interface ChartSpec {
+  kind: ChartKind;
+  title: string;
+  rationale: string;
+  runs: string[];
+  variables: string[];
+  highlight_runs: string[];
+  annotations: ChartAnnotation[];
+}
+
+export interface PlotlyFigure {
+  data: unknown[];
+  layout: Record<string, unknown>;
+  spec: ChartSpec;
 }
 
 export interface RejectedHypothesis {

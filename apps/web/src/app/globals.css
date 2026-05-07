@@ -67,3 +67,46 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Print styles for the PDF export button on /runs/[id].
+   - Force white background + dark text
+   - Hide nav, footer, follow-up bar, and any element marked print:hidden
+   - Avoid breaking inside hypothesis cards or charts
+   - Plotly figures render as canvas/SVG; let them scale to page width */
+@media print {
+  @page {
+    margin: 1.5cm;
+    size: A4;
+  }
+  body {
+    background: white !important;
+    color: black !important;
+  }
+  nav, footer, .print\:hidden {
+    display: none !important;
+  }
+  .container, main {
+    max-width: 100% !important;
+    padding: 0 !important;
+  }
+  /* Cards: avoid splitting across pages */
+  [data-card], .rounded-md, .rounded-lg {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+  /* Charts: keep figure with its rationale */
+  .js-plotly-plot {
+    page-break-inside: avoid;
+    break-inside: avoid;
+    max-width: 100% !important;
+  }
+  /* Soften card colors for print */
+  .bg-primary\/5 {
+    background: #f4f4f4 !important;
+  }
+  /* Drop hover states */
+  *:hover {
+    background-color: inherit !important;
+  }
+}
+
