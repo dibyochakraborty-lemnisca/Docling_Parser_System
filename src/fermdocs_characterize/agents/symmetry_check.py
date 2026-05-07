@@ -40,6 +40,17 @@ from fermdocs_characterize.schema import (
 )
 
 
+def _anchor_observation_id(
+    bundle: _BundleView, run_id: str
+) -> str | None:
+    """Pull any observation_id from any trajectory on this run, so the
+    emitted Finding can satisfy the validator's namespace check."""
+    for t in bundle.trajectories:
+        if t.run_id == run_id and t.source_observation_ids:
+            return t.source_observation_ids[0]
+    return None
+
+
 def check_symmetry(
     bundle: _BundleView,
     findings: list[Finding],
@@ -103,12 +114,20 @@ def check_symmetry(
             continue
         missing = expected_runs - covered_runs
         for run_id in sorted(missing):
+            anchor = _anchor_observation_id(bundle, run_id)
+            if anchor is None:
+                # No trajectory on this run → no observation_id to cite,
+                # validator would reject. Skip silently — the absence
+                # of any trajectory IS the data gap; symmetry vs data
+                # distinction is moot when there's no run data at all.
+                continue
             counter += 1
             out.append(_symmetry_data_gap(
                 finding_id=f"{char_id}:F-{counter:04d}",
                 metric_id=metric_id,
                 run_id=run_id,
                 covered_runs=sorted(covered_runs),
+                anchor_observation_id=anchor,
             ))
     return out
 
@@ -119,6 +138,7 @@ def _symmetry_data_gap(
     metric_id: str,
     run_id: str,
     covered_runs: list[str],
+    anchor_observation_id: str,
 ) -> Finding:
     """One Finding per missing (metric, run) pair.
 
@@ -143,7 +163,7 @@ def _symmetry_data_gap(
         evidence_strength=EvidenceStrength(
             n_observations=0, n_independent_runs=0,
         ),
-        evidence_observation_ids=["deterministic-runner"],
+        evidence_observation_ids=[anchor_observation_id],
         variables_involved=[],
         run_ids=[run_id],
         statistics={

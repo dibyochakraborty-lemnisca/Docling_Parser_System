@@ -168,18 +168,32 @@ def test_multi_run_emits_per_run_findings() -> None:
 
 
 def test_missing_variable_emits_data_gap() -> None:
+    """With at least one trajectory present (so data_gaps can anchor
+    to a real observation_id), missing-variable adapters emit data_gap
+    findings. Bundles with NO trajectories at all produce zero findings
+    — there's nothing to anchor to, and that's the bundle's problem,
+    not the runner's. Tested separately in test_empty_run_ids."""
     runner = MetricCatalogRunner()
-    bundle = _bundle(["RUN-1"], [])  # no trajectories at all
+    # Provide a biomass trajectory so data_gaps from OTHER metrics can
+    # anchor to its observation_ids; the OUR/CER/DO adapters still
+    # return None and emit data_gap.
+    bundle = _bundle(["RUN-1"], [_exponential_biomass("RUN-1")])
     findings = runner.compute_all(bundle)
-    # Every adapter returns None on missing inputs; runner emits data_gap.
-    assert all(
-        f.statistics.get("pattern_kind") == "data_gap"
-        for f in findings
-    )
-    assert findings, "expected at least one data_gap (the per-run metrics)"
+    # B10 (needs OUR+CER) and A14 (needs DO) emit data_gap.
+    data_gaps = [
+        f for f in findings
+        if f.statistics.get("pattern_kind") == "data_gap"
+    ]
+    assert data_gaps, "expected at least one data_gap (B10 / A14 missing inputs)"
     # Reason mentions precondition
-    reasons = {f.statistics.get("reason", "") for f in findings}
+    reasons = {f.statistics.get("reason", "") for f in data_gaps}
     assert any("precondition not met" in r for r in reasons)
+    # Anchored observation_ids must come from the biomass trajectory.
+    biomass_obs = bundle.trajectory("RUN-1", "biomass_g_l").source_observation_ids
+    for f in data_gaps:
+        assert all(oid in biomass_obs for oid in f.evidence_observation_ids), (
+            "data_gap evidence_observation_ids must resolve through bundle"
+        )
 
 
 # ---------- 4. toolkit raise → data_gap with tool-error reason ----------
@@ -351,6 +365,22 @@ def test_empty_run_ids_returns_empty() -> None:
     # Cross-run metrics still iterate, but they have no adapters today —
     # they're soft-skipped. Per-run metrics produce zero findings
     # because the inner loop is over an empty list. Net: zero.
+    assert findings == []
+
+
+def test_data_gap_dropped_when_no_observation_anchor(tmp_path) -> None:
+    """REGRESSION: bundle with run_ids but NO trajectories on those runs
+    cannot anchor data_gap findings to a real observation_id. Runner
+    must DROP the would-be-data_gap rather than emit a finding the
+    validator will reject (the 'cites unknown observation_id
+    deterministic-runner' bug)."""
+    runner = MetricCatalogRunner()
+    # run_id 'RUN-1' is declared but no Trajectory rows exist for it.
+    bundle = _bundle(["RUN-1"], [])
+    findings = runner.compute_all(bundle)
+    # Should be EMPTY: every adapter returns None, every data_gap path
+    # drops because there's no observation to anchor to. The dev sees
+    # WARNING logs about the drops; bundle stays valid.
     assert findings == []
 
 

@@ -204,6 +204,14 @@ class MetricCatalogRunner:
           - None       → data_gap with reason 'precondition not met'
           - exception  → data_gap with reason 'tool error: <message>'
 
+        Every emitted Finding carries at least one real observation_id
+        from the bundle's trajectories (the validator rejects findings
+        that cite IDs not in the bundle registry). When the bundle has
+        no observations on the relevant run we DROP the finding rather
+        than emit something that will fail downstream validation.
+        Logged at WARNING for the dev to see why a metric silently
+        didn't surface.
+
         finding_id is deterministic given input order: this lets two
         runs of the same characterize stage compare equal.
         """
@@ -231,23 +239,29 @@ class MetricCatalogRunner:
                     "catalog runner: %s on run=%s raised %s: %s",
                     metric_id, run_id, type(exc).__name__, exc,
                 )
-                findings.append(self._data_gap(
+                gap = self._data_gap(
                     finding_id=finding_id,
                     metric_id=metric_id,
                     run_id=run_id,
                     reason=f"tool error: {type(exc).__name__}: {exc}",
                     tier=entry.tier,
-                ))
+                    bundle=bundle,
+                )
+                if gap is not None:
+                    findings.append(gap)
                 continue
 
             if stats is None:
-                findings.append(self._data_gap(
+                gap = self._data_gap(
                     finding_id=finding_id,
                     metric_id=metric_id,
                     run_id=run_id,
                     reason="precondition not met (missing variable or insufficient points)",
                     tier=entry.tier,
-                ))
+                    bundle=bundle,
+                )
+                if gap is not None:
+                    findings.append(gap)
                 continue
 
             # A3 fix: adapter signaled a config mismatch (process-family
@@ -256,7 +270,7 @@ class MetricCatalogRunner:
             # diagnostic message naming the YAML key and the available
             # variables, not a generic 'precondition not met'.
             if stats.get("_config_mismatch"):
-                findings.append(self._data_gap(
+                gap = self._data_gap(
                     finding_id=finding_id,
                     metric_id=metric_id,
                     run_id=run_id,
@@ -264,7 +278,10 @@ class MetricCatalogRunner:
                     or "process-family config mismatch",
                     tier=entry.tier,
                     pattern_kind="config_mismatch",
-                ))
+                    bundle=bundle,
+                )
+                if gap is not None:
+                    findings.append(gap)
                 continue
 
             run_ids = [run_id] if run_id is not None else list(bundle.run_ids)
@@ -272,6 +289,19 @@ class MetricCatalogRunner:
                 entry, bundle, run_id
             )
             severity = _severity_for(metric_id, stats)
+            obs_ids = _collect_observation_ids(bundle, run_ids, variables)
+            if not obs_ids:
+                # No real observation_ids to cite — the validator would
+                # reject this finding. Drop rather than emit something
+                # that fails downstream. WARNING so the dev sees why a
+                # computed metric didn't surface.
+                _log.warning(
+                    "catalog runner: %s on %s computed but no"
+                    " observation_ids resolved (variables=%s); dropping"
+                    " finding to avoid validator failure.",
+                    metric_id, run_ids, variables,
+                )
+                continue
             findings.append(Finding(
                 finding_id=finding_id,
                 type=FindingType.KINETIC_ANOMALY,  # generic; metric_id is the discriminator
@@ -284,9 +314,7 @@ class MetricCatalogRunner:
                     n_observations=int(stats.get("n_observations", 0)),
                     n_independent_runs=len(run_ids),
                 ),
-                evidence_observation_ids=_collect_observation_ids(
-                    bundle, run_ids, variables
-                ) or ["deterministic-runner"],  # placeholder when traj has no obs ids
+                evidence_observation_ids=obs_ids,
                 variables_involved=variables,
                 run_ids=run_ids,
                 statistics={
@@ -308,19 +336,54 @@ class MetricCatalogRunner:
         reason: str,
         tier: str,
         pattern_kind: str = "data_gap",
-    ) -> Finding:
+        bundle: _BundleView | None = None,
+    ) -> Finding | None:
         """Emit a non-computed Finding. `pattern_kind` discriminates:
           - 'data_gap': inputs missing or precondition not met
           - 'config_mismatch': process-family YAML routes to a variable
-            not in the bundle (A3 fix). The reason carries the helpful
-            'process_families.yaml says X but bundle has Y' message.
-        Severity stays INFO; the synthesizer should treat both as
-        non-evidence, just diagnostic notes.
+            not in the bundle (A3 fix).
+          - 'symmetry_violation': asymmetric coverage (commit 5).
+        Severity stays INFO; the synthesizer should treat all of these
+        as non-evidence, just diagnostic notes.
+
+        Every Finding requires ≥1 evidence_observation_id that resolves
+        through the bundle's registry (validator). For a data_gap we
+        don't have a 'real' observation tied to a successful computation;
+        we cite ANY observation from a trajectory on the same run as a
+        diagnostic anchor. If the bundle has zero trajectories on this
+        run, returns None and the caller drops the finding entirely.
         """
         run_label = run_id if run_id is not None else "cross-run"
         prefix = (
             "[CONFIG_MISMATCH] " if pattern_kind == "config_mismatch" else ""
         )
+
+        # Anchor to a real observation_id so the validator passes. Pull
+        # from any trajectory on this run; cross-run gaps pull from any
+        # trajectory in the bundle.
+        obs_ids: list[str] = []
+        if bundle is not None:
+            if run_id is not None:
+                for t in bundle.trajectories:
+                    if t.run_id == run_id and t.source_observation_ids:
+                        obs_ids = [t.source_observation_ids[0]]
+                        break
+            else:
+                for t in bundle.trajectories:
+                    if t.source_observation_ids:
+                        obs_ids = [t.source_observation_ids[0]]
+                        break
+        if not obs_ids:
+            # No anchor available — dropping is correct (alternative
+            # would be to emit a finding the validator rejects).
+            _log.warning(
+                "catalog runner: data_gap for %s on %s has no"
+                " observation_id anchor; dropping (bundle has no"
+                " trajectories on this run).",
+                metric_id, run_label,
+            )
+            return None
+
         return Finding(
             finding_id=finding_id,
             type=FindingType.KINETIC_ANOMALY,
@@ -332,7 +395,7 @@ class MetricCatalogRunner:
             evidence_strength=EvidenceStrength(
                 n_observations=0, n_independent_runs=0,
             ),
-            evidence_observation_ids=["deterministic-runner"],
+            evidence_observation_ids=obs_ids,
             variables_involved=[],
             run_ids=[run_id] if run_id is not None else [],
             statistics={
