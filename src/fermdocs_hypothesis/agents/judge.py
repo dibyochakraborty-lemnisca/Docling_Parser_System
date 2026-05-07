@@ -57,6 +57,13 @@ JUDGE_INVARIANTS = (
     "Green-flag critiques always rule criticism_valid=false.",
     "Provide a one-paragraph rationale (≤500 chars) that names the evidence you weighed.",
     "If previous_attempts shows you ruled the same critic_reason valid before AND the synthesizer has now narrowed the hypothesis to address it, the critique is no longer valid for that reason — rule criticism_valid=false. Consistency across retries.",
+    "[TRAJECTORY-AXIS] critic reasons: weigh as legitimate. A"
+    " hypothesis claiming time-dependent behavior with no cited"
+    " trajectory leaves the highest-information signal on the table."
+    " Uphold when the critic identifies dynamic language in the"
+    " summary AND empty cited_trajectories AND view had relevant"
+    " trajectories available. Do not uphold when the relevant"
+    " trajectories were genuinely absent from the bundle.",
     "USER QUESTION (when view.user_question is non-null): when a critic"
     " reason carries the [question-axis] prefix, weigh it as legitimate."
     " The user asked something specific; failing to address it is a real"
