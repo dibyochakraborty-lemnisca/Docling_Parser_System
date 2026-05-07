@@ -27,12 +27,95 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from fermdocs.domain.user_question import UserQuestion
+from typing import Literal
+
 from fermdocs_characterize.schema import Severity
 from fermdocs_diagnose.schema import (
     ConfidenceBasis,
     LLM_CONFIDENCE_CAP,
     TrajectoryRef,
 )
+
+
+# ---------- Chart specs (LLM intent → deterministic Plotly render) ----------
+
+CHART_KIND = Literal[
+    "time_series_overlay",
+    "scatter_correlation",
+    "faceted_time_series",
+]
+
+
+class ChartAnnotation(BaseModel):
+    """LLM-authored callout on a chart.
+
+    For time-series charts: time_h pins the x position; run_id optionally
+    pins to a specific trace. For scatter charts: time_h is the x-axis
+    value, run_id pins to the labelled point.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    text: str = Field(min_length=1, max_length=200)
+    time_h: float | None = None
+    run_id: str | None = None
+
+
+class ChartSpec(BaseModel):
+    """Synthesizer-emitted intent for one chart.
+
+    The LLM picks WHAT to plot (kind, runs, variables, story). The
+    deterministic builder (chart_builder.py) slices the bundle data and
+    constructs the Plotly JSON. This split lets the LLM be creative
+    without being able to fabricate values.
+
+    Per chart kind:
+      - time_series_overlay: x = time, y = variables[0], one trace per run.
+        Highlight runs get bolder strokes / distinct colors.
+      - scatter_correlation: x = variables[0], y = variables[1] across
+        the listed runs (one point per run). Builder adds regression
+        line + bootstrap CI band when n ≥ 4.
+      - faceted_time_series: same as overlay but one subplot per run
+        instead of overlaying. Useful when y-scales differ per run.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: CHART_KIND
+    title: str = Field(min_length=1, max_length=200)
+    rationale: str = Field(
+        min_length=1,
+        max_length=400,
+        description=(
+            "One sentence: why this chart strengthens the hypothesis. Read by"
+            " reviewers, not the LLM — keep it concrete."
+        ),
+    )
+    runs: list[str] = Field(
+        default_factory=list,
+        description="Subset of cohort run_ids to plot. Empty = all runs.",
+    )
+    variables: list[str] = Field(
+        min_length=1,
+        max_length=2,
+        description=(
+            "For time_series_overlay/faceted: 1 variable. For"
+            " scatter_correlation: 2 variables (x, y)."
+        ),
+    )
+    highlight_runs: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Subset of `runs` to emphasise. Renderer uses thicker line /"
+            " different color. Optional."
+        ),
+    )
+    annotations: list[ChartAnnotation] = Field(
+        default_factory=list,
+        max_length=8,
+        description="LLM-authored callouts on the chart.",
+    )
+
 
 TOPIC_ID_RE = re.compile(r"^T-\d{4,}$")
 FACET_ID_RE = re.compile(r"^FCT-\d{4,}$")
@@ -208,6 +291,15 @@ class HypothesisFull(BaseModel):
             " judge enforces presence; the explicit string"
             " 'insufficient evidence to recommend: <reason>' is also"
             " valid. None on red-flagged or legacy runs."
+        ),
+    )
+    chart_specs: list[ChartSpec] = Field(
+        default_factory=list,
+        max_length=3,
+        description=(
+            "LLM-emitted chart intents for this hypothesis. Empty ="
+            " descriptive-only claim where a chart wouldn't add signal."
+            " Builder turns each spec into Plotly JSON downstream."
         ),
     )
 
@@ -636,6 +728,28 @@ class FinalHypothesis(BaseModel):
             " hypotheses; the literal prefix 'insufficient evidence'"
             " satisfies the gate when the bundle truly doesn't support"
             " a recommendation. None on red-flagged or legacy runs."
+        ),
+    )
+    chart_specs: list[ChartSpec] = Field(
+        default_factory=list,
+        max_length=3,
+        description=(
+            "Synthesizer-emitted chart intents. Each entry is rendered"
+            " by the deterministic chart_builder against the bundle's"
+            " trajectory data; the frontend renders the resulting"
+            " Plotly JSON inline. Empty on legacy runs and on hypotheses"
+            " where the LLM judged a chart wouldn't add signal."
+        ),
+    )
+    plotly_charts: list[dict] = Field(
+        default_factory=list,
+        max_length=3,
+        description=(
+            "Rendered Plotly figure JSON, one per chart_spec. Populated"
+            " by the runner's projector after build_charts(). Each entry"
+            " is a {'data': [...], 'layout': {...}, 'spec': {...}} dict"
+            " the frontend feeds straight into react-plotly.js. Empty"
+            " mirrors empty chart_specs."
         ),
     )
     parent_hypothesis_ids: list[str] = Field(

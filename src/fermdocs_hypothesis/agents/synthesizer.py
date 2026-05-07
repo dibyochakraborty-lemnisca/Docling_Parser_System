@@ -19,7 +19,7 @@ from typing import Any
 from fermdocs_diagnose.schema import ConfidenceBasis, TrajectoryRef
 from fermdocs_hypothesis.llm_clients import GeminiHypothesisClient
 from fermdocs_hypothesis.prompts import ToolHint, build_prompt
-from fermdocs_hypothesis.schema import HypothesisFull, SynthesizerView
+from fermdocs_hypothesis.schema import ChartSpec, HypothesisFull, SynthesizerView
 
 
 SYNTHESIZER_SYSTEM = """\
@@ -138,6 +138,23 @@ SYNTHESIZER_INVARIANTS = (
     " symmetric coverage you have, not 'insufficient_data'. Use"
     " 'insufficient_data' only when the BUNDLE itself lacks the data,"
     " e.g. RUN-2 has no biomass trajectory at all.",
+    "CHARTS (charts-and-pdf-export branch): emit 0–3 chart_specs that"
+    " strengthen your hypothesis. The deterministic builder slices the"
+    " bundle and renders Plotly JSON — you don't write JSON, you write"
+    " intent. Three kinds available:"
+    " 'time_series_overlay' (one variable, multiple runs on shared"
+    " axes — use for dynamics claims: decline, peak, transient);"
+    " 'scatter_correlation' (two variables across runs — use whenever"
+    " you cite a correlation; the renderer adds OLS line + n + 95% CI"
+    " automatically);"
+    " 'faceted_time_series' (one panel per run — use when y-scales"
+    " differ enough that overlay obscures the signal)."
+    " Each spec needs: title, one-sentence rationale (read by"
+    " reviewers, not LLMs — make it concrete), runs (subset of cohort"
+    " or empty for all), variables (1 for time-series, 2 for scatter),"
+    " optional highlight_runs and annotations. Skip the chart entirely"
+    " on descriptive-only hypotheses where a plot wouldn't add signal."
+    " Don't author Plotly JSON — just intent.",
     "METADATA-ANOMALY SURFACING (reviewer A1, metadata-anomaly-prepass):"
     " when a Finding's statistics carry pattern_kind='metadata_anomaly'"
     " (anomaly_kind ∈ {instrument_change, header_inconsistency,"
@@ -360,6 +377,53 @@ _SYNTHESIZER_SCHEMA: dict[str, Any] = {
             "type": "STRING",
             "nullable": True,
         },
+        "chart_specs": {
+            "type": "ARRAY",
+            "nullable": True,
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "kind": {
+                        "type": "STRING",
+                        "enum": [
+                            "time_series_overlay",
+                            "scatter_correlation",
+                            "faceted_time_series",
+                        ],
+                    },
+                    "title": {"type": "STRING"},
+                    "rationale": {"type": "STRING"},
+                    "runs": {
+                        "type": "ARRAY",
+                        "items": {"type": "STRING"},
+                        "nullable": True,
+                    },
+                    "variables": {
+                        "type": "ARRAY",
+                        "items": {"type": "STRING"},
+                    },
+                    "highlight_runs": {
+                        "type": "ARRAY",
+                        "items": {"type": "STRING"},
+                        "nullable": True,
+                    },
+                    "annotations": {
+                        "type": "ARRAY",
+                        "nullable": True,
+                        "items": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "text": {"type": "STRING"},
+                                "time_h": {"type": "NUMBER", "nullable": True},
+                                "run_id": {"type": "STRING", "nullable": True},
+                            },
+                            "required": ["text"],
+                        },
+                    },
+                },
+                "required": ["kind", "title", "rationale", "variables"],
+            },
+        },
     },
     "required": ["summary", "facet_ids", "confidence", "confidence_basis"],
 }
@@ -463,6 +527,11 @@ class SynthesizerAgent:
         if isinstance(rec_raw, str) and rec_raw.strip():
             rec = rec_raw.strip()[:600]
 
+        # Chart specs. LLM emits intent; deterministic builder renders
+        # downstream. Bad entries are dropped silently rather than
+        # blocking the hypothesis — charts are advisory.
+        chart_specs = self._parse_chart_specs(parsed.get("chart_specs") or [])
+
         return HypothesisFull(
             hyp_id=hyp_id,
             summary=summary,
@@ -476,7 +545,30 @@ class SynthesizerAgent:
             question_answered=q_answered,  # type: ignore[arg-type]
             question_response_summary=q_response_summary,
             actionable_recommendation=rec,
+            chart_specs=chart_specs,
         )
+
+    def _parse_chart_specs(self, raw_list: list[Any]) -> list[ChartSpec]:
+        """Coerce LLM-emitted chart-spec dicts into ChartSpec models.
+
+        Drops invalid entries with a log line; never raises. The chart
+        layer is advisory, never blocks hypothesis emission.
+        """
+        out: list[ChartSpec] = []
+        if not isinstance(raw_list, list):
+            return out
+        for raw in raw_list[:3]:  # schema caps at 3; defensive cap here too
+            if not isinstance(raw, dict):
+                continue
+            try:
+                out.append(ChartSpec.model_validate(raw))
+            except (ValueError, TypeError) as exc:
+                import logging
+                logging.getLogger(__name__).info(
+                    "synthesizer: dropping invalid chart_spec (%s)",
+                    exc.__class__.__name__,
+                )
+        return out
 
 
 def build_synthesizer(client: GeminiHypothesisClient) -> SynthesizerAgent:

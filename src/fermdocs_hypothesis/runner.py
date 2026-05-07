@@ -32,6 +32,10 @@ from typing import Literal, Protocol
 from uuid import UUID, uuid4
 
 from fermdocs_diagnose.schema import ConfidenceBasis
+from fermdocs_hypothesis.chart_builder import (
+    TrajectoryData,
+    build_chart,
+)
 from fermdocs_hypothesis.budget import (
     add_tool_calls,
     increment_turn,
@@ -758,6 +762,56 @@ def _judge_rationale(events: list[Event], hyp_id: str) -> str:
     return ""
 
 
+def _render_charts_into_finals(
+    finals: list[FinalHypothesis],
+    hyp_input: HypothesisInput,
+) -> list[FinalHypothesis]:
+    """For each hypothesis with chart_specs, render Plotly figures.
+
+    Pure function: returns a new list of FinalHypothesis with
+    plotly_charts populated. Charts are advisory — a None render is
+    silently dropped, never blocks the hypothesis.
+    """
+    if not finals:
+        return finals
+    char = getattr(hyp_input, "characterization", None)
+    trajectories = list(getattr(char, "trajectories", []) or []) if char else []
+    if not trajectories:
+        # No trajectory data to render against; specs survive but
+        # plotly_charts stays empty. Common in unit tests that build
+        # minimal HypothesisInput without a real bundle.
+        return finals
+    traj_map: dict[tuple[str, str], TrajectoryData] = {}
+    for t in trajectories:
+        traj_map[(t.run_id, t.variable)] = TrajectoryData(
+            run_id=t.run_id,
+            variable=t.variable,
+            time_h=list(t.time_grid),
+            values=list(t.values),
+        )
+
+    out: list[FinalHypothesis] = []
+    for h in finals:
+        if not h.chart_specs:
+            out.append(h)
+            continue
+        rendered: list[dict] = []
+        for spec in h.chart_specs:
+            try:
+                fig = build_chart(spec, traj_map)
+            except Exception as exc:  # pragma: no cover - defensive
+                import logging
+                logging.getLogger(__name__).info(
+                    "chart_builder failed for %s (%s); skipping",
+                    h.hyp_id, exc.__class__.__name__,
+                )
+                continue
+            if fig is not None:
+                rendered.append(fig)
+        out.append(h.model_copy(update={"plotly_charts": rendered}))
+    return out
+
+
 def _build_final(
     hyp: HypothesisFull, crit: CritiqueFull, judge_valid: bool
 ) -> FinalHypothesis:
@@ -783,6 +837,10 @@ def _build_final(
         # Actionable recommendation flows through unchanged. Judge enforcement
         # of presence happens at debate-loop time; here we just project.
         actionable_recommendation=hyp.actionable_recommendation,
+        # Chart specs flow through unchanged; plotly_charts is rendered in
+        # _render_charts_into_finals at run_stage assembly time so the
+        # builder can see the bundle's trajectory data.
+        chart_specs=list(hyp.chart_specs),
     )
 
 
@@ -876,9 +934,12 @@ def run_stage(
         provider=provider,
         budget_used=state.budget,
     )
+    finals_with_charts = _render_charts_into_finals(
+        list(state.finalized_finals), hyp_input,
+    )
     output = HypothesisOutput(
         meta=meta,
-        final_hypotheses=list(state.finalized_finals),
+        final_hypotheses=finals_with_charts,
         rejected_hypotheses=list(state.finalized_rejected),
         open_questions=open_questions(events),
         debate_summary=_render_debate_summary(events, state),
@@ -1110,9 +1171,12 @@ def resume_stage(
         provider=provider,
         budget_used=state.budget,
     )
+    finals_with_charts = _render_charts_into_finals(
+        list(state.finalized_finals), hyp_input,
+    )
     output = HypothesisOutput(
         meta=meta,
-        final_hypotheses=list(state.finalized_finals),
+        final_hypotheses=finals_with_charts,
         rejected_hypotheses=list(state.finalized_rejected),
         open_questions=open_questions(events),
         debate_summary=_render_debate_summary(events, state),
