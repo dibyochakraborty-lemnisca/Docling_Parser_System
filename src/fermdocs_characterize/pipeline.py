@@ -31,6 +31,7 @@ from fermdocs_characterize.agents.catalog_runner import (
     MetricCatalogRunner,
     _BundleView,
 )
+from fermdocs_characterize.agents.finding_validator import validate_finding
 from fermdocs_characterize.agents.trajectory_analyzer import (
     TrajectoryAnalyzerAgent,
 )
@@ -236,6 +237,15 @@ class CharacterizationPipeline:
                     "trajectory_analyzer raised %s; skipping pattern findings",
                     exc.__class__.__name__,
                 )
+
+        # 4c. Validator pass: every finding from catalog_runner +
+        # trajectory_analyzer is checked against physicality bounds.
+        # Out-of-bound values (yields > 1, percentages > 100, NaN, etc)
+        # are converted to data_gap with reason naming the violation.
+        # Plan ref: commit 3 of
+        # plans/2026-05-07-characterize-determinism.md (the
+        # 'PAA yield 204.5 g/g passed everything' bug class).
+        findings = [validate_finding(f) for f in findings]
 
         # 5. Other artifacts
         deviations = build_deviations(summary)
