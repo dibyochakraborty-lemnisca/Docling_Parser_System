@@ -50,6 +50,18 @@ from fermdocs_api.state import FollowupResult, Run, RunStatus, RunStore, Upload
 _log = logging.getLogger(__name__)
 
 
+# API-runner budget: 2× BudgetSnapshot defaults so debates explore more
+# topics and run more critic cycles per topic before terminating. Trade-off
+# is ~2× cost and wall time per run. Bump these together if you raise one.
+_API_BUDGET = BudgetSnapshot(
+    max_turns=20,                     # 2× default 10 — more topics covered
+    max_critic_cycles_per_topic=6,    # 2× default 3 — deeper per-topic refinement
+    max_tool_calls_total=160,         # 2× default 80 — covers raised turn cap
+    max_total_input_tokens=400_000,   # 2× default 200k — hard token ceiling
+    max_open_questions=30,            # 2× default 15 — more OQs allowed
+)
+
+
 async def execute_run(
     *,
     store: RunStore,
@@ -641,7 +653,7 @@ def _run_hypothesis_blocking(bundle_dir: Path, global_md: Path):
         diagnosis_id=loaded.diagnosis.meta.diagnosis_id,
         provider="gemini",
         model_name=hooks._client.model_name,
-        budget=BudgetSnapshot(),
+        budget=_API_BUDGET,
         validate=True,
         now_factory=lambda: datetime.now(timezone.utc),
     )
@@ -660,7 +672,7 @@ def _resume_hypothesis_blocking(
         answers=answers,
         provider="gemini",
         model_name=hooks._client.model_name,
-        budget=BudgetSnapshot(),
+        budget=_API_BUDGET,
         validate=True,
         now_factory=lambda: datetime.now(timezone.utc),
     )
