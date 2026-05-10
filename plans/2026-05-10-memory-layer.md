@@ -3,6 +3,7 @@
 **Date:** 2026-05-10
 **Branch:** `memory-layer-plan` (off `followup-context`)
 **Status:** Plan only — no code yet. Phase 1 is the first implementation step; everything past it requires explicit go-ahead.
+**Eng review:** 2026-05-10. 10 decisions resolved (D1–D10). See "Eng-review decisions" at the end of this doc.
 
 ## Why this exists
 
@@ -66,15 +67,17 @@ Each tier is independently shippable and testable. **Phase 1 is Tier 1 only.**
 
 ### Tier 1 — Lessons memory (Phase 1)
 
-**What:** Persist every `lessons_summarizer` output keyed by `(organism, process_family, embedding)`. At synthesizer-view-build time, retrieve top-K relevant prior lessons and inject as `view.prior_lessons`.
+**What:** Persist every `lessons_summarizer` output keyed by `(process_family, organism, embedding)`. **Primary retrieval key is `process_family`** (D8 — closed-vocab, registry-validated; avoids string variation on free-form `organism`). Organism is a secondary re-ranker. At view-build time, retrieve top-K relevant prior lessons and inject as `view.cross_run_lessons` (D5 — renamed from `cross_topic_lessons`, which becomes `view.in_run_lessons`).
 
-**Why this first:** highest impact-per-hour. We're already producing the data; we're just throwing it away. The synthesizer prompt already has a `cross_topic_lessons` slot — same shape, sourced from history instead of in-run state. **One change in input, immediate change in output.**
+**Why this first:** highest impact-per-hour. We're already producing the data; we're just throwing it away. The hypothesis stage already has an in-run `cross_topic_lessons` slot — same prompt shape, sourced from history instead of in-run state. **One change in input, immediate change in output.**
 
-**What gets written:** `LessonRecord(lesson_text, organism, process_family, hyp_id, run_id, embedding, created_at)`.
+**What gets written:** `LessonRecord(lesson_id, lesson_text, process_family, organism, hyp_id, run_id, embedding, embedding_provider, embedding_model, embedding_version, tenant_id, created_at)`. Each lesson carries a stable `lesson_id` minted at emission time (D2).
 
-**What gets read:** at the start of every hypothesis run, fetch top 5 lessons by cosine similarity over the run's seed-topic summaries, filtered to the run's organism. Inject into specialist + synthesizer + critic views.
+**Write timing (D6 + D10):** lessons are buffered in-memory during the run. On HITL pause, the buffer is serialized to `<bundle>/lesson_buffer.json` and reloaded at `resume_stage`. Persistence to the memory store happens **only when the run reaches a clean `exit_reason` (`consensus_reached` or `no_topics_left`)**. `budget_exhausted`, `max_turns_reached`, and exception paths skip the write — failed-run lessons never pollute the store.
 
-**Effort:** ~1 day.
+**What gets read:** at the start of every hypothesis run, fetch top 5 lessons by cosine similarity over the run's seed-topic summaries, **filtered first by `process_family` exact match** (D8). Topic embeddings are cached per run so each unique `topic.summary` is embedded once, not per turn (4.1). Inject into specialist + synthesizer + critic views as `view.cross_run_lessons`.
+
+**Effort:** ~1.5 days (was ~1 day; +0.5 day for lesson_id refactor + buffer file plumbing + eval harness).
 
 ### Tier 2 — Ratified-hypothesis store
 
@@ -129,7 +132,8 @@ This is what the rest of the system depends on. Keeping it small is the whole po
 ```python
 # src/fermdocs_memory/base.py
 from dataclasses import dataclass
-from typing import Protocol, Literal
+from types import MappingProxyType
+from typing import Mapping, Protocol, Literal, Any
 
 MemoryKind = Literal[
     "lesson",
@@ -140,23 +144,28 @@ MemoryKind = Literal[
 
 @dataclass(frozen=True)
 class MemoryRecord:
-    memory_id: str
+    memory_id: str             # for lessons: stable lesson_id minted at emission (D2)
     kind: MemoryKind
-    summary: str          # the human-readable blob; embedding source
-    organism: str | None
-    process_family: str | None
+    summary: str               # the human-readable blob; embedding source
+    process_family: str | None # primary retrieval key for kind="lesson" (D8)
+    organism: str | None       # secondary re-ranker; may vary across runs
+    tenant_id: str             # required; routes to memory_tenant_<id>.records schema (D3)
     affected_variables: tuple[str, ...]
     finding_classes: tuple[str, ...]   # e.g. ("B10_overflow", "A14_do_margin")
     confidence: float | None
-    provenance: dict       # {run_id, hyp_id, generation_timestamp, ...}
-    created_at: str        # ISO8601 UTC
+    provenance: Mapping[str, Any]      # MappingProxyType at construction; immutable
+    embedding_provider: str    # "gemini" | "openai" | "local" (D4)
+    embedding_model: str       # "text-embedding-004" etc.
+    embedding_version: str     # provider-specific version tag
+    created_at: str            # ISO8601 UTC
     superseded_by: str | None = None
 
 @dataclass(frozen=True)
 class MemoryQuery:
     kind: MemoryKind | None  # None = all kinds
-    organism: str | None
-    process_family: str | None
+    tenant_id: str           # required; cross-tenant retrieval is impossible by design
+    process_family: str | None  # PRIMARY KEY for kind="lesson"; raises ValueError if None (D7)
+    organism: str | None     # secondary filter / re-ranker
     variables_overlap: tuple[str, ...] = ()
     finding_classes_overlap: tuple[str, ...] = ()
     semantic_query: str | None = None  # embedding-based retrieval
@@ -168,6 +177,10 @@ class MemoryBackend(Protocol):
     def fetch(self, query: MemoryQuery) -> list[MemoryRecord]: ...
     def supersede(self, memory_id: str, by: str) -> None: ...
 ```
+
+**Invariant (D7):** `fetch(MemoryQuery(kind="lesson", process_family=None, ...))` raises `ValueError`. Cross-strain retrieval is opt-in via a separate explicit method on the backend (added later, not Phase 1).
+
+**Tenant isolation (D3):** every write/fetch routes to a per-tenant Postgres schema (`memory_tenant_<id>.records`). The Postgres adapter sets `search_path` per request. Cross-tenant retrieval is structurally impossible — a query without the tenant prefix targets a non-existent schema and fails noisily.
 
 The Protocol is the contract. Adapters in Phase 1:
 
@@ -183,15 +196,21 @@ Later adapters (not Phase 1):
 
 ## Phase 1 PR plan (the only thing this plan commits to)
 
-Four commits on a child branch when this gets approved.
+Four commits on a child branch when this gets approved. The eval harness (D9) is the gate before merge.
+
+**Parallelization:** Commit 1 blocks both downstream lanes. Then Commits 2 and 3 can land in parallel worktrees (Commit 3 dev-tests against `StubBackend`, doesn't need Postgres). Commit 4 is sequential after both. Both Commit 2 and Commit 3 touch `src/fermdocs_memory/__init__.py` re-exports — coordinate to avoid trivial conflicts.
 
 ### Commit 1 — Protocol + Noop + Stub backends + tests
 
 - New package `src/fermdocs_memory/`
-- `base.py`: MemoryRecord, MemoryQuery, MemoryBackend Protocol, MemoryKind enum
-- `noop.py`: returns empty
-- `stub.py`: in-memory dict, supports write/fetch/supersede
-- `tests/unit/memory/test_backends.py`: contract tests both backends pass
+- `base.py`: `MemoryRecord`, `MemoryQuery`, `MemoryBackend` Protocol, `MemoryKind` enum. Provenance stored as `MappingProxyType` at construction (immutable by convention).
+- `noop.py`: `write` no-op; `fetch` returns `[]`; `supersede` no-op
+- `stub.py`: in-memory dict; supports `write`/`fetch`/`supersede` with the same filtering logic as the Postgres adapter (process_family + organism + kind + top_k); semantic_query falls back to substring match when no embeddings are wired
+- **Tests:**
+  - `tests/unit/memory/test_record_schema.py` — frozen, validation, provenance immutability
+  - `tests/unit/memory/test_query_validation.py` — D7: `fetch(kind="lesson", process_family=None)` raises `ValueError`
+  - `tests/unit/memory/test_noop_backend.py` — Noop returns empty; supersede no-op
+  - `tests/unit/memory/test_stub_backend.py` — write/fetch/supersede + filters + top_k boundary
 - Wire `NoopBackend` as default into runner + characterize entry points behind `memory: MemoryBackend = NoopBackend()` parameter
 
 **Hard rule:** every existing test must pass unchanged. Default `NoopBackend` means zero behavior change.
@@ -199,30 +218,56 @@ Four commits on a child branch when this gets approved.
 ### Commit 2 — Postgres adapter
 
 - `postgres.py`: SQLAlchemy model `MemoryRow` + `PostgresBackend` impl
-- New table: `memory_records(memory_id, kind, summary, organism, process_family, affected_variables_jsonb, finding_classes_jsonb, confidence, provenance_jsonb, embedding_vector pgvector(768), created_at, superseded_by)`
-- Indexes: btree on `(kind, organism, process_family)`, GIN on `affected_variables_jsonb`, ivfflat on `embedding_vector`
-- `tests/integration/memory/test_postgres_backend.py` against a real Postgres + pgvector container (the same fixture pattern we use for ingest)
-- `EMBEDDING_PROVIDER` plumbing: small helper that calls Gemini text-embedding via existing `_client` so we don't add a new vendor dep
+- **Schema-per-tenant (D3):** writes/fetches set `search_path = memory_tenant_<id>` per request. New tenants require an explicit migration step (out of scope for Phase 1; manual `CREATE SCHEMA` for the default tenant is enough to ship).
+- New table per schema: `memory_records(memory_id, kind, summary, process_family, organism, tenant_id, affected_variables_jsonb, finding_classes_jsonb, confidence, provenance_jsonb, embedding_vector pgvector(768), embedding_provider varchar(32), embedding_model varchar(64), embedding_version varchar(16), created_at, superseded_by)`
+- **Indexes:**
+  - btree on `(kind, process_family, organism)`
+  - GIN on `affected_variables_jsonb`
+  - **HNSW** on `embedding_vector` (`m=16, ef_construction=64`) for Phase 1 — correct for small tables. Switch to ivfflat when `n_rows > 10_000` (4.2).
+- `tests/integration/memory/test_postgres_backend.py` against a real Postgres + pgvector container (same fixture pattern as ingest). Tests cover write happy path, embedding-API error path, duplicate `memory_id`, fewer-than-top_k results, embedding metadata triple round-trip.
+- `tests/integration/memory/test_postgres_tenant_schema.py` — D3 enforcement: query against a non-existent schema fails noisily; queries with the wrong tenant return 0 rows.
+- `EMBEDDING_PROVIDER` plumbing: helper that calls Gemini text-embedding via existing `_client` so we don't add a new vendor dep. **Topic embeddings cached per run** so each unique `topic.summary` is embedded once (4.1).
 
 **Hard rule:** Postgres adapter is opt-in. `DATABASE_URL` empty → we instantiate `NoopBackend` and the system runs identically to today.
 
 ### Commit 3 — Tier 1 wire-up (lessons memory)
 
-- `lessons_summarizer` agent's existing output gets a write hook: at end of each run, write one `MemoryRecord(kind="lesson", summary=lesson_text, organism=hyp_input.organism, …)` per distinct lesson surfaced
-- New `view.prior_lessons` field on `SpecialistView` and `SynthesizerView`
-- View-builder fetches top-5 by `MemoryQuery(kind="lesson", organism=hyp_input.organism, semantic_query=topic.summary)`
-- Synthesizer + critic prompts get a `[PRIOR LESSONS]` block (mirror of the existing `[CROSS-TOPIC LESSONS]` block)
-- New invariant on synthesizer: "prior lessons are *priors*, not ground truth. Bundle evidence overrides them. If a prior contradicts the bundle, surface the contradiction."
-- `tests/unit/memory/test_lessons_wireup.py`: with StubBackend, the synthesizer prompt contains the seeded lesson; with NoopBackend, prompt is byte-identical to today (REGRESSION).
+- **`LessonsSummarizedEvent` shape change (D2):** event now carries `lessons: list[Lesson]` where each `Lesson` has `lesson_id`, `text`, `tags`. Backwards-compatible read of legacy single-string `digest` field for existing `global.md` replay.
+- **`lessons_summarizer` agent:** mints `lesson_id` (`L-<run_id_short>-<NNNN>`) at emission time and emits structured list. Adds `tags: list[str]` per lesson for filtering (resolves Open Question #4).
+- **Buffer + write timing (D6 + D10):** lessons are buffered in `RunnerState`. Serialized to `<bundle>/lesson_buffer.json` at HITL pause; reloaded at `resume_stage`. Persisted to memory store only when `exit_reason in {consensus_reached, no_topics_left}`.
+- **View schema rename (D5):** `cross_topic_lessons` → `in_run_lessons` on `SpecialistView`, `SynthesizerView`, `CriticView`. New field `cross_run_lessons: LessonsDigest | None` on the same three views.
+- **Projector (3 sites):** `_build_view` populates `in_run_lessons` from existing `latest_lessons_digest` (rename only, no logic change). New `cross_run_lessons` populated via `memory.fetch(MemoryQuery(kind="lesson", process_family=hyp_input.process_family, semantic_query=topic.summary, top_k=5, tenant_id=...))`.
+- **Synthesizer prompt:** new `[CROSS-RUN LESSONS]` block + new invariant: "cross-run lessons are *priors*, not ground truth. Bundle evidence overrides them. If a prior contradicts the bundle, surface the contradiction."
+- **Critic prompt:** new `[memory-axis]` rejection rule for hypotheses that cite a prior lesson but the cited evidence is from a different run/strain.
+- **Tests (REGRESSION-CRITICAL marked ⚠️):**
+  - ⚠️ `tests/unit/hypothesis/memory/test_lessons_event_shape.py` — old + new `LessonsSummarizedEvent` round-trip; `read_events` from existing global.md files still parses
+  - ⚠️ `tests/unit/hypothesis/memory/test_runner_write_timing.py` — `NoopBackend` produces byte-identical prompts to today; buffer + write only on clean exit; skip on `budget_exhausted`/failure
+  - ⚠️ `tests/unit/hypothesis/memory/test_projector_field_rename.py` — `in_run_lessons` feedback loop unchanged from prior `cross_topic_lessons` behavior
+  - `tests/unit/hypothesis/memory/test_projector_cross_run_lessons.py` — populates correctly via StubBackend
+  - `tests/unit/hypothesis/memory/test_synthesizer_prior_lessons_block.py` — prompt rendering, empty-handling
+  - `tests/unit/hypothesis/memory/test_critic_memory_axis.py` — fires when hypothesis cites missing/wrong-run prior
 
-### Commit 4 — Provenance + supersession + observability
+### Commit 4 — Provenance + supersession + observability + failure-mode hardening
 
-- Every memory write carries `provenance.{run_id, generation_timestamp, lesson_id_in_global_md}` so we can trace any retrieved lesson back to its source run
-- A `/api/memory/records` GET endpoint (admin / dev only) so we can inspect what's in the store without psql
-- Counters in token-report-style summary at end of every run: `memory_writes`, `memory_fetches`, `memory_records_returned`
-- `tests/unit/memory/test_provenance.py`: every retrieved record carries traceable provenance
+- Every memory write carries `provenance.{run_id, hyp_id, generation_timestamp, lesson_id, source_event_offset}` so any retrieved record traces back to a specific event in `global.md`.
+- `/api/memory/records` GET endpoint (admin only — auth check) for inspection without psql. Filters: `kind`, `process_family`, `organism`, `limit`. Sort: `created_at DESC`.
+- Counters in token-report-style summary at end of every run: `memory_writes`, `memory_fetches`, `memory_records_returned`, `memory_embedding_calls`, `memory_embedding_failures`.
+- **Failure-mode handling (review section 4):**
+  - Embedding-API failure during write → log warning, increment `memory_embedding_failures`, retry once, then skip the lesson with a clear log line (don't fail the whole run finalization)
+  - Lesson-buffer JSON corruption at resume → log warning, drop the buffered lessons, continue resume (degraded mode, not a failure)
+  - Missing tenant schema on first write → return a clear error message naming the missing schema and the migration command, not a 500
+- **Tests:**
+  - `tests/unit/memory/test_provenance.py` — every retrieved record carries traceable provenance
+  - `tests/integration/api/test_memory_records_endpoint.py` — auth, filters, pagination
+  - `tests/unit/memory/test_failure_modes.py` — embedding API failure, buffer corruption, missing schema
 
-**End of Phase 1:** Tier 1 fully wired, swappable, observable. **No** Tier 2/3/4/5 yet — those are separate plans.
+### Eval harness (gate before merge — D9)
+
+- `tests/eval/eval_synthesizer_priors.py` — 2–3 fixed fixture bundles (carotenoid + penicillin synthetic) run twice: with `NoopBackend` (no priors) vs with `StubBackend` seeded with realistic priors. Compare accept rate, critic rejection rate, mean confidence. Many-run averaging to handle LLM nondeterminism.
+- `tests/eval/eval_critic_memory_axis.py` — does the `[memory-axis]` rule fire when a synthesizer is induced (via planted prior) to cite a prior lesson that doesn't exist in retrieval results?
+- **Gate:** Phase 1 only ships if eval shows **no regression** on existing fixtures (NoopBackend path is byte-identical) AND the critic memory-axis rule fires on planted bad-prior citations.
+
+**End of Phase 1:** Tier 1 fully wired, swappable, observable, eval-gated. **No** Tier 2/3/4/5 yet — those are separate plans.
 
 ---
 
@@ -230,19 +275,26 @@ Four commits on a child branch when this gets approved.
 
 | Risk | Mitigation |
 |---|---|
-| Memory contradicts bundle evidence and the synthesizer trusts memory | Add a `[memory-axis]` critic rule that fires when a hypothesis cites a prior lesson but the cited finding is from a *different* run / strain. Memory is prior, never ground truth. |
-| Strain drift makes old memories actively misleading | Tier 4 (KPI priors) handles this by maintaining rolling stats; Tiers 1–3 add `superseded_by` chain so a corrected lesson can override the original. |
-| Embedding similarity returns superficially-related but irrelevant lessons | Phase 1 retrieval filters by `organism` + `process_family` *first*, embedding only ranks within that subset. Cross-strain retrieval is opt-in via explicit `MemoryQuery` flag. |
-| Postgres + pgvector adds infra burden | Already a dependency for ingest. pgvector is a one-line extension on the same instance. |
-| Provenance breaks if `global.md` location changes | Provenance stores `run_id` and `generation_timestamp` (immutable IDs), not file paths. |
-| LLM-emitted lessons hallucinate facts that get persisted | Phase 1 only persists `lessons_summarizer` output, which is constrained by its prompt to summarize *retries within the run* — a narrow, bounded scope. Tier 2 (ratified hypotheses) is structurally constrained by judge approval. |
+| Memory contradicts bundle evidence and the synthesizer trusts memory | `[memory-axis]` critic rule fires when a hypothesis cites a prior lesson but the cited finding is from a different run/strain. Memory is prior, never ground truth. |
+| Strain drift makes old memories actively misleading | Tier 4 (KPI priors) handles this with rolling stats; Tiers 1–3 use the `superseded_by` chain so a corrected lesson can override. |
+| Embedding similarity returns superficially-related but irrelevant lessons | Phase 1 filters by `process_family` first (D8 — closed-vocab), embedding ranks only within that subset. Cross-family retrieval is structurally impossible without an explicit opt-in. |
+| Cross-tenant data leak (regulated-biotech concern) | Schema-per-tenant isolation (D3). Database-enforced; queries without a tenant prefix target a non-existent schema and fail noisily. |
+| Postgres + pgvector adds infra burden | Postgres is already a dependency for ingest. pgvector is a one-line extension on the same instance. |
+| Embedding-provider lock-in | `embedding_provider/model/version` columns (D4) let us migrate by dual-writing during cutover and filtering retrieval to the active triple. |
+| Bad lessons from failed runs pollute the store | Buffer + write-on-clean-exit (D6). Failed runs (`budget_exhausted`, `max_turns_reached`, exceptions) don't write. Buffer survives HITL pause via `<bundle>/lesson_buffer.json` (D10). |
+| Silent cross-strain retrieval bug | `MemoryQuery.fetch(kind="lesson", process_family=None)` raises `ValueError` (D7). Cross-strain retrieval requires an explicit separate method. |
+| Provenance breaks if `global.md` location changes | Provenance stores immutable IDs (`run_id`, `lesson_id`, `generation_timestamp`, `source_event_offset`), not file paths. |
+| Embedding API outage during write | Retry once, then skip the lesson with a logged warning + counter increment. Run finalization continues. |
+| LLM-emitted lessons hallucinate facts that get persisted | Phase 1 persists only `lessons_summarizer` output, constrained by its prompt to summarize retries within the run — narrow, bounded. Tier 2 records are constrained by judge approval. |
+| LLM hallucinates a citation to a prior lesson that wasn't in the retrieved set | `[memory-axis]` critic rule catches; eval harness (D9) verifies the rule fires on planted bad citations. |
 
 ## Success criteria for Phase 1
 
-- A run on a strain we've previously run shows different `[PRIOR LESSONS]` content in the synthesizer prompt vs. a never-seen-before strain. Verifiable by reading `global.md`.
-- The memory store contains ≥1 lesson per completed run after a week of usage.
-- Token-report counters show `memory_fetches > 0` on every run with a known organism, `= 0` on unknown-organism runs.
-- Full unit suite green; integration test for Postgres backend passes against a real container.
+- A run on a `process_family` we've previously seen shows different `[CROSS-RUN LESSONS]` content in the synthesizer prompt vs. a never-seen-before family. Verifiable by reading `global.md`. (D8: keying on family, not free-form organism string, is what makes this criterion actually achievable in Phase 1.)
+- The memory store contains ≥1 lesson per cleanly-finished run after a week of usage.
+- Token-report counters show `memory_fetches > 0` on every run with a known `process_family`, `= 0` on unknown-family runs.
+- Full unit suite green; integration test for Postgres backend passes against a real container; tenant-schema isolation test passes.
+- Eval harness (D9) shows: (a) `NoopBackend` path is byte-identical to today on existing fixture bundles; (b) `[memory-axis]` critic rule fires on planted bad-citation cases.
 - **Hard regression invariant:** with `NoopBackend` (default), every byte of prompt content + every test outcome is identical to current behavior. Memory is opt-in.
 
 ## What gets deferred (and the explicit triggers)
@@ -256,25 +308,54 @@ Four commits on a child branch when this gets approved.
 | Cloud backend (Synap or other) | Postgres relevance ceiling becomes the bottleneck, OR we need cross-organism entity resolution that pgvector + organism-filter can't deliver. |
 | Trajectory-shape similarity (DTW / PAA) | Specialists need to retrieve *runs with similarly-shaped μ(t) curves*, not just runs with similar metadata. Real engineering; not Phase 2. |
 
-## Open questions to resolve before Phase 1 commits
+## Open questions resolved (eng review 2026-05-10)
 
-1. **Embedding provider.** Use Gemini's text-embedding API (already have the key + client) or pull in a small local model (`sentence-transformers/all-MiniLM-L6-v2`)? Cost says local; latency + quality say Gemini. Default proposal: Gemini, with the embedding call abstracted so a swap is one file.
-2. **Where the Postgres table lives.** Same database as ingest, or separate `memory_db`? Default proposal: same DB, separate schema (`memory.records`).
-3. **Per-deployment isolation.** When Lemnisca runs this for multiple customers, do we want a `tenant_id` partition on `memory_records`? Default proposal: yes, add `tenant_id` from day one, default `"default"` for now.
-4. **What goes into `lesson_text`.** The summarizer currently produces free-form 50–60 token blobs. For embedding quality, do we want it to also emit a short `tags: [list]` field for filtering? Default proposal: yes — add a `tags` field to lessons-summarizer output schema, persist tags in the memory record.
+1. **Embedding provider** — Gemini text-embedding-004 (768-dim) via existing client. The embedding call is abstracted so a swap is one adapter file. **Provider/model/version stored as columns (D4)** so a future swap doesn't require a full re-embed.
+2. **Where the Postgres table lives** — same DB as ingest, separate **per-tenant schemas** (D3): `memory_tenant_<id>.records`. Schema isolation, not column partition.
+3. **Per-deployment isolation** — schema-per-tenant from day one (D3). Default tenant `"default"` for the single-customer Phase 1 deploy.
+4. **What goes into `lesson_text`** — `lessons_summarizer` emits structured `Lesson(lesson_id, text, tags)` entries. `tags` field is persisted on the memory record for filtering. (D2 + Open Q4 resolution rolled together.)
+
+## TODOs (filed for later, not blocking Phase 1)
+
+- **Cross-strain retrieval method.** When Phase 2 needs cross-family lessons (e.g. for general fed-batch wisdom that applies across organisms), add an explicit `fetch_cross_family(query)` to `MemoryBackend`. Until then, omitting it prevents silent cross-family leaks.
+- **Memory record TTL / decay.** No automatic expiry today. If retrieval starts surfacing 2-year-old irrelevant lessons after deployment matures, add a `decay_after_days` field and apply a recency penalty in ranking.
+- **Tenant schema provisioning automation.** Phase 1 ships with manual `CREATE SCHEMA` for the default tenant. Real multi-tenant ops needs a provisioning script.
+
+---
+
+## Eng-review decisions (D1–D10, 2026-05-10)
+
+| # | Decision | Choice |
+|---|---|---|
+| D1 | Phase 1 scope | Plan as-written: full Protocol + Postgres + pgvector |
+| D2 | Lesson identification | `lesson_id` minted at emission; `LessonsSummarizedEvent` carries structured list |
+| D3 | Tenant isolation | Schema-per-tenant (`memory_tenant_<id>.records`) |
+| D4 | Embedding-provider lock-in | 768-dim column + `embedding_provider/model/version` metadata |
+| D5 | Field naming | `cross_topic_lessons` → `in_run_lessons`; new `cross_run_lessons` field |
+| D6 | Write timing | Buffer in `RunnerState`; persist only on clean `exit_reason` |
+| D7 | Cross-strain guard | `fetch(kind="lesson", process_family=None)` raises `ValueError` |
+| D8 | Retrieval primary key | `process_family` (closed vocab), not free-form `organism` |
+| D9 | Eval harness | Build small harness as Phase 1 deliverable; gates merge |
+| D10 | HITL resume composition | Buffer serialized to `<bundle>/lesson_buffer.json` |
+
+Plus three "must specify, no decision needed" clarifications:
+- **4.1** Topic embeddings cached per run (compute once per unique `topic.summary`)
+- **4.2** HNSW index for Phase 1 (`m=16, ef_construction=64`); switch to ivfflat at ~10K rows
+- **Failure modes (3 critical gaps)** Embedding API failure during write, lesson-buffer corruption at resume, missing tenant schema — all explicit error paths in Commit 4
 
 ---
 
 ## What the user gets out of this
 
 After Phase 1 only:
-- Re-running a bundle on a strain we've run before → specialists see prior lessons in their prompt context → fewer repeat mistakes, faster convergence.
-- Operator corrections start to compound into durable knowledge in Tier 5.
+- Re-running a bundle on a process family we've already seen → specialists see prior lessons in their prompt context → fewer repeat mistakes, faster convergence.
+- The eval harness is reusable for every future prompt change in this stage.
 - The system stops being "a single-shot reasoner" and starts being "a reasoner that remembers what its peers concluded."
 
 Not delivered yet (deferred to later phases):
 - Strain-conditional anomaly detection (Tier 4).
 - Cross-bundle hypothesis retrieval (Tier 2).
-- Entity resolution ("yeast" = "S. cerevisiae" = "Sacc") — Postgres exact-match only in Phase 1; cloud adapter or string normalisation handles the long tail later.
+- Human-correction memory (Tier 5).
+- Entity resolution beyond `process_family` keying — closed-vocab matching only in Phase 1; cloud adapter or alias normalization handles the long tail later.
 
 The order is deliberate: ship the smallest verifiable change in system behavior first, then earn each subsequent tier with usage data.
