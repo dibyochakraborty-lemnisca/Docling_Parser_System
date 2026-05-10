@@ -27,6 +27,15 @@ from fermdocs_memory.base import (
 from fermdocs_memory.noop import NoopBackend
 from fermdocs_memory.stub import StubBackend
 
+
+def _build_synap_backend(*args, **kwargs):
+    """Lazy import: SynapBackend pulls maximem-synap which is only needed
+    when the Synap backend is actually wired in. Most callers (tests,
+    NoopBackend default) never touch this."""
+    from fermdocs_memory.synap import SynapBackend
+    return SynapBackend(*args, **kwargs)
+
+
 __all__ = [
     "MemoryBackend",
     "MemoryKind",
@@ -34,4 +43,5 @@ __all__ = [
     "MemoryRecord",
     "NoopBackend",
     "StubBackend",
+    "_build_synap_backend",
 ]
