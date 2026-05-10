@@ -4,6 +4,7 @@
 **Branch:** `memory-layer-plan` (off `followup-context`)
 **Status:** Plan only — no code yet. Phase 1 is the first implementation step; everything past it requires explicit go-ahead.
 **Eng review:** 2026-05-10. 10 decisions resolved (D1–D10). See "Eng-review decisions" at the end of this doc.
+**Backend revision (2026-05-10, post-review):** Phase 1 backend is **Synap (managed)**, not Postgres+pgvector. The `MemoryBackend` Protocol is unchanged; `SynapBackend` replaces `PostgresBackend` as the Phase 1 production adapter. See "Backend revision" section near the end of this doc for what changed and why.
 
 ## Why this exists
 
@@ -342,6 +343,73 @@ Plus three "must specify, no decision needed" clarifications:
 - **4.1** Topic embeddings cached per run (compute once per unique `topic.summary`)
 - **4.2** HNSW index for Phase 1 (`m=16, ef_construction=64`); switch to ivfflat at ~10K rows
 - **Failure modes (3 critical gaps)** Embedding API failure during write, lesson-buffer corruption at resume, missing tenant schema — all explicit error paths in Commit 4
+
+---
+
+## Backend revision (2026-05-10, post-review)
+
+The original plan committed to Postgres + pgvector as Phase 1's production backend. After reviewing Synap's docs and capabilities, **Phase 1 ships against Synap (managed)** instead. The `MemoryBackend` Protocol is unchanged; the swap is a single adapter file.
+
+### What changed
+
+| Plan item | Before (Postgres+pgvector) | After (Synap) |
+|---|---|---|
+| Production adapter (Commit 2) | `PostgresBackend` with pgvector | `SynapBackend` wrapping the Synap Python SDK |
+| Embedding strategy | Self-managed Gemini text-embedding-004, 768-dim column, ivfflat/HNSW index | Synap manages embedding internally; we send `document` text, they handle vectors |
+| Tenant isolation (D3) | Schema-per-tenant in Postgres | Synap scope chain (Customer = tenant, User = process_family) |
+| Embedding-provider lock-in (D4) | `embedding_provider/model/version` columns | Synap's choice; opaque to us. Tradeoff accepted: we trust Synap's embedding quality. |
+| Infra burden | New pgvector extension on existing DB | New cloud dependency; need `SYNAP_API_KEY_DEV` (and later `_PROD`) |
+| Cost model | Self-hosted (DB compute already paid) | Synap usage-based ($12.45 starter credit on dev account) |
+| Data residency | Self-hosted, on our infrastructure | Synap-hosted (US). Customers requiring residency get the alternate Postgres adapter when that path opens. |
+
+### What stayed the same
+
+- `MemoryBackend` Protocol contract (D7 raise, top_k, kind, etc.)
+- `NoopBackend` and `StubBackend` (default-off + tests)
+- Lesson lifecycle: `lesson_id` at emission (D2), buffer-then-persist on clean exit (D6), HITL pause via `<bundle>/lesson_buffer.json` (D10)
+- View renaming: `cross_topic_lessons` → `in_run_lessons`; new `cross_run_lessons` (D5)
+- Synthesizer + critic prompt changes: `[CROSS-RUN LESSONS]` block, `[memory-axis]` rule
+- Eval harness as the merge gate (D9)
+- Process-family-first retrieval (D8) — implemented as Synap's `User` scope key
+
+### How fermdocs concepts map to Synap
+
+| fermdocs | Synap |
+|---|---|
+| Lemnisca (deployment owner) | `Client` |
+| Tenant (per-customer) | `Customer` (e.g. `customer_id="lemnisca-internal"`) |
+| `process_family` (closed-vocab key) | `User` (e.g. `user_id="yeast_intracellular_product_fedbatch"`) |
+| Per-lesson record | one `memories.create` call with `document_type="agent-lesson"` |
+| Lesson metadata (run_id, hyp_id, lesson_id, organism, tags) | `metadata={...}` on the create call |
+| Retrieval at view-build | `sdk.user.context.fetch(user_id=process_family, search_query=[topic.summary], types=[…])` |
+
+The unusual choice: **`User = process_family`**, not a human user. Justification in the use-case markdown (`plans/synap_setup/fermdocs-dev-usecase.md`). If Synap's billing/analytics gets weird because of low cardinality (~6 process families), we revisit and put process_family in metadata with a single `system` user instead. Spike-testable.
+
+### Synap instance setup
+
+- **`fermdocs-dev`** — provisioned 2026-05-10. API key in `SYNAP_API_KEY_DEV`. Used by the eval harness, dev runs, debugging.
+- **`fermdocs-prod`** — not yet provisioned. Will be created when Phase 1 graduates from dev. API key will be `SYNAP_API_KEY_PROD`.
+- Use-case markdown uploaded: `plans/synap_setup/fermdocs-dev-usecase.md`.
+
+### Risks specific to managed backend
+
+| Risk | Mitigation |
+|---|---|
+| Synap outage blocks runs | `SynapBackend.fetch` failures fall back to empty result + log a warning; runs continue with no priors. Matches "memory is opt-in" invariant. |
+| Synap latency on the hot path (15ms P50 claimed; what's P95?) | Topic embedding cache (4.1) means one `fetch` per unique topic per run. Worst case ~3 calls per run, not per turn. |
+| Vendor lock at adapter boundary | Protocol is the contract. Swap to Postgres is one file's worth of work; we have the spec ready. |
+| Data residency constraint hits a customer | `PostgresBackend` is filed as the alternate adapter. Same Protocol, alternate runtime. |
+| Synap's typed memory categories don't fit our shape | Phase 1 sends everything as a single document type with our metadata. We don't rely on their facts/preferences/episodes/emotions split. |
+
+### Phase 1 PR plan, Synap-revised
+
+Same four-commit shape; Commit 2 is the one that changes:
+
+- **Commit 1** — Protocol + Noop + Stub. **Unchanged from original plan.**
+- **Commit 2 — `SynapBackend` adapter.** Wraps the Synap Python SDK. Instance + API key from env. Maps `MemoryRecord` → `sdk.memories.create(document, document_type, customer_id, user_id, metadata)`. Maps `MemoryQuery` → `sdk.user.context.fetch(...)`. Tests against the dev instance via integration test (gated on `SYNAP_API_KEY_DEV` env var; skipped in CI without it).
+- **Commit 3 — Tier 1 wire-up.** **Unchanged from original plan.**
+- **Commit 4 — Provenance + observability.** **Unchanged from original plan.**
+- **Eval harness.** **Unchanged from original plan.**
 
 ---
 
