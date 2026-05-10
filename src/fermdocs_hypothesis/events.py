@@ -75,6 +75,9 @@ class HypothesisSynthesizedEvent(_EventBase):
     affected_variables: list[str] = Field(default_factory=list)
     confidence: float
     confidence_basis: ConfidenceBasis
+    question_answered: Literal["yes", "partial", "insufficient_data"] | None = None
+    question_response_summary: str | None = None
+    parent_hypothesis_ids: list[str] = Field(default_factory=list)
 
 
 class CritiqueFiledEvent(_EventBase):

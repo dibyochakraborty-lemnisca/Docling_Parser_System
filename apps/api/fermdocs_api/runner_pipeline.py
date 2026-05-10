@@ -43,7 +43,13 @@ from fermdocs_hypothesis.bundle_loader import load_bundle
 from fermdocs_hypothesis.event_log import read_events
 from fermdocs_hypothesis.live_hooks import LiveHooks
 from fermdocs_hypothesis.runner import resume_stage, run_stage
-from fermdocs_hypothesis.schema import BudgetSnapshot
+from fermdocs_hypothesis.schema import (
+    BudgetSnapshot,
+    FollowupContext,
+    HypothesisOutput,
+    PriorFollowupRef,
+    PriorHypothesisRef,
+)
 
 from fermdocs_api.state import FollowupResult, Run, RunStatus, RunStore, Upload
 
@@ -244,8 +250,12 @@ async def execute_followup_run(
             exc.__class__.__name__, str(exc)[:200],
         )
 
+    followup_context = _build_followup_context(run)
+
     def _do_work():
-        return _run_hypothesis_blocking(bundle_dir, global_md)
+        return _run_hypothesis_blocking(
+            bundle_dir, global_md, followup_context=followup_context
+        )
 
     def _on_success(result) -> None:
         if hypothesis_dir is not None:
@@ -381,6 +391,61 @@ def _classify_and_persist_followup_question(
     target = bundle_dir / "user_question.json"
     target.write_text(_json.dumps(question.model_dump(mode="json"), indent=2))
     return target
+
+
+def _build_followup_context(run: Run) -> FollowupContext | None:
+    """Build compact prior-answer context for a follow-up hypothesis run.
+
+    The agents should see prior conclusions, not a full prior debate transcript
+    or rendered chart payloads. Missing/corrupt prior output degrades to prior
+    completed follow-ups only; the follow-up still runs over the frozen bundle.
+    """
+    original_finals: list[PriorHypothesisRef] = []
+    if run.hypothesis_dir is not None:
+        output_path = run.hypothesis_dir / "hypothesis_output.json"
+        if output_path.exists():
+            try:
+                output = HypothesisOutput.model_validate_json(output_path.read_text())
+                original_finals = [
+                    _prior_hypothesis_ref(h)
+                    for h in output.final_hypotheses
+                ]
+            except Exception as exc:
+                _log.warning(
+                    "follow-up context: failed to load prior output (%s: %s)",
+                    exc.__class__.__name__, str(exc)[:200],
+                )
+
+    prior_followups = [
+        PriorFollowupRef(
+            followup_index=f.followup_index,
+            user_question_text=f.user_question_text,
+            final_hypotheses=[
+                _prior_hypothesis_ref(h) for h in f.output.final_hypotheses
+            ],
+        )
+        for f in run.followups
+    ]
+
+    if not original_finals and not prior_followups:
+        return None
+    return FollowupContext(
+        original_final_hypotheses=original_finals,
+        previous_followups=prior_followups,
+    )
+
+
+def _prior_hypothesis_ref(h) -> PriorHypothesisRef:
+    return PriorHypothesisRef(
+        hyp_id=h.hyp_id,
+        summary=h.summary,
+        question_answered=h.question_answered,
+        question_response_summary=h.question_response_summary,
+        affected_variables=list(h.affected_variables),
+        confidence=h.confidence,
+        actionable_recommendation=h.actionable_recommendation,
+        parent_hypothesis_ids=list(h.parent_hypothesis_ids),
+    )
 
 
 # ---------- prepare bundle ----------
@@ -643,8 +708,13 @@ async def _run_subprocess(cmd: list[str], cwd: Path | None = None) -> None:
 # ---------- blocking hypothesis-stage helpers ----------
 
 
-def _run_hypothesis_blocking(bundle_dir: Path, global_md: Path):
-    loaded = load_bundle(bundle_dir)
+def _run_hypothesis_blocking(
+    bundle_dir: Path,
+    global_md: Path,
+    *,
+    followup_context: FollowupContext | None = None,
+):
+    loaded = load_bundle(bundle_dir, followup_context=followup_context)
     hooks = LiveHooks(loaded)
     return run_stage(
         hyp_input=loaded.hyp_input,

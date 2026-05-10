@@ -556,6 +556,9 @@ def step(
                     affected_variables=list(hyp.affected_variables),
                     confidence=hyp.confidence,
                     confidence_basis=hyp.confidence_basis,
+                    question_answered=hyp.question_answered,
+                    question_response_summary=hyp.question_response_summary,
+                    parent_hypothesis_ids=list(hyp.parent_hypothesis_ids),
                 ),
                 TokensUsedEvent(
                     ts=now,
@@ -841,6 +844,7 @@ def _build_final(
         # _render_charts_into_finals at run_stage assembly time so the
         # builder can see the bundle's trajectory data.
         chart_specs=list(hyp.chart_specs),
+        parent_hypothesis_ids=list(hyp.parent_hypothesis_ids),
     )
 
 
@@ -1064,6 +1068,9 @@ def resume_stage(
             affected_variables=list(synth.affected_variables),
             confidence=synth.confidence,
             confidence_basis=synth.confidence_basis,
+            question_answered=synth.question_answered,
+            question_response_summary=synth.question_response_summary,
+            parent_hypothesis_ids=list(synth.parent_hypothesis_ids),
         )
         crit_full = CritiqueFull(
             hyp_id=crit.hyp_id,

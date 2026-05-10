@@ -41,7 +41,9 @@ from fermdocs_hypothesis.runner import _build_final
 from fermdocs_hypothesis.schema import (
     CitationCatalog,
     CritiqueFull,
+    FollowupContext,
     HypothesisFull,
+    PriorHypothesisRef,
     SynthesizerView,
     TopicSpec,
 )
@@ -221,6 +223,58 @@ def test_synthesizer_caps_question_response_summary_at_800() -> None:
     assert len(result.hypothesis.question_response_summary) <= 800
 
 
+def test_synthesizer_followup_context_rule_mentions_parent_ids() -> None:
+    from fermdocs_hypothesis.agents.synthesizer import make_followup_invariants
+
+    q = UserQuestion(text="Why do you think that?", raised_by="user_followup")
+    view = _view_with_question(q).model_copy(
+        update={
+            "followup_context": FollowupContext(
+                original_final_hypotheses=[
+                    PriorHypothesisRef(
+                        hyp_id="H-0007",
+                        summary="Prior answer",
+                        confidence=0.7,
+                    )
+                ]
+            )
+        }
+    )
+    flat = " ".join(make_followup_invariants(view))
+    assert "followup_context" in flat
+    assert "parent_hypothesis_ids" in flat
+
+
+def test_synthesizer_parses_parent_hypothesis_ids() -> None:
+    q = UserQuestion(text="Why do you think that?", raised_by="user_followup")
+    view = _view_with_question(q).model_copy(
+        update={
+            "followup_context": FollowupContext(
+                original_final_hypotheses=[
+                    PriorHypothesisRef(
+                        hyp_id="H-0007",
+                        summary="Prior answer",
+                        confidence=0.7,
+                    )
+                ]
+            )
+        }
+    )
+    parsed = {
+        "summary": "drills into prior answer",
+        "facet_ids": ["FCT-0001"],
+        "cited_finding_ids": ["foo:F-0001"],
+        "confidence": 0.8,
+        "confidence_basis": "schema_only",
+        "question_answered": "partial",
+        "question_response_summary": "This refines the prior answer.",
+        "parent_hypothesis_ids": ["H-0007"],
+    }
+    agent = SynthesizerAgent(_ScriptedClient(parsed))
+    result = agent.synthesize(view, hyp_id="H-0008")
+    assert result.hypothesis.parent_hypothesis_ids == ["H-0007"]
+
+
 # ---------- critic ----------
 
 
@@ -265,6 +319,7 @@ def test_build_final_carries_question_fields() -> None:
         confidence_basis=ConfidenceBasis.SCHEMA_ONLY,
         question_answered="partial",
         question_response_summary="some answer",
+        parent_hypothesis_ids=["H-0000"],
     )
     crit = CritiqueFull(
         critique_id="CRIT-0001",
@@ -279,6 +334,7 @@ def test_build_final_carries_question_fields() -> None:
     final = _build_final(hyp, crit, judge_valid=False)
     assert final.question_answered == "partial"
     assert final.question_response_summary == "some answer"
+    assert final.parent_hypothesis_ids == ["H-0000"]
 
 
 def test_build_final_passes_through_none_on_legacy_runs() -> None:

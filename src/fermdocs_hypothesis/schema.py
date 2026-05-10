@@ -302,6 +302,13 @@ class HypothesisFull(BaseModel):
             " Builder turns each spec into Plotly JSON downstream."
         ),
     )
+    parent_hypothesis_ids: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Prior hypotheses this follow-up answer refines or contradicts."
+            " Empty on original and legacy runs."
+        ),
+    )
 
     @field_validator("hyp_id")
     @classmethod
@@ -591,6 +598,48 @@ class ResolvedPriorRef(BaseModel):
     source: str = ""
 
 
+# ---------- Follow-up context ----------
+
+
+class PriorHypothesisRef(BaseModel):
+    """Compact prior conclusion shown to follow-up runs."""
+
+    model_config = ConfigDict(frozen=True)
+
+    hyp_id: str
+    summary: str
+    question_answered: Literal["yes", "partial", "insufficient_data"] | None = None
+    question_response_summary: str | None = None
+    affected_variables: list[str] = Field(default_factory=list)
+    confidence: float = Field(ge=0.0, le=LLM_CONFIDENCE_CAP)
+    actionable_recommendation: str | None = None
+    parent_hypothesis_ids: list[str] = Field(default_factory=list)
+
+
+class PriorFollowupRef(BaseModel):
+    """Compact record of a completed follow-up on the same run."""
+
+    model_config = ConfigDict(frozen=True)
+
+    followup_index: int = Field(ge=1)
+    user_question_text: str
+    final_hypotheses: list[PriorHypothesisRef] = Field(default_factory=list)
+
+
+class FollowupContext(BaseModel):
+    """Conversation memory for drive-posture follow-up runs.
+
+    The frozen evidence bundle remains the source of truth. This context only
+    tells agents what they previously concluded so follow-up questions can
+    refine, compare, or contradict prior answers.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    original_final_hypotheses: list[PriorHypothesisRef] = Field(default_factory=list)
+    previous_followups: list[PriorFollowupRef] = Field(default_factory=list)
+
+
 # ---------- Role-shaped views ----------
 
 
@@ -604,6 +653,7 @@ class OrchestratorView(BaseModel):
     last_turn_outcome: TurnOutcome | None = None
     accepted_hypotheses_so_far: list[HypothesisRef] = Field(default_factory=list)
     user_question: UserQuestion | None = None
+    followup_context: FollowupContext | None = None
 
 
 class SpecialistView(BaseModel):
@@ -625,6 +675,7 @@ class SpecialistView(BaseModel):
     open_questions_in_domain: list[OpenQuestionRef] = Field(default_factory=list)
     prior_facets_this_topic: list[FacetSummary] = Field(default_factory=list)
     user_question: UserQuestion | None = None
+    followup_context: FollowupContext | None = None
 
 
 class SynthesizerView(BaseModel):
@@ -649,6 +700,7 @@ class SynthesizerView(BaseModel):
         ),
     )
     user_question: UserQuestion | None = None
+    followup_context: FollowupContext | None = None
 
 
 class CriticView(BaseModel):
@@ -665,6 +717,7 @@ class CriticView(BaseModel):
     )
     cross_topic_lessons: LessonsDigest | None = None
     user_question: UserQuestion | None = None
+    followup_context: FollowupContext | None = None
 
 
 class JudgeView(BaseModel):
@@ -678,6 +731,7 @@ class JudgeView(BaseModel):
     previous_attempts: list[AttemptRecord] = Field(default_factory=list)
     cross_topic_lessons: LessonsDigest | None = None
     user_question: UserQuestion | None = None
+    followup_context: FollowupContext | None = None
 
 
 # ---------- Output (final + rejected) ----------
@@ -811,6 +865,13 @@ class HypothesisInput(BaseModel):
             " posture) or as a follow-up (PR-A2, drive posture). None on"
             " legacy runs — every downstream agent treats None as 'no"
             " question, run as today'."
+        ),
+    )
+    followup_context: FollowupContext | None = Field(
+        default=None,
+        description=(
+            "Compact memory of prior final hypotheses and completed"
+            " follow-ups on the same run. Set only for follow-up runs."
         ),
     )
 

@@ -30,6 +30,7 @@ from fermdocs_hypothesis.schema import (
     CriticView,
     FacetFull,
     FindingRef,
+    FollowupContext,
     HypothesisFull,
     JudgeView,
     NarrativeRef,
@@ -75,6 +76,7 @@ def project_orchestrator(
     budget: BudgetSnapshot,
     current_turn: int,
     user_question: UserQuestion | None = None,
+    followup_context: FollowupContext | None = None,
 ) -> OrchestratorView:
     events_list = list(events)
     top = rank_topics(seed_topics, events_list, k=VIEW_CAPS["top_topics_k"])
@@ -90,6 +92,7 @@ def project_orchestrator(
         last_turn_outcome=last_turn_outcome(events_list),
         accepted_hypotheses_so_far=accepted,
         user_question=user_question,
+        followup_context=followup_context,
     )
 
 
@@ -117,6 +120,7 @@ def project_specialist(
     available_priors: list[ResolvedPriorRef],
     available_analyses: list[AnalysisRef] | None = None,
     user_question: UserQuestion | None = None,
+    followup_context: FollowupContext | None = None,
 ) -> SpecialistView:
     """Filter the upstream pools to what's relevant for this specialist on
     this topic.
@@ -204,6 +208,7 @@ def project_specialist(
         open_questions_in_domain=questions[: VIEW_CAPS["questions_per_specialist"]],
         prior_facets_this_topic=facets[: VIEW_CAPS["facets_per_topic"]],
         user_question=user_question,
+        followup_context=followup_context,
     )
 
 
@@ -213,6 +218,7 @@ def project_synthesizer(
     facets: list[FacetFull],
     events: Iterable[Event] | None = None,
     user_question: UserQuestion | None = None,
+    followup_context: FollowupContext | None = None,
 ) -> SynthesizerView:
     """Synthesizer sees full facets, a unioned citation catalog, and on
     retries also its prior rejected attempts on this topic + any
@@ -267,6 +273,7 @@ def project_synthesizer(
         previous_attempts=previous_attempts,
         cross_topic_lessons=cross_lessons,
         user_question=user_question,
+        followup_context=followup_context,
     )
 
 
@@ -279,6 +286,7 @@ def project_critic(
     events: Iterable[Event] | None = None,
     topic_id: str | None = None,
     user_question: UserQuestion | None = None,
+    followup_context: FollowupContext | None = None,
 ) -> CriticView:
     """`events` + `topic_id` populate previous_attempts and the cross-topic
     lessons digest. Both default to None to preserve existing test calls.
@@ -301,6 +309,7 @@ def project_critic(
         previous_attempts=previous_attempts,
         cross_topic_lessons=cross_lessons,
         user_question=user_question,
+        followup_context=followup_context,
     )
 
 
@@ -312,6 +321,7 @@ def project_judge(
     events: Iterable[Event] | None = None,
     topic_id: str | None = None,
     user_question: UserQuestion | None = None,
+    followup_context: FollowupContext | None = None,
 ) -> JudgeView:
     """Judge sees previous_attempts on the same topic to avoid contradicting
     its own prior rulings. Cross-topic lessons help with consistency.
@@ -337,6 +347,7 @@ def project_judge(
         previous_attempts=previous_attempts,
         cross_topic_lessons=cross_lessons,
         user_question=user_question,
+        followup_context=followup_context,
     )
 
 

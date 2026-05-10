@@ -45,6 +45,7 @@ from fermdocs_hypothesis.runner import RunnerState
 from fermdocs_hypothesis.schema import (
     CritiqueFull,
     FacetFull,
+    FollowupContext,
     HypothesisFull,
     SpecialistRole,
 )
@@ -70,6 +71,10 @@ class LiveHooks:
         from fermdocs.domain.user_question import UserQuestion as _UQ
         raw_q = getattr(bundle.hyp_input, "user_question", None)
         self._user_question: _UQ | None = raw_q if isinstance(raw_q, _UQ) else None
+        raw_followup = getattr(bundle.hyp_input, "followup_context", None)
+        self._followup_context: FollowupContext | None = (
+            raw_followup if isinstance(raw_followup, FollowupContext) else None
+        )
         self._client = client or GeminiHypothesisClient()
         self._tools: HypothesisToolBundle = make_tool_bundle(bundle)
         self._orchestrator = OrchestratorAgent(self._client)
@@ -98,6 +103,7 @@ class LiveHooks:
             budget=state.budget,
             current_turn=state.current_turn + 1,
             user_question=self._user_question,
+            followup_context=self._followup_context,
         )
         used = set(state.used_topic_ids)
         view = view.model_copy(
@@ -129,6 +135,7 @@ class LiveHooks:
             available_priors=self._bundle.priors_pool,
             available_analyses=self._bundle.analyses_pool,
             user_question=self._user_question,
+            followup_context=self._followup_context,
         )
         result = agent.contribute(view, facet_id=facet_id)
         return result.facet, result.input_tokens, result.output_tokens
@@ -148,6 +155,7 @@ class LiveHooks:
             facets=list(state.current_facets),
             events=events,
             user_question=self._user_question,
+            followup_context=self._followup_context,
         )
         result = self._synthesizer.synthesize(view, hyp_id=hyp_id)
         return result.hypothesis, result.input_tokens, result.output_tokens
@@ -166,6 +174,7 @@ class LiveHooks:
             events=events,
             topic_id=state.current_topic.topic_id,
             user_question=self._user_question,
+            followup_context=self._followup_context,
         )
         result = self._critic.critique(view)
         return result.critique, result.input_tokens, result.output_tokens
@@ -185,6 +194,7 @@ class LiveHooks:
             events=events,
             topic_id=state.current_topic.topic_id,
             user_question=self._user_question,
+            followup_context=self._followup_context,
         )
         result = self._judge.rule(view)
         return (

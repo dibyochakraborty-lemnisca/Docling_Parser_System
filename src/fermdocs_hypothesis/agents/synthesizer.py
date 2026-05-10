@@ -240,6 +240,15 @@ def make_followup_invariants(view: SynthesizerView) -> tuple[str, ...]:
         " the debate, not biasing it. Your hypothesis is the ANSWER to"
         " their follow-up question, not a survey of the bundle.",
     ]
+    if view.followup_context is not None:
+        rules.append(
+            "PRIOR ANSWERS: read view.followup_context before answering."
+            " It contains prior final hypotheses and completed follow-up"
+            " outputs from this same run. If your new answer refines,"
+            " drills into, or contradicts any prior hypothesis, populate"
+            " parent_hypothesis_ids with those hyp_id values and explain"
+            " that relationship in the summary."
+        )
 
     # Topic source_type encodes the shape branch picked in commit 3.
     src = view.current_topic.source_type
@@ -424,6 +433,11 @@ _SYNTHESIZER_SCHEMA: dict[str, Any] = {
                 "required": ["kind", "title", "rationale", "variables"],
             },
         },
+        "parent_hypothesis_ids": {
+            "type": "ARRAY",
+            "items": {"type": "STRING"},
+            "nullable": True,
+        },
     },
     "required": ["summary", "facet_ids", "confidence", "confidence_basis"],
 }
@@ -531,6 +545,13 @@ class SynthesizerAgent:
         # downstream. Bad entries are dropped silently rather than
         # blocking the hypothesis — charts are advisory.
         chart_specs = self._parse_chart_specs(parsed.get("chart_specs") or [])
+        parent_ids = [
+            h.strip()
+            for h in (parsed.get("parent_hypothesis_ids") or [])
+            if isinstance(h, str) and h.strip()
+        ]
+        if view.followup_context is None:
+            parent_ids = []
 
         return HypothesisFull(
             hyp_id=hyp_id,
@@ -546,6 +567,7 @@ class SynthesizerAgent:
             question_response_summary=q_response_summary,
             actionable_recommendation=rec,
             chart_specs=chart_specs,
+            parent_hypothesis_ids=parent_ids,
         )
 
     def _parse_chart_specs(self, raw_list: list[Any]) -> list[ChartSpec]:

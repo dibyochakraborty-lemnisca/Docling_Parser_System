@@ -31,6 +31,7 @@ from fermdocs_diagnose.schema import DiagnosisOutput
 from fermdocs_hypothesis.schema import (
     AnalysisRef,
     FindingRef,
+    FollowupContext,
     HypothesisInput,
     NarrativeRef,
     ResolvedPriorRef,
@@ -54,7 +55,11 @@ class LoadedBundle:
     bundle_dir: Path
 
 
-def load_bundle(bundle_dir: str | Path) -> LoadedBundle:
+def load_bundle(
+    bundle_dir: str | Path,
+    *,
+    followup_context: FollowupContext | None = None,
+) -> LoadedBundle:
     """Load all artifacts from a bundle directory."""
     reader = BundleReader(bundle_dir)
     diagnosis_json = reader.get_diagnosis_json()
@@ -95,6 +100,7 @@ def load_bundle(bundle_dir: str | Path) -> LoadedBundle:
         organism=organism,
         process_family=process_family,
         user_question=user_question,
+        followup_context=followup_context,
     )
     return LoadedBundle(
         hyp_input=hyp_input,
