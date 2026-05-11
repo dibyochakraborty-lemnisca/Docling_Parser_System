@@ -69,18 +69,36 @@ _SYSTEM_PROMPT = (
     "   If you cannot find a field in the prose, set it to null.\n\n"
     "2. registered: the registry classification.\n"
     "   Keys: process_id (string|null - MUST be from the listed registry"
-    " IDs or null), confidence, rationale.\n"
+    " IDs or null), process_family (string|null - closed enum, see"
+    " below), confidence, rationale.\n"
     "   Only emit a process_id if you are confident it matches one of the\n"
-    "   listed entries. If unsure, use null.\n\n"
+    "   listed entries. If unsure, use null.\n"
+    "   process_family is a closed enum. Pick exactly one based on what\n"
+    "   the paper describes:\n"
+    "     - penicillin_fedbatch: Penicillium chrysogenum / P. rubens\n"
+    "       fed-batch making penicillin\n"
+    "     - yeast_intracellular_product_fedbatch: any yeast fed-batch\n"
+    "       producing an INTRACELLULAR product (carotenoid, lipid,\n"
+    "       terpenoid, sterol, intracellular protein)\n"
+    "     - yeast_aerobic_fedbatch: yeast fed-batch for biomass or\n"
+    "       extracellular product where no intracellular product is the\n"
+    "       focus\n"
+    "     - ecoli_recombinant_protein: E. coli expressing a recombinant\n"
+    "       protein, induced or constitutive\n"
+    "     - unknown: any other process. Be explicit; do NOT force-fit a\n"
+    "       paper into a family that doesn't actually match.\n\n"
     "Rules:\n"
     "  - You may ONLY emit observed fields whose values appear (verbatim)\n"
     "    in the input paragraphs. Do not invent values.\n"
     "  - You may ONLY emit a process_id from the provided registry list.\n"
+    "  - process_family MUST be from the closed enum above (the schema\n"
+    "    enforces this).\n"
     "  - Confidence is your subjective confidence (0..1). It will be\n"
     "    capped at 0.85 downstream regardless of what you emit.\n"
     "  - The two layers are independent: a paper that names yeast but is\n"
     "    not in the registry should populate observed and leave\n"
-    "    registered.process_id null."
+    "    registered.process_id null, but STILL emit a process_family\n"
+    "    classification if the family is identifiable."
 )
 
 
@@ -327,6 +345,47 @@ def _validate_observed(
     )
 
 
+def _validate_process_family(value: str | None) -> str | None:
+    """Validate the LLM's process_family pick against process_families.yaml.
+
+    Closed-vocab guard: even though the Gemini schema's `enum` enforces
+    this at decode time, we re-check here so callers using clients
+    without enum support (Anthropic on some SDK versions, future
+    providers) still get the contract enforced. Returns None for
+    unknown/missing/off-whitelist values; downstream treats None as
+    "unclassified" and the memory layer no-ops.
+    """
+    if not value or not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    try:
+        from fermdocs.domain.process_families import (
+            UNKNOWN_FAMILY_NAME,
+            load_process_families,
+        )
+        allowed = set(load_process_families().keys())
+    except Exception:
+        allowed = {
+            "penicillin_fedbatch",
+            "yeast_intracellular_product_fedbatch",
+            "yeast_aerobic_fedbatch",
+            "ecoli_recombinant_protein",
+            "unknown",
+        }
+        UNKNOWN_FAMILY_NAME = "unknown"
+    if value not in allowed:
+        return None
+    # Treat the explicit "unknown" pick as None on the model so downstream
+    # short-circuits (memory no-op, catalog runner unknown family lookup
+    # already handled). Preserves clarity: process_family=None means
+    # "no canonical family identified," regardless of how we got there.
+    if value == UNKNOWN_FAMILY_NAME:
+        return None
+    return value
+
+
 def _validate_registered(
     raw: dict[str, Any],
     *,
@@ -334,9 +393,15 @@ def _validate_registered(
     present_variables: set[str],
 ) -> RegisteredProcess:
     process_id = raw.get("process_id")
+    # The closed-vocab process_family is independent of process_id:
+    # a paper may match a process_family without being in the recipe
+    # registry. Validate it once up front so both branches below carry
+    # the same value.
+    process_family = _validate_process_family(raw.get("process_family"))
 
     if not process_id:
         return RegisteredProcess(
+            process_family=process_family,
             provenance=IdentityProvenance.UNKNOWN,
             rationale=str(raw.get("rationale") or "LLM returned null process_id"),
         )
@@ -344,6 +409,7 @@ def _validate_registered(
     by_id = registry.by_id()
     if process_id not in by_id:
         return RegisteredProcess(
+            process_family=process_family,
             provenance=IdentityProvenance.UNKNOWN,
             rationale=f"off-whitelist process_id {process_id!r}",
         )
@@ -353,6 +419,7 @@ def _validate_registered(
     if not ok:
         return RegisteredProcess(
             process_id=None,
+            process_family=process_family,
             provenance=IdentityProvenance.UNKNOWN,
             rationale=f"fingerprint mismatch for {process_id!r}: {reason}",
         )
@@ -366,6 +433,7 @@ def _validate_registered(
 
     return RegisteredProcess(
         process_id=process_id,
+        process_family=process_family,
         confidence=confidence,
         provenance=IdentityProvenance.LLM_WHITELISTED,
         rationale=raw.get("rationale"),

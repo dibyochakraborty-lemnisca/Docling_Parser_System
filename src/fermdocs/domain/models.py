@@ -98,6 +98,17 @@ class RegisteredProcess(BaseModel):
     """
 
     process_id: str | None = None  # registry id, e.g. "penicillin_indpensim"
+    process_family: str | None = Field(
+        default=None,
+        description=(
+            "Closed-vocab process family from process_families.yaml"
+            " (e.g. 'penicillin_fedbatch', 'yeast_intracellular_product_fedbatch')."
+            " Distinct from ObservedFacts.process_family_hint, which is"
+            " free-text from the source document. This field is the"
+            " canonical key downstream agents (catalog runner, memory"
+            " layer) use for routing. None = unclassified / unknown family."
+        ),
+    )
     confidence: float = Field(ge=0.0, le=1.0, default=0.0)
     provenance: IdentityProvenance = IdentityProvenance.UNKNOWN
     rationale: str | None = None
