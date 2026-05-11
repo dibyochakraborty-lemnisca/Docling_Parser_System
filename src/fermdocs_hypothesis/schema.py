@@ -404,12 +404,39 @@ class TopicHistoryEntry(BaseModel):
     status: Literal["in_progress", "rejected_terminal", "accepted", "deferred"]
 
 
+class Lesson(BaseModel):
+    """One distilled lesson with a stable id (D2, memory-layer plan).
+
+    `lesson_id` is minted by the lessons_summarizer at emission time and
+    survives across runs — when this lesson is persisted to the memory
+    layer (Tier 1), the id round-trips as `MemoryRecord.memory_id` and
+    serves as Synap's `document_id` idempotency key.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    lesson_id: str = Field(min_length=1, description="L-<run_short>-<NNNN> form.")
+    text: str = Field(min_length=1, max_length=400)
+    tags: list[str] = Field(default_factory=list)
+
+
 class LessonsDigest(BaseModel):
     """LLM-summarized cross-topic critic patterns.
 
     Computed by LessonsSummarizerAgent on retry. `source_reason_count` and
     `computed_at_event_idx` are cache keys: the runner skips recompute when
     the live critic-reason count hasn't grown past `source_reason_count`.
+
+    Two equivalent representations of the lessons live on this object:
+      - `digest`: legacy single-string form for prompt rendering and for
+        existing global.md replay back-compat. Always populated.
+      - `lessons`: structured list with stable lesson_ids (D2). Populated
+        on new runs; empty on legacy global.md replay where the event
+        only carried the digest blob.
+
+    When persisting to memory, the runner reads `lessons` (writes one
+    MemoryRecord per Lesson). When `lessons` is empty (legacy event),
+    no memory write happens — graceful degradation.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -417,6 +444,13 @@ class LessonsDigest(BaseModel):
     digest: str = Field(min_length=1)
     source_reason_count: int = Field(ge=0)
     computed_at_event_idx: int = Field(ge=0)
+    lessons: list[Lesson] = Field(
+        default_factory=list,
+        description=(
+            "Structured form. Empty on legacy events; populated on every"
+            " new run after memory-layer Phase 1 lands."
+        ),
+    )
 
 
 # ---------- Open questions + ledger ----------
@@ -676,6 +710,15 @@ class SpecialistView(BaseModel):
     prior_facets_this_topic: list[FacetSummary] = Field(default_factory=list)
     user_question: UserQuestion | None = None
     followup_context: FollowupContext | None = None
+    cross_run_lessons: LessonsDigest | None = Field(
+        default=None,
+        description=(
+            "Lessons from PRIOR RUNS on the same process_family, fetched"
+            " from the memory layer at view-build time. Distinct from"
+            " cross_topic_lessons (this-run only). None on cold-start"
+            " process_families and on memory-disabled (NoopBackend) runs."
+        ),
+    )
 
 
 class SynthesizerView(BaseModel):
@@ -699,6 +742,14 @@ class SynthesizerView(BaseModel):
             " context."
         ),
     )
+    cross_run_lessons: LessonsDigest | None = Field(
+        default=None,
+        description=(
+            "Lessons from PRIOR RUNS on the same process_family, fetched"
+            " from the memory layer. Distinct from cross_topic_lessons"
+            " which only spans the current run."
+        ),
+    )
     user_question: UserQuestion | None = None
     followup_context: FollowupContext | None = None
 
@@ -716,6 +767,7 @@ class CriticView(BaseModel):
         ),
     )
     cross_topic_lessons: LessonsDigest | None = None
+    cross_run_lessons: LessonsDigest | None = None
     user_question: UserQuestion | None = None
     followup_context: FollowupContext | None = None
 

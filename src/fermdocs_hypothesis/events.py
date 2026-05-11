@@ -153,11 +153,22 @@ class LessonsSummarizedEvent(_EventBase):
     `source_reason_count` is the cache key the runner checks before
     re-invoking the summarizer; if no new reasons accumulated, the
     previous digest is reused.
+
+    `lessons` is the structured form (memory-layer Phase 1, D2): each
+    distilled lesson with a stable lesson_id, used as the round-trip
+    key into the memory backend. Default empty preserves back-compat
+    with legacy global.md events.
     """
 
     type: Literal["lessons_summarized"] = "lessons_summarized"
     digest: str
     source_reason_count: int = Field(ge=0)
+    lessons: list = Field(
+        default_factory=list,
+        description=(
+            "list[Lesson]; structured form. Empty on legacy events."
+        ),
+    )
 
 
 class StageExitedEvent(_EventBase):

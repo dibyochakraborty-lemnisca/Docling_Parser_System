@@ -121,6 +121,7 @@ def project_specialist(
     available_analyses: list[AnalysisRef] | None = None,
     user_question: UserQuestion | None = None,
     followup_context: FollowupContext | None = None,
+    cross_run_lessons: "object | None" = None,
 ) -> SpecialistView:
     """Filter the upstream pools to what's relevant for this specialist on
     this topic.
@@ -209,6 +210,7 @@ def project_specialist(
         prior_facets_this_topic=facets[: VIEW_CAPS["facets_per_topic"]],
         user_question=user_question,
         followup_context=followup_context,
+        cross_run_lessons=cross_run_lessons,
     )
 
 
@@ -219,6 +221,7 @@ def project_synthesizer(
     events: Iterable[Event] | None = None,
     user_question: UserQuestion | None = None,
     followup_context: FollowupContext | None = None,
+    cross_run_lessons: "object | None" = None,
 ) -> SynthesizerView:
     """Synthesizer sees full facets, a unioned citation catalog, and on
     retries also its prior rejected attempts on this topic + any
@@ -272,6 +275,7 @@ def project_synthesizer(
         ),
         previous_attempts=previous_attempts,
         cross_topic_lessons=cross_lessons,
+        cross_run_lessons=cross_run_lessons,
         user_question=user_question,
         followup_context=followup_context,
     )
@@ -287,9 +291,12 @@ def project_critic(
     topic_id: str | None = None,
     user_question: UserQuestion | None = None,
     followup_context: FollowupContext | None = None,
+    cross_run_lessons: "object | None" = None,
 ) -> CriticView:
     """`events` + `topic_id` populate previous_attempts and the cross-topic
     lessons digest. Both default to None to preserve existing test calls.
+    `cross_run_lessons` is fetched from the memory layer by the runner
+    and passed in; None when memory is off (NoopBackend) or empty.
     """
     previous_attempts = []
     cross_lessons = None
@@ -308,6 +315,7 @@ def project_critic(
         debate_summary_one_line=debate_summary_one_line,
         previous_attempts=previous_attempts,
         cross_topic_lessons=cross_lessons,
+        cross_run_lessons=cross_run_lessons,
         user_question=user_question,
         followup_context=followup_context,
     )
@@ -322,6 +330,7 @@ def project_judge(
     topic_id: str | None = None,
     user_question: UserQuestion | None = None,
     followup_context: FollowupContext | None = None,
+    cross_run_lessons: "object | None" = None,
 ) -> JudgeView:
     """Judge sees previous_attempts on the same topic to avoid contradicting
     its own prior rulings. Cross-topic lessons help with consistency.
@@ -346,6 +355,7 @@ def project_judge(
         citation_lookups=dict(citation_lookups or {}),
         previous_attempts=previous_attempts,
         cross_topic_lessons=cross_lessons,
+        cross_run_lessons=cross_run_lessons,
         user_question=user_question,
         followup_context=followup_context,
     )

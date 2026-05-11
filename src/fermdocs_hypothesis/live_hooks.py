@@ -60,8 +60,15 @@ class LiveHooks:
         bundle: LoadedBundle,
         *,
         client: GeminiHypothesisClient | None = None,
+        memory: "object | None" = None,
     ):
         self._bundle = bundle
+        # Memory backend (NoopBackend by default). The runner constructs
+        # this from env/config; LiveHooks just plumbs it into projectors
+        # so each view-build site fetches cross-run priors.
+        from fermdocs_memory import NoopBackend  # local import to avoid cycle
+        self._memory = memory or NoopBackend()
+        self._cross_run_cache: dict[str, object | None] = {}
         # PR-A: cache user_question from hyp_input so every project_*
         # call can thread it without re-walking bundle internals. None
         # on legacy runs — projectors short-circuit to back-compat path.
@@ -93,6 +100,27 @@ class LiveHooks:
             "mass_transfer": self._mass_transfer,
             "metabolic": self._metabolic,
         }
+
+    def _fetch_cross_run(self, topic_summary: str) -> "object | None":
+        """Memoized fetch per topic_summary.
+
+        Topic embedding/retrieval is the same for every view-build site
+        within a single turn — caching avoids 4× the round-trips. Cache
+        key is the topic summary string; cleared at run end (object
+        lifetime).
+        """
+        if topic_summary in self._cross_run_cache:
+            return self._cross_run_cache[topic_summary]
+        # Import locally to avoid circular: runner imports live_hooks too.
+        from fermdocs_hypothesis.runner import _fetch_cross_run_lessons
+        digest = _fetch_cross_run_lessons(
+            memory=self._memory,
+            hyp_input=self._bundle.hyp_input,
+            topic_summary=topic_summary,
+            top_k=5,
+        )
+        self._cross_run_cache[topic_summary] = digest
+        return digest
 
     # ---- orchestrator ----
 
@@ -136,6 +164,7 @@ class LiveHooks:
             available_analyses=self._bundle.analyses_pool,
             user_question=self._user_question,
             followup_context=self._followup_context,
+            cross_run_lessons=self._fetch_cross_run(state.current_topic.summary),
         )
         result = agent.contribute(view, facet_id=facet_id)
         return result.facet, result.input_tokens, result.output_tokens
@@ -156,6 +185,7 @@ class LiveHooks:
             events=events,
             user_question=self._user_question,
             followup_context=self._followup_context,
+            cross_run_lessons=self._fetch_cross_run(state.current_topic.summary),
         )
         result = self._synthesizer.synthesize(view, hyp_id=hyp_id)
         return result.hypothesis, result.input_tokens, result.output_tokens
@@ -175,6 +205,7 @@ class LiveHooks:
             topic_id=state.current_topic.topic_id,
             user_question=self._user_question,
             followup_context=self._followup_context,
+            cross_run_lessons=self._fetch_cross_run(state.current_topic.summary),
         )
         result = self._critic.critique(view)
         return result.critique, result.input_tokens, result.output_tokens
@@ -195,6 +226,7 @@ class LiveHooks:
             topic_id=state.current_topic.topic_id,
             user_question=self._user_question,
             followup_context=self._followup_context,
+            cross_run_lessons=self._fetch_cross_run(state.current_topic.summary),
         )
         result = self._judge.rule(view)
         return (
@@ -211,18 +243,28 @@ class LiveHooks:
         state: RunnerState,
         recent_reasons: list[str],
         source_reason_count: int,
-    ) -> tuple[str, int, int]:
+    ) -> tuple[str, list, int, int]:
         """Real LLM-backed lesson compression. Wraps in try/except so a
         Gemini outage never blocks a retry — runner already falls back
-        silently, but we're defensive at this layer too."""
+        silently, but we're defensive at this layer too.
+
+        Returns (digest_text, structured_lessons, in_tokens, out_tokens).
+        The structured_lessons list is used by the runner to populate
+        LessonsSummarizedEvent.lessons for memory-layer persistence.
+        """
         try:
             view = LessonsView(recent_critic_reasons=list(recent_reasons))
             result = self._lessons.summarize(
                 view, source_reason_count=source_reason_count
             )
-            return result.digest.digest, result.input_tokens, result.output_tokens
+            return (
+                result.digest.digest,
+                list(result.digest.lessons or []),
+                result.input_tokens,
+                result.output_tokens,
+            )
         except Exception:
-            return "", 0, 0
+            return "", [], 0, 0
 
     # ---- helpers ----
 

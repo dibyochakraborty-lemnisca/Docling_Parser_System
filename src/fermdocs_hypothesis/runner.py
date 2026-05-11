@@ -58,6 +58,11 @@ from fermdocs_hypothesis.events import (
 )
 from fermdocs_hypothesis.instrumentation import TokenMeter
 from fermdocs_hypothesis.memory import NullPastInsightStore, PastInsightStore
+from fermdocs_memory import (
+    MemoryBackend,
+    MemoryRecord,
+    NoopBackend,
+)
 from fermdocs_hypothesis.projector import (
     project_specialist,
     project_synthesizer,
@@ -185,14 +190,16 @@ class RunnerHooks(Protocol):
 
     def summarize_lessons(
         self, state: RunnerState, recent_reasons: list[str], source_reason_count: int
-    ) -> tuple[str, int, int]:
+    ) -> tuple[str, list, int, int]:
         """Compress recurring critic complaints into a digest. Called by
         runner on retry_topic phases when reason count grew past the cached
         digest's source_reason_count.
 
-        Returns (digest_text, input_tokens, output_tokens). On error the
-        runner falls back silently — implementations may return ("", 0, 0)
-        to mean "no digest available, skip this round".
+        Returns (digest_text, structured_lessons, input_tokens, output_tokens).
+        `structured_lessons` is the list[Lesson] (memory-layer Phase 1)
+        for downstream memory persistence; empty list when no lessons.
+        On error the runner falls back silently — implementations may
+        return ("", [], 0, 0) to mean "no digest available, skip this round".
         """
         ...
 
@@ -267,12 +274,12 @@ class StubHooks:
 
     def summarize_lessons(
         self, state: RunnerState, recent_reasons: list[str], source_reason_count: int
-    ) -> tuple[str, int, int]:
+    ) -> tuple[str, list, int, int]:
         # Deterministic stub: encodes inputs so the runner's caching test
         # can assert exact strings without an LLM round-trip.
         joined = " | ".join(recent_reasons[:5])
         text = f"DETERMINISTIC[{len(recent_reasons)}]: {joined}" if recent_reasons else ""
-        return text, 0, 0
+        return text, [], 0, 0
 
 
 # ---------- pure step function ----------
@@ -411,13 +418,13 @@ def step(
         )
         if recent_reasons and live_count > cached_count:
             try:
-                digest_text, in_tok, out_tok = hooks.summarize_lessons(
+                digest_text, lessons, in_tok, out_tok = hooks.summarize_lessons(
                     state, recent_reasons, live_count
                 )
             except Exception:
                 # Silent fallback: lessons are advisory; never block retry
                 # on summarizer failure. Synthesizer still has previous_attempts.
-                digest_text, in_tok, out_tok = "", 0, 0
+                digest_text, lessons, in_tok, out_tok = "", [], 0, 0
             if digest_text:
                 new_budget = meter.record(
                     new_budget,
@@ -431,6 +438,7 @@ def step(
                         turn=new_turn,
                         digest=digest_text,
                         source_reason_count=live_count,
+                        lessons=list(lessons or []),
                     )
                 )
                 if in_tok or out_tok:
@@ -765,6 +773,147 @@ def _judge_rationale(events: list[Event], hyp_id: str) -> str:
     return ""
 
 
+def _collect_lessons_from_events(events: list[Event]) -> list:
+    """Walk events for all LessonsSummarized.lessons, deduplicated.
+
+    Legacy events without `lessons` populated (pre-memory-layer Phase 1)
+    contribute nothing — graceful degradation.
+    """
+    out: list = []
+    seen_ids: set[str] = set()
+    for ev in events:
+        if not isinstance(ev, LessonsSummarizedEvent):
+            continue
+        for lesson in getattr(ev, "lessons", []) or []:
+            lesson_id = getattr(lesson, "lesson_id", None)
+            if lesson_id is None or lesson_id in seen_ids:
+                continue
+            seen_ids.add(lesson_id)
+            out.append(lesson)
+    return out
+
+
+def _persist_lessons_to_memory(
+    *,
+    memory: MemoryBackend,
+    events: list[Event],
+    hyp_input: HypothesisInput,
+    exit_reason: ExitReason | None,
+    run_id: str,
+) -> int:
+    """Write buffered lessons to the memory backend on clean exit only.
+
+    D6: failed/budget-exhausted runs do not pollute the store. Returns
+    the number of records written so the runner can surface a counter
+    in the token report.
+
+    Tenant_id: read from FERMDOCS_TENANT_ID env (matches SynapBackend
+    default); falls back to "default" for single-tenant Phase 1.
+
+    Process_family: pulled from hyp_input. If absent (legacy runs with
+    no organism extraction), the lesson is still persisted but with
+    process_family=None; the SynapBackend will refuse to write a
+    lesson record without process_family, so we skip those records.
+    """
+    if exit_reason not in {"consensus_reached", "no_topics_left"}:
+        return 0
+    process_family = getattr(hyp_input, "process_family", None)
+    if process_family is None:
+        return 0
+    lessons = _collect_lessons_from_events(events)
+    if not lessons:
+        return 0
+    import os
+    tenant_id = os.environ.get("FERMDOCS_TENANT_ID") or "default"
+    organism = getattr(hyp_input, "organism", None)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    written = 0
+    for lesson in lessons:
+        try:
+            record = MemoryRecord(
+                memory_id=lesson.lesson_id,
+                kind="lesson",
+                summary=lesson.text,
+                process_family=process_family,
+                organism=organism,
+                tenant_id=tenant_id,
+                tags=tuple(lesson.tags or ()),
+                provenance={
+                    "run_id": run_id,
+                    "generation_timestamp": now_iso,
+                    "lesson_id": lesson.lesson_id,
+                    "exit_reason": exit_reason,
+                },
+                created_at=now_iso,
+            )
+            memory.write(record)
+            written += 1
+        except Exception as exc:
+            # Memory is opt-in; never fail a successful run on a write error.
+            import logging
+            logging.getLogger(__name__).warning(
+                "runner: failed to persist lesson %s to memory (%s); continuing",
+                lesson.lesson_id, exc.__class__.__name__,
+            )
+    return written
+
+
+def _fetch_cross_run_lessons(
+    *,
+    memory: MemoryBackend,
+    hyp_input: HypothesisInput,
+    topic_summary: str,
+    top_k: int = 5,
+) -> "object | None":
+    """Retrieve cross-run lessons for the current topic.
+
+    Returns a LessonsDigest-shaped object or None when memory is off /
+    process_family is unknown / nothing is found. The projector calls
+    this once per view-build site.
+    """
+    from fermdocs_memory.base import MemoryQuery
+    from fermdocs_hypothesis.schema import Lesson, LessonsDigest
+
+    process_family = getattr(hyp_input, "process_family", None)
+    if process_family is None:
+        return None
+    import os
+    tenant_id = os.environ.get("FERMDOCS_TENANT_ID") or "default"
+    try:
+        records = memory.fetch(MemoryQuery(
+            tenant_id=tenant_id,
+            kind="lesson",
+            process_family=process_family,
+            semantic_query=topic_summary,
+            top_k=top_k,
+        ))
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            "runner: cross-run memory fetch failed (%s); continuing without priors",
+            exc.__class__.__name__,
+        )
+        return None
+    if not records:
+        return None
+    lessons = [
+        Lesson(
+            lesson_id=r.memory_id,
+            text=r.summary[:400] if r.summary else "(empty)",
+            tags=list(r.tags or []),
+        )
+        for r in records
+    ]
+    # Render a compact prompt-ready digest of the retrieved priors.
+    digest_text = "\n".join(f"  - {l.text}" for l in lessons)
+    return LessonsDigest(
+        digest=digest_text or "(none)",
+        source_reason_count=0,  # not applicable for cross-run priors
+        computed_at_event_idx=0,
+        lessons=lessons,
+    )
+
+
 def _render_charts_into_finals(
     finals: list[FinalHypothesis],
     hyp_input: HypothesisInput,
@@ -870,6 +1019,7 @@ def run_stage(
     budget: BudgetSnapshot | None = None,
     past_insights: PastInsightStore | None = None,
     pending_question_seeds: list[tuple[str, list[str]]] | None = None,
+    memory: MemoryBackend | None = None,
     now_factory=lambda: datetime.now(timezone.utc),
     validate: bool = False,
 ) -> RunResult:
@@ -883,6 +1033,7 @@ def run_stage(
     ledger.
     """
     past_insights = past_insights or NullPastInsightStore()
+    memory = memory or NoopBackend()
     seed_topics_tuple = tuple(hyp_input.seed_topics)
     initial_budget = budget or BudgetSnapshot()
     state = RunnerState(
@@ -941,6 +1092,14 @@ def run_stage(
     finals_with_charts = _render_charts_into_finals(
         list(state.finalized_finals), hyp_input,
     )
+    # Persist lessons to memory on clean exit only (D6).
+    _persist_lessons_to_memory(
+        memory=memory,
+        events=events,
+        hyp_input=hyp_input,
+        exit_reason=state.exit_reason,
+        run_id=str(meta.hypothesis_id),
+    )
     output = HypothesisOutput(
         meta=meta,
         final_hypotheses=finals_with_charts,
@@ -981,6 +1140,7 @@ def resume_stage(
     provider: Literal["anthropic", "gemini", "stub"] = "stub",
     budget: BudgetSnapshot | None = None,
     past_insights: PastInsightStore | None = None,
+    memory: MemoryBackend | None = None,
     now_factory=lambda: datetime.now(timezone.utc),
     validate: bool = False,
 ) -> RunResult:
@@ -1006,6 +1166,7 @@ def resume_stage(
     from fermdocs_hypothesis.event_log import read_events
 
     past_insights = past_insights or NullPastInsightStore()
+    memory = memory or NoopBackend()
     seed_topics_tuple = tuple(hyp_input.seed_topics)
     initial_budget = budget or BudgetSnapshot()
 
@@ -1180,6 +1341,14 @@ def resume_stage(
     )
     finals_with_charts = _render_charts_into_finals(
         list(state.finalized_finals), hyp_input,
+    )
+    # Persist lessons to memory on clean exit only (D6).
+    _persist_lessons_to_memory(
+        memory=memory,
+        events=events,
+        hyp_input=hyp_input,
+        exit_reason=state.exit_reason,
+        run_id=str(meta.hypothesis_id),
     )
     output = HypothesisOutput(
         meta=meta,

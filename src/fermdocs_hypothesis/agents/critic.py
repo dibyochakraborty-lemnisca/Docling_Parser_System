@@ -155,6 +155,21 @@ CRITIC_INVARIANTS = (
     " demonstrably had the inputs but the synthesizer hid behind a"
     " tool gap. Tag with [tool-gap-axis] prefix so retry can address"
     " specifically.",
+    "[MEMORY-AXIS] (memory-layer Phase 1): rejection axis for"
+    " misuse of cross-run priors. When view.cross_run_lessons is"
+    " populated and the hypothesis CITES one of those prior lessons,"
+    " verify two things: (a) the lesson's process_family / strain"
+    " context matches the current bundle's context, and (b) the"
+    " hypothesis doesn't treat the prior as evidence overriding"
+    " current-bundle findings. Fire red with reason"
+    " '[memory-axis]: hypothesis cites a prior lesson but the cited"
+    " evidence is from a different run/strain' when the prior is"
+    " misapplied. Do NOT over-fire: (i) memory priors that the"
+    " synthesizer surfaces as contradictions with current evidence"
+    " are CORRECT behavior, not a rejection axis; (ii) when"
+    " cross_run_lessons is None/empty there is no memory citation"
+    " to check. Tag with [memory-axis] prefix so retry can either"
+    " scope the prior to within-strain runs or drop it entirely.",
 )
 
 def make_followup_critic_invariants(view: CriticView) -> tuple[str, ...]:

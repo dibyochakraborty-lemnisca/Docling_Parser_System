@@ -106,6 +106,16 @@ SYNTHESIZER_INVARIANTS = (
     "Causal language ('driven by', 'due to', 'caused by') requires positive causal evidence in citations, not just observation of an effect.",
     "If previous_attempts is non-empty, address each prior critic_reason explicitly — do not re-emit the same claim. Narrow the hypothesis if you cannot address a reason cleanly.",
     "If cross_topic_lessons is present, treat each lesson as a standing rule on this attempt's wording.",
+    "CROSS-RUN LESSONS (memory-layer Phase 1): when view.cross_run_lessons"
+    " is populated, it contains distilled lessons from PRIOR RUNS on the"
+    " same process_family. These are PRIORS, not ground truth. The"
+    " current bundle's evidence ALWAYS overrides them. (a) Consider each"
+    " prior lesson as you draft — it may surface a recurring rejection"
+    " pattern or known confound for this strain. (b) If a prior contradicts"
+    " what the current bundle's findings/narratives say, surface the"
+    " contradiction explicitly in your summary rather than silently"
+    " trusting the prior. Citing a prior lesson when the cited evidence"
+    " is from a different run/strain is a [memory-axis] rejection.",
     "CROSS-METRIC TRIANGULATION: when facets cite different metric_ids that"
     " point at the same conclusion (e.g. kinetics cites A8+A10 for declining"
     " growth post-144h, metabolic cites B10+B16 for overflow post-36h),"

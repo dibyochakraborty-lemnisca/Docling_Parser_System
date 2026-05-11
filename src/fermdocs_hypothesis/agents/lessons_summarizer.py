@@ -23,7 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from fermdocs_hypothesis.llm_clients import GeminiHypothesisClient
 from fermdocs_hypothesis.prompts import ToolHint, build_prompt
-from fermdocs_hypothesis.schema import LessonsDigest
+from fermdocs_hypothesis.schema import Lesson, LessonsDigest
 
 
 class LessonsView(BaseModel):
@@ -113,8 +113,23 @@ class LessonsSummarizerAgent:
     real prompt with a mocked Gemini response.
     """
 
-    def __init__(self, client: GeminiHypothesisClient | None):
+    def __init__(
+        self,
+        client: GeminiHypothesisClient | None,
+        *,
+        run_id: str | None = None,
+    ):
         self._client = client
+        # run_id is used to mint stable lesson_ids: L-<run_short>-<NNNN>.
+        # When None (legacy callers), we fall back to a synthetic prefix.
+        self._run_id = run_id
+        self._lesson_counter = 0
+
+    def _mint_lesson_id(self) -> str:
+        """Stable lesson_id for memory-layer round-trip (D2)."""
+        self._lesson_counter += 1
+        run_short = (self._run_id or "UNKNOWN").split("-")[0][:8] or "RUN"
+        return f"L-{run_short}-{self._lesson_counter:04d}"
 
     def summarize(
         self, view: LessonsView, *, source_reason_count: int
@@ -135,16 +150,23 @@ class LessonsSummarizerAgent:
             user_text=parts.as_user_message(),
             response_schema=_LESSONS_SCHEMA,
         )
-        lessons = [str(l).strip()[:200] for l in (parsed.get("lessons") or []) if l]
-        digest_text = self._format_digest(lessons)
-        # source_reason_count is a cache key — even if the LLM returns no
-        # lessons, we still record that we ran on this many reasons so the
-        # runner doesn't keep retrying the same input. computed_at_event_idx
-        # is set by the runner when it emits the event (it knows the index).
+        # Truncate at 200 chars to match the LESSONS_INVARIANTS cap the LLM
+        # is told to honor. The Lesson schema accepts up to 400 as a safety
+        # margin but the prompt-side contract is 200.
+        raw_lessons = [str(l).strip()[:200] for l in (parsed.get("lessons") or []) if l]
+        # Mint a Lesson object per surfaced pattern (D2). Tags are
+        # heuristic-derived on first pass — the LLM doesn't emit them
+        # yet; we'd need a richer prompt schema for that. Phase 2.
+        lessons = [
+            Lesson(lesson_id=self._mint_lesson_id(), text=text, tags=[])
+            for text in raw_lessons
+        ]
+        digest_text = self._format_digest(raw_lessons)
         digest = LessonsDigest(
             digest=digest_text or "(no recurring patterns surfaced)",
             source_reason_count=source_reason_count,
             computed_at_event_idx=0,
+            lessons=lessons,
         )
         return LessonsResult(digest=digest, input_tokens=in_tok, output_tokens=out_tok)
 
@@ -158,13 +180,24 @@ class LessonsSummarizerAgent:
         # nothing to chew on" from a real digest.
         if not view.recent_critic_reasons:
             text = "DETERMINISTIC[0]: (empty)"
+            structured: list[Lesson] = []
         else:
             joined = " | ".join(view.recent_critic_reasons[:5])
             text = f"DETERMINISTIC[{len(view.recent_critic_reasons)}]: {joined}"
+            # One Lesson per cited reason, capped at 5 to match the join.
+            structured = [
+                Lesson(
+                    lesson_id=self._mint_lesson_id(),
+                    text=str(r)[:400],
+                    tags=[],
+                )
+                for r in view.recent_critic_reasons[:5]
+            ]
         digest = LessonsDigest(
             digest=text,
             source_reason_count=source_reason_count,
             computed_at_event_idx=0,
+            lessons=structured,
         )
         return LessonsResult(digest=digest, input_tokens=0, output_tokens=0)
 
@@ -177,5 +210,7 @@ class LessonsSummarizerAgent:
 
 def build_lessons_summarizer(
     client: GeminiHypothesisClient | None,
+    *,
+    run_id: str | None = None,
 ) -> LessonsSummarizerAgent:
-    return LessonsSummarizerAgent(client=client)
+    return LessonsSummarizerAgent(client=client, run_id=run_id)

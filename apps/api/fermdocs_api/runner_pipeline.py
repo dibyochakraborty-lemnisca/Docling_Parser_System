@@ -708,6 +708,32 @@ async def _run_subprocess(cmd: list[str], cwd: Path | None = None) -> None:
 # ---------- blocking hypothesis-stage helpers ----------
 
 
+def _build_memory_backend():
+    """Construct the memory backend from env config.
+
+    Env:
+      FERMDOCS_MEMORY=synap  → SynapBackend (requires SYNAP_API_KEY)
+      FERMDOCS_MEMORY=noop or unset → NoopBackend (default; off)
+
+    Failures (missing dep, missing key) downgrade gracefully to
+    NoopBackend so a misconfigured prod env doesn't break runs.
+    """
+    from fermdocs_memory import NoopBackend
+    mode = (os.environ.get("FERMDOCS_MEMORY") or "noop").strip().lower()
+    if mode == "synap":
+        try:
+            from fermdocs_memory import _build_synap_backend
+            return _build_synap_backend()
+        except Exception as exc:
+            _log.warning(
+                "FERMDOCS_MEMORY=synap requested but backend construction"
+                " failed (%s); falling back to NoopBackend",
+                exc.__class__.__name__,
+            )
+            return NoopBackend()
+    return NoopBackend()
+
+
 def _run_hypothesis_blocking(
     bundle_dir: Path,
     global_md: Path,
@@ -715,7 +741,8 @@ def _run_hypothesis_blocking(
     followup_context: FollowupContext | None = None,
 ):
     loaded = load_bundle(bundle_dir, followup_context=followup_context)
-    hooks = LiveHooks(loaded)
+    memory = _build_memory_backend()
+    hooks = LiveHooks(loaded, memory=memory)
     return run_stage(
         hyp_input=loaded.hyp_input,
         hooks=hooks,
@@ -724,6 +751,7 @@ def _run_hypothesis_blocking(
         provider="gemini",
         model_name=hooks._client.model_name,
         budget=_API_BUDGET,
+        memory=memory,
         validate=True,
         now_factory=lambda: datetime.now(timezone.utc),
     )
@@ -733,7 +761,8 @@ def _resume_hypothesis_blocking(
     bundle_dir: Path, global_md: Path, answers: list[tuple[str, str]]
 ):
     loaded = load_bundle(bundle_dir)
-    hooks = LiveHooks(loaded)
+    memory = _build_memory_backend()
+    hooks = LiveHooks(loaded, memory=memory)
     return resume_stage(
         hyp_input=loaded.hyp_input,
         hooks=hooks,
@@ -743,6 +772,7 @@ def _resume_hypothesis_blocking(
         provider="gemini",
         model_name=hooks._client.model_name,
         budget=_API_BUDGET,
+        memory=memory,
         validate=True,
         now_factory=lambda: datetime.now(timezone.utc),
     )

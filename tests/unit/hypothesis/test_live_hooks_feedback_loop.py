@@ -334,13 +334,15 @@ def test_summarize_lessons_calls_real_agent_and_returns_digest(tmp_path):
     client = _RecordingGeminiClient()
     hooks = LiveHooks(bundle=bundle, client=client)  # type: ignore[arg-type]
 
-    digest, in_tok, out_tok = hooks.summarize_lessons(
+    digest, lessons, in_tok, out_tok = hooks.summarize_lessons(
         _runner_state(),
         recent_reasons=["documented absence ≠ ruled out", "scope drift on batch claims"],
         source_reason_count=2,
     )
     assert "distilled lesson A" in digest
     assert "distilled lesson B" in digest
+    # Memory-layer Phase 1: structured lessons emitted alongside digest.
+    assert isinstance(lessons, list)
     assert in_tok == 120
     assert out_tok == 40
 
@@ -362,11 +364,12 @@ def test_summarize_lessons_swallows_client_errors(tmp_path):
     bundle = _make_minimal_bundle(tmp_path)
     hooks = LiveHooks(bundle=bundle, client=_BoomClient())  # type: ignore[arg-type]
 
-    digest, in_tok, out_tok = hooks.summarize_lessons(
+    digest, lessons, in_tok, out_tok = hooks.summarize_lessons(
         _runner_state(),
         recent_reasons=["any reason"],
         source_reason_count=1,
     )
     assert digest == ""
+    assert lessons == []
     assert in_tok == 0
     assert out_tok == 0

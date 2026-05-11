@@ -156,10 +156,10 @@ def test_summarizer_tokens_recorded_in_token_report(tmp_path):
 
     class _TokenReportingHooks(StubHooks):
         def summarize_lessons(self, state, recent_reasons, source_reason_count):
-            digest, _, _ = super().summarize_lessons(
+            digest, lessons, _, _ = super().summarize_lessons(
                 state, recent_reasons, source_reason_count
             )
-            return digest, 200, 80
+            return digest, lessons, 200, 80
 
     seeds = [make_seed_topic(topic_id="T-0001")]
     script = make_simple_script(
