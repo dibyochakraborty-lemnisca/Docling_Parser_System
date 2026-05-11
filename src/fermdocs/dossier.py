@@ -70,7 +70,22 @@ def load_process_manifest(path: str | Path) -> ProcessIdentity:
             vessel_type=data.get("vessel_type"),
         )
 
-    family_hint = data.get("process_family_hint") or data.get("process_family")
+    # Two distinct fields. The manifest's `process_family` is the
+    # canonical closed-vocab name (penicillin_fedbatch etc) that lands
+    # in RegisteredProcess.process_family — this is what downstream
+    # routing (memory layer, catalog runner) reads. The free-text
+    # `process_family_hint` stays as a human-readable label on
+    # ObservedFacts.process_family_hint. When operators write a
+    # manifest they usually supply one or the other; we accept both.
+    canonical_family = _validate_manifest_family(data.get("process_family"))
+    # Free-text fallback only when no canonical was supplied. If a
+    # manifest supplies a canonical name AND a hint, the hint stays as
+    # the human-readable label; if only canonical, surface it as the
+    # hint too so the dossier reads consistently.
+    family_hint = (
+        data.get("process_family_hint")
+        or data.get("process_family")
+    )
 
     observed = ObservedFacts(
         organism=data.get("organism"),
@@ -84,12 +99,51 @@ def load_process_manifest(path: str | Path) -> ProcessIdentity:
 
     registered = RegisteredProcess(
         process_id=data.get("process_id"),
+        process_family=canonical_family,
         confidence=confidence,
         provenance=IdentityProvenance.MANIFEST,
         rationale=data.get("rationale"),
     )
 
     return ProcessIdentity(observed=observed, registered=registered)
+
+
+def _validate_manifest_family(value: str | None) -> str | None:
+    """Validate operator-supplied process_family against the closed enum.
+
+    Same guard the LLM identity extractor uses. Manifests are operator
+    intent so we trust them more than LLM output, but we still need to
+    reject typos / unknown families silently rather than poisoning the
+    dossier with strings the downstream routing doesn't understand.
+    Returns None for missing / off-whitelist values; "unknown" pick is
+    also normalised to None for a clean short-circuit on memory writes.
+    """
+    if not value or not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    try:
+        from fermdocs.domain.process_families import (
+            UNKNOWN_FAMILY_NAME,
+            load_process_families,
+        )
+        allowed = set(load_process_families().keys())
+    except Exception:
+        allowed = {
+            "penicillin_fedbatch",
+            "yeast_intracellular_product_fedbatch",
+            "yeast_aerobic_fedbatch",
+            "ecoli_recombinant_protein",
+            "melanin_batch",
+            "unknown",
+        }
+        UNKNOWN_FAMILY_NAME = "unknown"
+    if value not in allowed:
+        return None
+    if value == UNKNOWN_FAMILY_NAME:
+        return None
+    return value
 
 
 def _residual_narrative_blocks(residuals: list) -> list[NarrativeBlock]:

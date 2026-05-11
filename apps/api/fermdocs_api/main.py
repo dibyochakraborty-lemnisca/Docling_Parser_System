@@ -28,6 +28,7 @@ from fastapi import (
     BackgroundTasks,
     FastAPI,
     File,
+    Form,
     HTTPException,
     UploadFile,
     WebSocket,
@@ -107,6 +108,7 @@ def create_app() -> FastAPI:
     @app.post("/api/uploads")
     async def upload(
         files: list[UploadFile] = File(...),
+        process_family: str | None = Form(default=None),
     ) -> dict:
         """Multipart upload of one OR many files (PR-A3, frontend-redesign).
 
@@ -158,8 +160,19 @@ def create_app() -> FastAPI:
                 "zip uploads must be standalone—cannot mix .zip with other files",
             )
 
+        # Operator-supplied process_family (upload-process-family-ui).
+        # Treat empty string, "auto", "auto-detect", "unknown" all as
+        # None — those are the dropdown's "let the LLM figure it out"
+        # picks. The dossier loader's _validate_manifest_family will
+        # also enforce the closed enum, but normalising here keeps the
+        # API contract clean.
+        pf_raw = (process_family or "").strip().lower()
+        canonical_pf: str | None = None
+        if pf_raw and pf_raw not in {"auto", "auto-detect", "auto_detect", "unknown", ""}:
+            canonical_pf = pf_raw
+
         try:
-            upload = STORE.add_upload(files=triples)
+            upload = STORE.add_upload(files=triples, process_family=canonical_pf)
         except ValueError as exc:
             # add_upload raises on empty list (handled above) and
             # duplicate filenames (defense-in-depth).
@@ -170,6 +183,7 @@ def create_app() -> FastAPI:
             "filenames": list(upload.filenames),
             "content_types": list(upload.content_types),
             "size_bytes": upload.size_bytes,
+            "process_family": upload.process_family,
             # Legacy single-file keys, populated when N=1 so older
             # clients keep working. None when N>1 — callers should switch
             # to filenames/content_types.

@@ -62,6 +62,13 @@ class Upload:
     paths: list[Path]
     content_types: list[str]
     size_bytes: int
+    # Operator-supplied process family for the upload-time dropdown
+    # (upload-process-family-ui branch). None = auto-detect (LLM
+    # extractor runs as before). Closed enum value from
+    # process_families.yaml (e.g. "penicillin_fedbatch") forces the
+    # manifest path and skips LLM identity extraction. "unknown" is
+    # equivalent to None — explicit pick of "no idea, please auto-detect".
+    process_family: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -139,12 +146,17 @@ class RunStore:
         self,
         *,
         files: list[tuple[str, str, bytes]],
+        process_family: str | None = None,
     ) -> Upload:
         """Register one upload group from N files. files is a list of
         (filename, content_type, content) tuples. Atomic: writes to a
         tempdir first, only moves to the final destination on full
         success. On any failure, no Upload record is created and the
         partial tempdir is cleaned up.
+
+        `process_family`: optional operator-supplied closed-vocab name
+        from the upload-time UI dropdown. None means auto-detect. The
+        ingest pipeline will turn this into a process-manifest if set.
 
         Raises:
           ValueError("at least one file required") on empty list.
@@ -192,6 +204,7 @@ class RunStore:
             paths=paths,
             content_types=[ct for _, ct, _ in files],
             size_bytes=sum(len(c) for _, _, c in files),
+            process_family=process_family,
         )
         self._uploads[upload_id] = upload
         return upload

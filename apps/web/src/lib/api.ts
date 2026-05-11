@@ -134,19 +134,68 @@ export interface UploadResponse {
   filenames: string[];
   content_types: string[];
   size_bytes: number;
+  // Operator-supplied process family from the upload dropdown
+  // (upload-process-family-ui branch). null = auto-detect.
+  process_family: string | null;
   // Legacy single-file keys, populated when N=1, null on N>1.
   // New code reads filenames/content_types instead.
   filename: string | null;
   content_type: string | null;
 }
 
-export async function uploadFiles(files: File[]): Promise<UploadResponse> {
+// Closed enum of process_family values, mirrors process_families.yaml.
+// "auto-detect" is the sentinel for "let the LLM classify"; the API
+// normalises it to null before persistence so downstream sees None.
+export const PROCESS_FAMILY_OPTIONS: ReadonlyArray<{
+  value: string;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "auto-detect",
+    label: "Auto-detect (LLM)",
+    description: "Let the model classify from the source documents. Falls back to Unknown if no narrative is available (CSV-only).",
+  },
+  {
+    value: "penicillin_fedbatch",
+    label: "Penicillin fed-batch",
+    description: "Penicillium chrysogenum / P. rubens fed-batch with PAA precursor feed.",
+  },
+  {
+    value: "yeast_intracellular_product_fedbatch",
+    label: "Yeast — intracellular product (carotenoid, lipid, terpenoid)",
+    description: "Yeast fed-batch producing an intracellular product like β-carotene, lipid, or sterol.",
+  },
+  {
+    value: "yeast_aerobic_fedbatch",
+    label: "Yeast — aerobic fed-batch (biomass / extracellular)",
+    description: "Yeast fed-batch for biomass or extracellular product. Use when no intracellular product is the focus.",
+  },
+  {
+    value: "ecoli_recombinant_protein",
+    label: "E. coli — recombinant protein",
+    description: "E. coli expressing a recombinant protein, induced or constitutive.",
+  },
+  {
+    value: "melanin_batch",
+    label: "Melanin (batch)",
+    description: "Microbial melanin production, batch mode.",
+  },
+];
+
+export async function uploadFiles(
+  files: File[],
+  processFamily?: string | null,
+): Promise<UploadResponse> {
   if (files.length === 0) {
     throw new Error("uploadFiles called with empty list");
   }
   const fd = new FormData();
   for (const f of files) {
     fd.append("files", f);
+  }
+  if (processFamily && processFamily !== "auto-detect") {
+    fd.append("process_family", processFamily);
   }
   const r = await fetch(`${BASE}/uploads`, { method: "POST", body: fd });
   if (!r.ok) {

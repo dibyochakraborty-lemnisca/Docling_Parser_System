@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
+  PROCESS_FAMILY_OPTIONS,
   createRun,
   listRuns,
   uploadFiles,
@@ -70,6 +71,12 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [userQuestion, setUserQuestion] = useState("");
   const [files, setFiles] = useState<File[]>([]);
+  // Operator-supplied process family (upload-process-family-ui). Default
+  // "auto-detect" runs the LLM identity extractor as before; any
+  // specific pick short-circuits that and writes a manifest so the
+  // dossier carries the canonical name immediately. Critical for
+  // CSV-only uploads where the LLM extractor has nothing to read.
+  const [processFamily, setProcessFamily] = useState<string>("auto-detect");
 
   async function refreshRuns() {
     try {
@@ -110,7 +117,7 @@ export default function Home() {
     setSubmitting(true);
     setError(null);
     try {
-      const up = await uploadFiles(files);
+      const up = await uploadFiles(files, processFamily);
       // Empty question = legacy run. Trim before sending so a textarea
       // full of whitespace doesn't trip the "non-empty" gate downstream.
       const trimmed = userQuestion.trim();
@@ -157,6 +164,36 @@ export default function Home() {
               Leave empty to run as today. When provided, the system biases
               every stage toward addressing your question and reports
               whether it could answer.
+            </p>
+          </div>
+          {/* Process family selector (upload-process-family-ui).
+              Closed enum from process_families.yaml. Auto-detect runs the
+              existing LLM identity path (works on PDFs / mixed uploads).
+              An explicit pick short-circuits the LLM and writes a
+              manifest — required for CSV-only uploads where there's no
+              narrative for the model to read. */}
+          <div>
+            <label
+              htmlFor="process-family"
+              className="block text-sm font-medium mb-1"
+            >
+              Process family
+            </label>
+            <select
+              id="process-family"
+              value={processFamily}
+              onChange={(e) => setProcessFamily(e.target.value)}
+              disabled={submitting}
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            >
+              {PROCESS_FAMILY_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {PROCESS_FAMILY_OPTIONS.find((o) => o.value === processFamily)?.description}
             </p>
           </div>
           {/* File tray (PR-A3, frontend-redesign): add files one at a time,

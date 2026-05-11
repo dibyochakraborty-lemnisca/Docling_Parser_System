@@ -547,6 +547,27 @@ async def _build_bundle_from_raw(
     for p in upload.paths:
         ingest_cmd.extend(["--files", str(p.resolve())])
     ingest_cmd.extend(["--out", str(dossier_path)])
+
+    # Operator-supplied process_family from the upload dropdown
+    # (upload-process-family-ui). Writes a minimal manifest YAML next
+    # to the dossier and passes --process-manifest to the ingest CLI,
+    # which forces provenance=MANIFEST on the resulting RegisteredProcess
+    # and skips the LLM identity extractor. This is how the dropdown
+    # short-circuits the CSV-only path that otherwise can't classify
+    # families without narrative text.
+    if upload.process_family:
+        manifest_path = work_root / "_upload_manifest.yaml"
+        manifest_path.write_text(
+            f"process_family: {upload.process_family}\n"
+            f"rationale: operator-supplied at upload (UI dropdown)\n"
+            f"confidence: 1.0\n"
+        )
+        ingest_cmd.extend(["--process-manifest", str(manifest_path)])
+        _log.info(
+            "ingest: using operator-supplied process_family=%r via manifest %s",
+            upload.process_family, manifest_path,
+        )
+
     await _run_subprocess(
         ingest_cmd,
         cwd=Path(os.environ.get("FERMDOCS_REPO_ROOT", Path.cwd())),
