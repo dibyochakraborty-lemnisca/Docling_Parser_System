@@ -1,0 +1,145 @@
+[
+  {
+    "narrative_id": "2f958056-4c87-438b-b065-502726122483:N-0001",
+    "tag": "closure_event",
+    "text": "The batch was terminated at 82 h (planned 96 h) due to onset of cell death and the appearance of white cells during centrifugation.",
+    "source_locator": {
+      "page": 3,
+      "section": "narrative",
+      "paragraph_index": 27,
+      "char_offset": null
+    },
+    "run_id": "BATCH-01",
+    "time_h": 82.0,
+    "affected_variables": [
+      "viability"
+    ],
+    "confidence": 0.85,
+    "extraction_model": "gemini-3.1-pro-preview"
+  },
+  {
+    "narrative_id": "2f958056-4c87-438b-b065-502726122483:N-0002",
+    "tag": "observation",
+    "text": "During the initial batch phase, exponential growth was observed as the yeast utilized the available nutrients in the batch medium.",
+    "source_locator": {
+      "page": 3,
+      "section": "narrative",
+      "paragraph_index": 28,
+      "char_offset": null
+    },
+    "run_id": "BATCH-01",
+    "time_h": null,
+    "affected_variables": [
+      "biomass"
+    ],
+    "confidence": 0.85,
+    "extraction_model": "gemini-3.1-pro-preview"
+  },
+  {
+    "narrative_id": "2f958056-4c87-438b-b065-502726122483:N-0003",
+    "tag": "closure_event",
+    "text": "Cultivation was completed at 96 h as planned; however, white cells and partial cell death were observed during the later stages of the run.",
+    "source_locator": {
+      "page": 5,
+      "section": "narrative",
+      "paragraph_index": 42,
+      "char_offset": null
+    },
+    "run_id": "BATCH-02",
+    "time_h": 96.0,
+    "affected_variables": [
+      "viability"
+    ],
+    "confidence": 0.85,
+    "extraction_model": "gemini-3.1-pro-preview"
+  },
+  {
+    "narrative_id": "2f958056-4c87-438b-b065-502726122483:N-0004",
+    "tag": "closure_event",
+    "text": "Cultivation was terminated at 84 h due to onset of pigment loss (white cells) and signs of cell death observed during centrifugation.",
+    "source_locator": {
+      "page": 7,
+      "section": "narrative",
+      "paragraph_index": 53,
+      "char_offset": null
+    },
+    "run_id": "BATCH-03",
+    "time_h": 84.0,
+    "affected_variables": [
+      "viability"
+    ],
+    "confidence": 0.85,
+    "extraction_model": "gemini-3.1-pro-preview"
+  },
+  {
+    "narrative_id": "2f958056-4c87-438b-b065-502726122483:N-0005",
+    "tag": "closure_event",
+    "text": "Cultivation was ended at 74 h; toward the end of the run, white cells and signs of cell death were observed, indicating persistent pigment instability in late phase.",
+    "source_locator": {
+      "page": 11,
+      "section": "narrative",
+      "paragraph_index": 70,
+      "char_offset": null
+    },
+    "run_id": "BATCH-04",
+    "time_h": 74.0,
+    "affected_variables": [
+      "viability"
+    ],
+    "confidence": 0.85,
+    "extraction_model": "gemini-3.1-pro-preview"
+  },
+  {
+    "narrative_id": "2f958056-4c87-438b-b065-502726122483:N-0006",
+    "tag": "intervention",
+    "text": "After 24 hours of fermentation, 200 mL of Isopropyl Myristate (IPM) was added directly to the reactor.",
+    "source_locator": {
+      "page": 13,
+      "section": "narrative",
+      "paragraph_index": 83,
+      "char_offset": null
+    },
+    "run_id": "BATCH-05",
+    "time_h": 24.0,
+    "affected_variables": [],
+    "confidence": 0.85,
+    "extraction_model": "gemini-3.1-pro-preview"
+  },
+  {
+    "narrative_id": "2f958056-4c87-438b-b065-502726122483:N-0007",
+    "tag": "closure_event",
+    "text": "Cultivation was carried out up to 120 h; after ~108 h, a slight decline in OD/WCW was observed and late-phase pigment loss/cell death occurred later than in earlier batches.",
+    "source_locator": {
+      "page": 14,
+      "section": "narrative",
+      "paragraph_index": 84,
+      "char_offset": null
+    },
+    "run_id": "BATCH-05",
+    "time_h": 120.0,
+    "affected_variables": [
+      "biomass",
+      "viability"
+    ],
+    "confidence": 0.85,
+    "extraction_model": "gemini-3.1-pro-preview"
+  },
+  {
+    "narrative_id": "2f958056-4c87-438b-b065-502726122483:N-0008",
+    "tag": "closure_event",
+    "text": "Cultivation was carried out up to 120 h; after ~114 h, a slight decrease in OD/WCW was observed, with culture stability largely maintained up to the final time point.",
+    "source_locator": {
+      "page": 17,
+      "section": "narrative",
+      "paragraph_index": 99,
+      "char_offset": null
+    },
+    "run_id": "BATCH-06",
+    "time_h": 120.0,
+    "affected_variables": [
+      "biomass"
+    ],
+    "confidence": 0.85,
+    "extraction_model": "gemini-3.1-pro-preview"
+  }
+]

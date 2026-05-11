@@ -1,0 +1,133 @@
+{
+  "meta": {
+    "schema_version": "1.0",
+    "diagnosis_version": "v1.0.0",
+    "diagnosis_id": "c0c024bc-4058-4bf9-a43d-4625aefbe5da",
+    "supersedes_characterization_id": "2f958056-4c87-438b-b065-502726122483",
+    "generation_timestamp": "2026-05-03T15:12:08.890525",
+    "model": "claude-opus-4-7",
+    "provider": "gemini",
+    "error": null
+  },
+  "failures": [
+    {
+      "claim_id": "D-F-0001",
+      "summary": "Premature termination and cell death due to pigment loss (white cells) observed across multiple runs (RUN-0001 at 82h, RUN-0003 at 84h, RUN-0004 at 74h).",
+      "cited_finding_ids": [],
+      "cited_narrative_ids": [
+        "2f958056-4c87-438b-b065-502726122483:N-0001",
+        "2f958056-4c87-438b-b065-502726122483:N-0004",
+        "2f958056-4c87-438b-b065-502726122483:N-0005"
+      ],
+      "affected_variables": [
+        "viability"
+      ],
+      "confidence": 0.85,
+      "confidence_basis": "cross_run",
+      "domain_tags": [
+        "viability",
+        "metabolism"
+      ],
+      "provenance_downgraded": false,
+      "severity": "critical",
+      "cited_trajectories": [],
+      "time_window": null
+    },
+    {
+      "claim_id": "D-F-0002",
+      "summary": "Late-stage cell death and pigment loss observed in RUN-0002 (completed at 96h) and RUN-0005 (after ~108h).",
+      "cited_finding_ids": [],
+      "cited_narrative_ids": [
+        "2f958056-4c87-438b-b065-502726122483:N-0003",
+        "2f958056-4c87-438b-b065-502726122483:N-0007"
+      ],
+      "affected_variables": [
+        "viability"
+      ],
+      "confidence": 0.85,
+      "confidence_basis": "cross_run",
+      "domain_tags": [
+        "viability",
+        "metabolism"
+      ],
+      "provenance_downgraded": false,
+      "severity": "major",
+      "cited_trajectories": [],
+      "time_window": null
+    }
+  ],
+  "trends": [
+    {
+      "claim_id": "D-T-0001",
+      "summary": "Addition of 200 mL Isopropyl Myristate (IPM) at 24h in RUN-0005 delayed the onset of pigment loss and cell death until ~108h.",
+      "cited_finding_ids": [],
+      "cited_narrative_ids": [
+        "2f958056-4c87-438b-b065-502726122483:N-0006",
+        "2f958056-4c87-438b-b065-502726122483:N-0007"
+      ],
+      "affected_variables": [
+        "viability",
+        "biomass"
+      ],
+      "confidence": 0.85,
+      "confidence_basis": "cross_run",
+      "domain_tags": [
+        "process_control",
+        "viability"
+      ],
+      "provenance_downgraded": false,
+      "direction": "plateau",
+      "cited_trajectories": [],
+      "time_window": null
+    },
+    {
+      "claim_id": "D-T-0002",
+      "summary": "RUN-0006 maintained culture stability up to 120h with only a slight decrease in OD/WCW after 114h.",
+      "cited_finding_ids": [],
+      "cited_narrative_ids": [
+        "2f958056-4c87-438b-b065-502726122483:N-0008"
+      ],
+      "affected_variables": [
+        "biomass"
+      ],
+      "confidence": 0.85,
+      "confidence_basis": "cross_run",
+      "domain_tags": [
+        "growth",
+        "viability"
+      ],
+      "provenance_downgraded": false,
+      "direction": "decreasing",
+      "cited_trajectories": [],
+      "time_window": null
+    }
+  ],
+  "analysis": [
+    {
+      "claim_id": "D-A-0001",
+      "summary": "Severe data truncation in observations.csv compared to narrative reports: RUN-0001 ends at 48h (reported 82h), RUN-0002 ends at 0h (reported 96h), RUN-0004 ends at 60h (reported 74h), and RUN-0006 ends at 96h (reported 120h).",
+      "cited_finding_ids": [],
+      "cited_narrative_ids": [
+        "2f958056-4c87-438b-b065-502726122483:N-0001",
+        "2f958056-4c87-438b-b065-502726122483:N-0003",
+        "2f958056-4c87-438b-b065-502726122483:N-0005",
+        "2f958056-4c87-438b-b065-502726122483:N-0008"
+      ],
+      "affected_variables": [
+        "od600_au",
+        "wcw_g_l",
+        "do_pct_saturation",
+        "feed_rate_l_per_h"
+      ],
+      "confidence": 0.85,
+      "confidence_basis": "cross_run",
+      "domain_tags": [
+        "data_quality"
+      ],
+      "provenance_downgraded": false,
+      "kind": "data_quality_caveat"
+    }
+  ],
+  "open_questions": [],
+  "narrative": "The fermentation campaign experienced recurrent issues with late-stage cell death and pigment loss (appearance of white cells) across multiple runs. RUN-0001, RUN-0003, and RUN-0004 were prematurely terminated between 74h and 84h due to these issues. RUN-0002 and RUN-0005 also exhibited these symptoms but reached or neared their planned durations. An intervention in RUN-0005 (addition of 200 mL Isopropyl Myristate at 24h) successfully delayed the onset of cell death and pigment loss until ~108h. RUN-0006 showed the best stability, maintaining culture viability up to 120h with only a slight decrease in biomass after 114h. Notably, the numerical data provided in the observations dataset is severely truncated compared to the narrative reports, with RUN-0002 missing all data after 0h, and several other runs missing their final 14-34 hours of data, preventing quantitative analysis of the cell death events."
+}

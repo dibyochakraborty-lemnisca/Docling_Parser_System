@@ -11,11 +11,12 @@ document.
 
 ```text
 source files
-  -> ingest
-  -> bundle
-  -> characterize
-  -> diagnose
-  -> hypothesize
+  -> ingest                      (raw -> dossier)
+  -> bundle                      (dossier + characterization + diagnosis)
+  -> characterize                (deterministic-first metrics)
+  -> diagnose                    (observational ReAct loop)
+  -> hypothesize                 (multi-agent causal debate)
+       <-> MemoryBackend         (cross-run priors, optional)
   -> local API/web app
 ```
 
@@ -28,28 +29,39 @@ and makes the output inspectable after every stage.
 ```text
 src/fermdocs
   Parsing, header mapping, unit normalization, storage, dossier creation,
-  process identity, PDF segmentation, narrative extraction, and bundle I/O.
+  process identity (closed-vocab process_family), PDF segmentation,
+  narrative extraction, and bundle I/O.
 
 src/fermdocs_characterize
   Deterministic trajectory construction, metric catalog execution, anomaly
-  detection, narrative observation materialization, optional LLM trajectory
-  analysis, and validation.
+  detection (instrument change, h0 outlier, header inconsistency, scale
+  change, bioreactor change), narrative observation materialization,
+  optional LLM trajectory analysis, and validation (physicality bounds +
+  closed-vocab process_family routing).
 
 src/fermdocs_diagnose
   Observational diagnosis agent. It uses a bounded ReAct loop over bundle
   tools and emits failures, trends, analyses, and open questions.
 
 src/fermdocs_hypothesis
-  Multi-agent causal hypothesis stage. It contains the state machine,
-  specialist agents, typed projector views, synthesis/critique/judgment,
-  HITL resume, follow-up, chart specs, and Plotly rendering.
+  Multi-agent causal hypothesis stage. State machine, specialist agents,
+  typed projector views, synthesis/critique/judgment, HITL resume,
+  follow-up, chart specs, Plotly rendering, lessons summarizer, and
+  cross-run memory wire-up.
+
+src/fermdocs_memory
+  MemoryBackend Protocol with Noop / Stub / Synap adapters. Tier 1
+  (lessons memory) is live; Tiers 2-5 are scaffolded but not wired.
 
 apps/api
-  Local FastAPI wrapper around the full pipeline.
+  Local FastAPI wrapper around the full pipeline. Reads FERMDOCS_MEMORY
+  to construct the memory backend per-run.
 
 apps/web
-  Next.js UI for upload, run progress, websocket events, hypotheses, charts,
-  follow-up, and print-to-PDF.
+  Next.js UI for upload, run progress, websocket events, hypotheses,
+  charts, follow-up, and print-to-PDF. Editorial Scientific redesign
+  in progress on `frontend-styling` branch (Phase 1 typography +
+  color tokens are live).
 ```
 
 ## Artifact Flow
@@ -68,6 +80,13 @@ Supported user-facing inputs:
 CSV/XLSX/PDF inputs run the full pipeline. Zip inputs are treated as existing
 bundles and skip directly to hypothesis.
 
+**Operator-supplied process family.** The upload UI exposes a closed-vocab
+dropdown sourced from `src/fermdocs/schema/process_families.yaml`. When the
+operator picks anything other than "Auto-detect", the API writes a manifest
+YAML next to the upload and passes `--process-manifest` to ingest. This
+bypasses the LLM identity extractor entirely — required for CSV-only
+bundles where the LLM has no narrative to read.
+
 ### 2. Dossier
 
 The ingest stage emits a dossier JSON. It is the first downstream artifact and
@@ -81,7 +100,12 @@ Important ingest principles:
 - Source material that does not map cleanly is preserved as residual data.
 - Provenance is part of the data model, not a debug feature.
 - Process identity separates observed identity from registered identity.
-- Operator manifests can override LLM identity extraction.
+- **`RegisteredProcess.process_family` is the canonical key** downstream
+  routing reads (memory layer, catalog runner). Sourced either from the
+  closed-enum LLM call or from an operator manifest.
+- Operator manifests override LLM identity extraction. Manifest writes
+  `provenance=MANIFEST` on both observed and registered facts so the
+  source is auditable.
 
 ### 3. Bundle
 
@@ -92,7 +116,7 @@ Typical structure:
 ```text
 bundle_<id>/
 |-- meta.json
-|-- dossier.json
+|-- dossier.json                 includes registered.process_family
 |-- characterization/
 |   |-- characterization.json
 |   |-- observations.csv
@@ -123,11 +147,17 @@ expected-vs-observed summaries
 facts graph
 open questions
 kinetic estimates
+metadata anomalies     instrument-change, h0-outlier, header-inconsistency,
+                       scale-change, bioreactor-change (all deterministic)
 ```
 
 The stage is deliberately deterministic-first. Metric catalog execution,
 toolkit functions, robust statistics, metadata anomaly detectors, product
 KPIs, and physicality validators run before optional LLM analysis.
+
+Product-family-specific KPI routing reads `RegisteredProcess.process_family`
+to select the right adapters from `process_families.yaml` (e.g. P1-P5
+penicillin KPIs vs P_INTRACELLULAR_YIELD for yeast carotenoid).
 
 ### 5. Diagnosis Output
 
@@ -160,17 +190,107 @@ alternatives, exposes uncertainty, and produces actionable recommendations.
 The stage emits:
 
 ```text
-final hypotheses
+final hypotheses                with actionable_recommendation + chart_specs
 rejected hypotheses
 open questions
 debate summary
 token report
-global.md event log path
+global.md event log path        canonical human-readable log
 Plotly chart JSON
+LessonsSummarizedEvent          structured Lesson[] for memory persistence
 ```
 
 `global.md` is the canonical human-readable event log. The JSON output is the
 machine contract.
+
+### 7. Memory Layer (Phase 1)
+
+`src/fermdocs_memory` ships three Protocol implementations:
+
+```text
+NoopBackend     write no-op; fetch returns []. Default; preserves byte-
+                identical behavior to pre-memory-layer fermdocs.
+
+StubBackend     in-memory dict; substring ranking. For unit tests.
+
+SynapBackend    wraps maximem_synap.MaximemSynapSDK. Async-to-sync via
+                a dedicated event-loop thread (the SDK is async; the
+                Protocol is sync). Maps MemoryRecord -> sdk.memories.create:
+                  document     <- record.summary
+                  document_id  <- record.memory_id (idempotency key)
+                  user_id      <- record.process_family
+                  customer_id  <- record.tenant_id
+                  metadata     <- organism, tags, provenance, etc.
+                Retrieval via sdk.user.context.fetch returns 5 typed
+                buckets (facts, preferences, episodes, emotions,
+                temporal_events) which we flatten into MemoryRecords.
+                Client-side filters on organism / variables_overlap /
+                finding_classes_overlap (Synap doesn't filter on metadata).
+                Failure absorption: any SDK exception during fetch
+                returns []; during write logs + skips. Memory failures
+                never break runs.
+```
+
+**Frozen Protocol contract (`src/fermdocs_memory/base.py`):**
+
+```python
+class MemoryBackend(Protocol):
+    def write(self, record: MemoryRecord) -> None: ...
+    def fetch(self, query: MemoryQuery) -> list[MemoryRecord]: ...
+    def supersede(self, memory_id: str, by: str) -> None: ...
+```
+
+**Hard invariants:**
+
+- `MemoryQuery(kind="lesson", process_family=None)` raises `ValueError` at
+  `validate_query()` time. Cross-strain lesson retrieval is structurally
+  impossible without an explicit opt-in.
+- `MemoryRecord` is frozen; `provenance` is stored as `MappingProxyType` so
+  the audit trail can't be mutated post-construction.
+- Tenant isolation lives in `MemoryRecord.tenant_id`. SynapBackend routes
+  to per-tenant Synap Customer scope.
+
+**Write timing (D6 + D10):**
+
+```text
+during run    lessons buffered in RunnerState
+HITL pause    buffer serialized to <bundle>/lesson_buffer.json
+HITL resume   buffer reloaded
+clean exit    {consensus_reached, no_topics_left} -> memory.write per Lesson
+failed exit   {budget_exhausted, max_turns_reached, exception} -> SKIP
+```
+
+**Retrieval at view-build (in `projector.py` via `LiveHooks`):**
+
+```text
+_fetch_cross_run(topic_summary) -> LessonsDigest | None
+  cached per topic_summary within a turn so 4 view-build sites share
+  one Synap round-trip. process_family from hyp_input drives the
+  user_id scope. semantic_query = topic.summary.
+```
+
+**Prompt surfaces (synthesizer + critic):**
+
+```text
+SYNTHESIZER_INVARIANTS includes "CROSS-RUN LESSONS (memory-layer Phase 1)":
+  When view.cross_run_lessons is populated, treat each lesson as a
+  prior — not ground truth. Bundle evidence overrides. Surface
+  contradictions explicitly.
+
+CRITIC_INVARIANTS includes "[MEMORY-AXIS]":
+  Reject when a hypothesis cites a prior lesson but the cited evidence
+  is from a different run/strain.
+```
+
+**Deferred tiers (with explicit triggers in `plans/2026-05-10-memory-layer.md`):**
+
+```text
+Tier 2  ratified-hypothesis store      after Phase 1 has 2 weeks of data
+Tier 3  rejected-hypothesis store      bundle with Tier 2
+Tier 4  strain-conditional KPI priors  when n >= 15 runs per family
+Tier 5  human-correction memory        first time HITL feedback fails to
+                                       apply on a follow-up run
+```
 
 ## Runtime State Machine
 
@@ -226,11 +346,13 @@ There are two interactive modes:
 ```text
 answers/resume
   The run pauses on open questions. User answers are attached and the same
-  debate resumes.
+  debate resumes. Lesson buffer survives the pause via
+  <bundle>/lesson_buffer.json.
 
 follow-up
   The bundle is frozen. A new user question overwrites user_question.json and
-  only the hypothesis stage runs again.
+  only the hypothesis stage runs again. Memory layer reads/writes are
+  per-followup-run, not per-original-run.
 ```
 
 Diagnosis open questions intentionally do not include `re_run_from`.
@@ -246,7 +368,7 @@ Supported chart families include:
 
 ```text
 time_series_overlay
-scatter_correlation
+scatter_correlation       includes weak-n bootstrap CI badge for n < 8
 faceted_time_series
 ```
 
@@ -254,12 +376,46 @@ This split matters: the LLM can request the chart it needs, but rendering,
 data lookup, regression details, and JSON shape stay deterministic and
 testable.
 
+## Frontend (Editorial Scientific)
+
+The web UI is being redesigned in the Editorial Scientific direction —
+Quanta/Nature register, generous whitespace, single forest accent,
+asymmetric two-column grid.
+
+Type stack (Phase 1, live as of `frontend-styling`):
+
+```text
+Fraunces       variable serif, display + body via opsz axis
+               (one family doing two jobs, more refined than three)
+Hanken Grotesk UI chrome, free Söhne alternative
+```
+
+Color palette (CSS variables in `globals.css`):
+
+```text
+--color-paper          #FBFAF7    page background
+--color-paper-elevated #FFFFFF    card surfaces
+--color-ink            #0F1B2D    body text
+--color-ink-secondary  #3D4A5C    metadata
+--color-ink-muted      #6B7280    footnotes
+--color-rule           #E5E2DA    hairline dividers
+--color-accent         #1B4D3E    forest, used <=3x per screen
+--color-accent-soft    #E8EFE8    pull-quote background tint
+```
+
+Dark mode was dropped for v1 — editorial designs are intrinsically light-first.
+
+Phase 2 (layout overhaul: editorial masthead, asymmetric hypothesis cards,
+drop caps, pull-quote recommendations) and Phase 3 (editorial chart
+styling: endpoint labels instead of legends) are scheduled. Full design
+doc at `plans/2026-05-11-frontend-redesign-editorial.md`.
+
 ## API and Web Architecture
 
 The API is a local FastAPI service:
 
 ```text
-POST /api/uploads
+POST /api/uploads         form fields: files[], process_family (optional)
 POST /api/runs
 GET  /api/runs
 GET  /api/runs/{id}
@@ -271,10 +427,11 @@ POST /api/runs/{id}/followup
 Raw file runs execute:
 
 ```text
-fermdocs ingest
+fermdocs ingest                      with --process-manifest if operator
+                                     supplied a process_family
   -> fermdocs-characterize --bundle
   -> fermdocs-diagnose --bundle
-  -> in-process hypothesis run
+  -> in-process hypothesis run       with memory backend per FERMDOCS_MEMORY
 ```
 
 Bundle zip runs execute:
@@ -299,18 +456,25 @@ The most important contracts are:
 ```text
 fermdocs.domain.models
   Golden schema, parsed tables, observations, residual payloads, dossier,
-  document maps, process identity.
+  document maps, process identity (RegisteredProcess.process_family =
+  closed enum from process_families.yaml).
 
 fermdocs_characterize.schema
   CharacterizationOutput, Finding, Trajectory, NarrativeObservation, facts,
-  expected-vs-observed, timeline, open questions.
+  expected-vs-observed, timeline, open questions, metadata anomalies.
 
 fermdocs_diagnose.schema
   DiagnosisOutput, failures, trends, analyses, diagnosis open questions.
 
 fermdocs_hypothesis.schema
   HypothesisInput, topics, facets, hypotheses, critiques, judgments,
-  HITL records, open questions, chart specs, final output.
+  HITL records, open questions, chart specs, final output. Lesson model
+  with stable lesson_id (memory-layer Phase 1). LessonsDigest carries
+  structured lessons list alongside the legacy digest string.
+
+fermdocs_memory.base
+  MemoryRecord, MemoryQuery, MemoryBackend Protocol, MemoryKind enum.
+  validate_query() enforces the D7 cross-strain guard.
 ```
 
 Prefer extending these schemas deliberately over passing loose dictionaries
@@ -331,6 +495,14 @@ Important invariants:
 - Hypothesis agents should not import each other directly except through
   approved shared base abstractions.
 - Runtime modules should not read from `audit/`.
+- **Memory is opt-in**: NoopBackend default; SynapBackend only when
+  `FERMDOCS_MEMORY=synap`.
+- **Memory failures never break runs**: fetch returns []; write logs +
+  skips. The D6 invariant that failed runs don't write is enforced in
+  the runner's `_persist_lessons_to_memory` helper.
+- **Closed-vocab process_family**: the enum is enforced at the LLM
+  schema layer (Gemini structured output), at the manifest loader,
+  and at the memory query layer.
 
 Useful scripts:
 
@@ -345,11 +517,14 @@ Current provider reality:
 
 ```text
 ingest mapper:        Gemini, Anthropic, fake
+identity extractor:   Gemini, Anthropic (both with closed-enum schema)
 unit normalizer:      rule-based plus optional Gemini/Anthropic fallback
 narrative extraction: Gemini/Anthropic paths exist in ingest code
 characterization:     deterministic plus optional Gemini trajectory analyzer
 diagnosis:            Gemini or Anthropic clients, fake/none error path
 hypothesis:           Gemini live path
+memory:               Synap (managed; embedding handled by Synap internally)
+embeddings (memory):  Synap-managed (no separate provider config needed)
 ```
 
 Prompt composition in the hypothesis package is cache-friendly: stable policy
@@ -387,13 +562,18 @@ The project uses layered testing:
 ```text
 unit tests
   Fast deterministic checks for parsing, schema validation, metric toolkit,
-  bundle behavior, agent contracts, chart generation, and API offline paths.
+  bundle behavior, agent contracts, chart generation, API offline paths,
+  memory backends (Noop + Stub + SynapBackend with mocked SDK).
 
 integration tests
-  Pipeline-level tests with fakes or fixtures.
+  Pipeline-level tests with fakes or fixtures. Live Synap tests under
+  tests/integration/memory/ are gated on SYNAP_API_KEY in env and skip
+  cleanly when the key is absent.
 
 evals
-  Scripted characterization, diagnosis, and hypothesis reliability fixtures.
+  Scripted characterization, diagnosis, and hypothesis reliability
+  fixtures. Memory-layer eval harness (Phase 1 D9) for measuring
+  prompt regression with priors injected vs disabled.
 
 live_llm tests
   Opt-in tests that require API keys and cost tokens.
@@ -405,7 +585,8 @@ Common commands:
 
 ```bash
 pytest tests/unit -v
-pytest tests -v
+pytest tests/unit/memory tests/unit/hypothesis/memory -v
+pytest tests/integration/memory -v           # requires SYNAP_API_KEY
 cd apps/web && npm run typecheck && npm run build
 ```
 
@@ -414,14 +595,19 @@ cd apps/web && npm run typecheck && npm run build
 Current known limitations:
 
 - The API run store is not durable across backend restarts.
-- No auth, tenants, quotas, secrets management, or production deployment
-  story is implemented.
+- No auth, tenants (beyond logical tenant_id on memory), quotas, secrets
+  management, or production deployment story is implemented.
 - Full raw ingest requires Postgres.
 - PDF quality depends on Docling extraction and source layout.
 - Browser print is the current PDF export path.
 - Hypothesis live execution is Gemini-only today.
-- Some historical docs and package docstrings still reflect earlier stages of
-  the project.
+- Memory layer uses Synap (US-hosted). Customers requiring data residency
+  would need an alternative backend (Postgres+pgvector adapter is
+  scoped in the plan but not implemented).
+- Synap dashboard's Memories panel is a mock-data preview; live records
+  are inspectable via the SDK only.
+- Some historical docs and package docstrings still reflect earlier stages
+  of the project.
 
 ## Extension Guidance
 
@@ -436,6 +622,19 @@ src/fermdocs/schema/golden_schema.yaml
 Add real observed header examples. Examples are usually more useful to the
 mapper than long prose descriptions.
 
+### Adding a Process Family
+
+Edit `src/fermdocs/schema/process_families.yaml`. The Gemini structured-output
+schema and the manifest loader both read this dynamically — no other code
+change required. The upload UI dropdown picks up the new family automatically
+via `PROCESS_FAMILY_OPTIONS` in `apps/web/src/lib/api.ts` (add a readable
+label there).
+
+If the new family needs different KPI routing (product_variable,
+precursor_variables, intracellular_product_variable, overflow_byproducts),
+add those fields to the YAML entry. The catalog runner adapters will pick
+them up.
+
 ### Adding a Characterization Metric
 
 Add a deterministic toolkit function, register it in the metric catalog, and
@@ -447,6 +646,15 @@ and hypothesis views rely on those metric IDs.
 Add the specialist, projector view rules, prompts, schema/test coverage, and
 then introduce deterministic top-K specialist routing. Do not add routing
 while the specialist set remains the current fixed three.
+
+### Adding a Memory Backend
+
+Implement `MemoryBackend` Protocol in a new file under `src/fermdocs_memory/`.
+Wire it into `_build_memory_backend()` in `apps/api/fermdocs_api/runner_pipeline.py`
+behind a new `FERMDOCS_MEMORY=...` value. The Protocol's hard guarantees
+(D7 raise, frozen records, write absorption) are enforced by `validate_query()`
+and the runner's `_persist_lessons_to_memory` — your adapter just implements
+the three Protocol methods.
 
 ### Adding a Provider
 
@@ -468,14 +676,14 @@ Treat bundle schema changes as compatibility work:
 When changing the system, ask which boundary owns the behavior:
 
 ```text
-raw extraction or provenance?          src/fermdocs
-deterministic observations/findings?   src/fermdocs_characterize
-observational summary?                 src/fermdocs_diagnose
-causal mechanism debate?               src/fermdocs_hypothesis
-upload/run orchestration?              apps/api
-human workflow and display?            apps/web
+raw extraction or provenance?               src/fermdocs
+deterministic observations/findings?        src/fermdocs_characterize
+observational summary?                      src/fermdocs_diagnose
+causal mechanism debate?                    src/fermdocs_hypothesis
+cross-run priors / memory?                  src/fermdocs_memory
+upload/run orchestration?                   apps/api
+human workflow and display?                 apps/web
 ```
 
 Keeping that separation is what lets the system evolve without every agent
 and UI surface becoming coupled to every upstream implementation detail.
-
