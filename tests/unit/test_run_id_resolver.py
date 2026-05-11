@@ -124,6 +124,120 @@ def test_column_strategy_returns_none_when_no_columns():
     assert s.resolve(headers=[], rows=[], filename=None, manifest_run_id=None) is None
 
 
+# ---------- ColumnStrategy: per-row-identifier guard (carotenoid regression) ----------
+
+
+def test_column_strategy_rejects_time_column_as_run_id():
+    """Carotenoid PDF regression: a single-fermentation timecourse table
+    with a TIME column whose values [0, 6, 12, 18, 24, ...] are integer-shaped
+    and all distinct. The old scorer accepted it (ratio = 1.0 ≤ 1.5),
+    producing 21 fake one-point "runs" instead of one trajectory.
+
+    The per-row-identifier guard must reject it. Without a header hint and
+    with N distinct values across N rows, this is not a run-id.
+    """
+    headers = ["TIME", "OD", "WCW", "DO"]
+    rows = [
+        [0, 0.8, 3.2, 100.0],
+        [6, 1.5, 6.4, 95.0],
+        [12, 4.2, 18.0, 80.0],
+        [18, 12.0, 51.0, 60.0],
+        [24, 28.0, 119.0, 45.0],
+        [48, 80.0, 340.0, 35.0],
+        [72, 180.0, 765.0, 30.0],
+        [96, 250.0, 1062.0, 26.0],
+        [108, 254.0, 1082.0, 25.5],
+        [120, 296.0, 1257.0, 95.1],
+    ]
+    s = ColumnStrategy()
+    r = s.resolve(headers=headers, rows=rows, filename=None, manifest_run_id=None)
+    assert r is None, (
+        "TIME column was picked as run-id; per-row-identifier guard failed."
+        " Each row would become its own 'run', destroying trajectory structure."
+    )
+
+
+def test_column_strategy_rejects_monotonic_distinct_column():
+    """A row-index / sequence column (1, 2, 3, 4, ... — strictly increasing,
+    all distinct) is never a run-id. The monotonic-and-all-distinct guard
+    catches this even when the integer-shape check would pass.
+    """
+    headers = ["row_num", "biomass"]
+    rows = [[1, 0.5], [2, 1.2], [3, 4.5], [4, 12.0], [5, 28.0], [6, 60.0]]
+    s = ColumnStrategy()
+    r = s.resolve(headers=headers, rows=rows, filename=None, manifest_run_id=None)
+    assert r is None
+
+
+def test_column_strategy_keeps_summary_table_when_header_hints():
+    """Case 3 preservation: a summary table with one row per run, where
+    the run-id column has a header hint. Even though every value is
+    distinct (5 runs, 5 rows → ratio 1.0), the header_hint vouches for
+    the column and the per-row-identifier guard does NOT fire.
+    """
+    headers = ["Batch_ref", "FinalYield", "FinalTime"]
+    rows = [
+        ["B1", 12.5, 96.0],
+        ["B2", 14.2, 108.0],
+        ["B3", 11.8, 96.0],
+        ["B4", 13.9, 102.0],
+    ]
+    s = ColumnStrategy()
+    r = s.resolve(headers=headers, rows=rows, filename=None, manifest_run_id=None)
+    assert r is not None
+    assert r.column_idx == 0
+
+
+def test_column_strategy_rejects_garbled_string_id_column():
+    """Carotenoid feed-rate table regression: Docling extracted time-range
+    header strings (e.g. '103→ 120', '14 →20') into the column data, and
+    the old scorer happily picked that as the run-id (46 fake runs of
+    garbled strings). With most rows distinct and no header hint, the
+    per-row-identifier guard must reject.
+    """
+    headers = ["interval", "feed_rate"]
+    rows = [
+        ["14 →20", 1.2],
+        ["20 →26", 1.5],
+        ["26 →30", 2.0],
+        ["30 →75", 3.0],
+        ["75 →91", 5.0],
+        ["91 →103", 8.0],
+        ["103→ 120", 15.0],
+    ]
+    s = ColumnStrategy()
+    r = s.resolve(headers=headers, rows=rows, filename=None, manifest_run_id=None)
+    assert r is None
+
+
+def test_resolver_chain_falls_through_to_synthetic_on_carotenoid_shape():
+    """End-to-end chain check: a wide single-fermentation table with no
+    explicit run-id column should resolve to a single synthetic run-id
+    (one fermentation per file), not 21 one-point runs.
+    """
+    resolver = RunIdResolver()
+    headers = ["TIME", "OD", "WCW", "DO"]
+    # Floats with decimals so _looks_like_id_column rejects them as
+    # measurements (matches what a real PDF table looks like).
+    rows = [
+        [t, round(t * 2.51 + 0.3, 2), round(t * 9.87 + 0.5, 2), round(99.5 - t * 0.55, 2)]
+        for t in range(0, 121, 6)
+    ]
+    r = resolver.resolve(
+        headers=headers,
+        rows=rows,
+        filename="Carotenoid_batch_report.pdf",
+        manifest_run_id=None,
+    )
+    # FilenameStrategy matches "batch" prefix → RUN-NNNN; if filename had
+    # no token, it'd fall through to synthetic. Either way: single run-id.
+    assert r.strategy in ("filename", "synthetic"), (
+        f"Expected fall-through to filename/synthetic, got {r.strategy} "
+        f"(column_idx={r.column_idx}, rationale={r.rationale!r})"
+    )
+    assert r.value.startswith("RUN-")
+
+
 # ---------- FilenameStrategy ----------
 
 
