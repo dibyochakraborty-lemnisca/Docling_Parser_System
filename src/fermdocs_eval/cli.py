@@ -18,12 +18,17 @@ def cli() -> None:
 @cli.command("e1")
 @click.option("--bundle", required=True, type=click.Path(exists=True))
 @click.option("--question", required=True, help="Tailored user question for this bundle.")
+@click.option("--process-family", default="penicillin_fedbatch", help="Process family for memory queries.")
 @click.option("--out", default="eval/results/e1.jsonl")
-def run_e1(bundle: str, question: str, out: str) -> None:
+@click.option("--no-score", is_flag=True, help="Skip LLM specificity scoring.")
+def run_e1(bundle: str, question: str, process_family: str, out: str, no_score: bool) -> None:
     """E1 memory mechanism: cold then warm run on the same bundle."""
     from fermdocs_eval.suites import e1
 
-    e1.run(bundle_dir=bundle, question=question, out_path=out)
+    e1.run(
+        bundle_dir=bundle, question=question, process_family=process_family,
+        out_path=out, score_specificity=not no_score,
+    )
 
 
 @cli.command("e2")
