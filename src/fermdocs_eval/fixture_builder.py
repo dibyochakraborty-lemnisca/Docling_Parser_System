@@ -54,6 +54,11 @@ class DefectSpec:
         gets a chance to fire.
     mutation_kind: which mutation function to apply. None for clean fixtures.
     mutation_params: kwargs for the mutation function.
+    memory_seed: optional list of (process_family, lesson_text) pairs that
+        the runner pre-populates into a StubBackend before invoking the
+        pipeline. Used for memory-axis fixtures where the planted defect
+        is a misapplied prior. process_family MISMATCH is the defect:
+        e.g., seed a "yeast" lesson and run on an "indpensim" bundle.
     notes: free-form authoring notes; carried into the fixture's
         defect_spec.json for traceability.
     """
@@ -64,6 +69,7 @@ class DefectSpec:
     leading_question: str
     mutation_kind: str | None = None
     mutation_params: dict = field(default_factory=dict)
+    memory_seed: tuple = ()  # ((process_family, lesson_text), ...)
     notes: str = ""
 
 
@@ -110,6 +116,7 @@ def build_fixture(
             "leading_question": spec.leading_question,
             "mutation_kind": spec.mutation_kind,
             "mutation_params": spec.mutation_params,
+            "memory_seed": [list(s) for s in spec.memory_seed],
             "notes": spec.notes,
         },
     )
@@ -252,10 +259,98 @@ def _mut_drop_narratives(bundle_dir: Path) -> None:
 
 
 def _mut_noop(bundle_dir: Path) -> None:
-    """Clean fixtures and axes that are driven entirely by leading_question
-    (memory-axis, actionability-axis, question-axis) use this no-op so the
-    template is unchanged. The defect lives in the question, not the bundle."""
+    """Clean fixtures and axes driven entirely by leading_question use this
+    no-op so the template is unchanged. The defect lives in the question,
+    not the bundle."""
     return None
+
+
+def _mut_plant_weak_n(bundle_dir: Path, *, n: int = 4, target_count: int = 2) -> None:
+    """Robustness-axis: plant `weak_n_flag` on a few existing findings.
+
+    Picks the first `target_count` findings whose statistics dict is non-empty
+    and overlays `weak_n_flag=True` and `n=<n>`. Critic should fire
+    [robustness-axis] when the synthesizer cites these without caveats.
+    """
+    char_path = bundle_dir / "characterization" / "characterization.json"
+    char = _read_json(char_path)
+    planted = 0
+    for f in char.get("findings", []):
+        if planted >= target_count:
+            break
+        stats = f.get("statistics")
+        if stats is None:
+            f["statistics"] = {"weak_n_flag": True, "n": n}
+        elif isinstance(stats, dict):
+            stats["weak_n_flag"] = True
+            stats["n"] = n
+        planted += 1
+    _write_json(char_path, char)
+
+
+def _mut_plant_symmetry_violation(bundle_dir: Path, *, target_count: int = 2) -> None:
+    """Tool-gap-axis: plant `symmetry_violation` on a few findings.
+
+    Critic should fire [tool-gap-axis] if the synthesizer punts to
+    `question_answered: insufficient_data` citing these findings.
+    """
+    char_path = bundle_dir / "characterization" / "characterization.json"
+    char = _read_json(char_path)
+    planted = 0
+    for f in char.get("findings", []):
+        if planted >= target_count:
+            break
+        stats = f.get("statistics")
+        if stats is None:
+            f["statistics"] = {"symmetry_violation": True}
+        elif isinstance(stats, dict):
+            stats["symmetry_violation"] = True
+        planted += 1
+    _write_json(char_path, char)
+
+
+def _mut_plant_metadata_anomaly(bundle_dir: Path, *, run_ids: tuple[str, ...] = ()) -> None:
+    """Metadata-axis: plant a metadata_anomaly finding.
+
+    Adds a synthetic Finding with type=trajectory_pattern and
+    statistics.pattern_kind='metadata_anomaly' so the metadata-axis
+    rule has something to anchor against. If run_ids is empty, uses
+    the run_ids from the first existing finding.
+    """
+    char_path = bundle_dir / "characterization" / "characterization.json"
+    char = _read_json(char_path)
+
+    findings = char.get("findings") or []
+    if not findings:
+        return
+
+    template = findings[0]
+    schema_uuid = template["finding_id"].split(":", 1)[0]
+    new_id = f"{schema_uuid}:F-EVAL-META"
+    used_runs = list(run_ids) or list(template.get("run_ids") or [])
+
+    new_finding = {
+        "finding_id": new_id,
+        "type": "trajectory_pattern",
+        "severity": "major",
+        "summary": (
+            "Instrument-change confound: bioreactor sensor swapped at t=72h"
+            f" across {', '.join(used_runs) or 'multiple'} runs — affects"
+            " any cross-run comparison."
+        ),
+        "confidence": 0.85,
+        "extracted_via": "llm_judged",
+        "caveats": ["planted metadata anomaly for E2 eval"],
+        "competing_explanations": [],
+        "evidence_strength": {"n_observations": 1, "n_independent_runs": len(used_runs), "statistical_power": None},
+        "evidence_observation_ids": list(template.get("evidence_observation_ids") or [])[:1] or ["planted-obs-eval-meta"],
+        "variables_involved": [],
+        "time_window": {"start": 72.0, "end": 72.0},
+        "run_ids": used_runs,
+        "statistics": {"pattern_kind": "metadata_anomaly", "anomaly_kind": "instrument-change"},
+    }
+    char["findings"] = [new_finding] + findings  # prepend so it's salient
+    _write_json(char_path, char)
 
 
 _MUTATORS: dict[str, callable] = {
@@ -263,6 +358,9 @@ _MUTATORS: dict[str, callable] = {
     "strip_trajectories": _mut_strip_trajectories,
     "drop_narratives": _mut_drop_narratives,
     "drop_metadata_anomalies": _mut_drop_metadata_anomalies,
+    "plant_weak_n": _mut_plant_weak_n,
+    "plant_symmetry_violation": _mut_plant_symmetry_violation,
+    "plant_metadata_anomaly": _mut_plant_metadata_anomaly,
     "noop": _mut_noop,
 }
 
