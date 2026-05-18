@@ -101,11 +101,27 @@ is out of scope for the paper. Budget revised to $60-120 (approved).
 - Run full hypothesis pipeline on each. Record critic axis fires from the
   ratified hypothesis output (and from the rejection chain leading to it).
 
-**Metrics**:
-- 7×8 confusion matrix (labeled axis × fired axis + "none")
-- Per-axis precision and recall
-- Over-fire rate on clean fixtures
-- Pipeline iteration count per fixture (does multi-axis converge faster?)
+**Metrics** (revised 2026-05-18 after dry-run finding):
+
+The 2026-05-18 validation dry run on e2-traj-clear-01 surfaced an
+important finding: the critic correctly *detected* the trajectory defect
+(reasoning chain talked about ignoring trajectories and growth rate), but
+*tagged* the rejection with [question-axis] because the leading question
+also demanded growth rate. This is a real finding about taxonomy
+crispness, not a bug — and reframes the eval as **two-metric**:
+
+1. **Catch rate** (headline, per-axis): of N defect fixtures on axis A,
+   how many got any axis fired? Plus false-positive rate over clean
+   fixtures. This is the "did the critic see the problem" metric.
+2. **Tag accuracy** (secondary): of caught defects on axis A, how many
+   had axis A in the fired set? This is the "did the taxonomy match
+   the critic's reasoning" metric.
+3. **7×8 confusion matrix** still reported for color, plus
+4. **Pipeline iteration count** per fixture.
+
+The paper claim becomes "critic catches axis-A defects at rate X; the
+taxonomy assigns the labeled axis at rate Y where Y<=X." Both numbers
+honest.
 
 **Authoring**: I draft all 40, user spot-checks 5 clean + 5 borderline (the
 trickiest ones) before any pipeline runs.

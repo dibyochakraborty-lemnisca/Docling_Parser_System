@@ -59,6 +59,53 @@ def bootstrap_ci(
     return (lo, hi)
 
 
+def catch_rate(rows: list[dict]) -> dict[str, float | int]:
+    """E2 headline metric A: did the critic catch the defect at all?
+
+    A defect-labeled fixture (labeled_axis != 'clean') is a CATCH if
+    ANY axis fired. A clean-labeled fixture is a FALSE POSITIVE if any
+    axis fired.
+
+    Reports catch rate over defect fixtures and false-positive rate over
+    clean fixtures separately so they aren't conflated.
+    """
+    defects = [r for r in rows if r["labeled_axis"] != "clean"]
+    cleans = [r for r in rows if r["labeled_axis"] == "clean"]
+    caught = sum(1 for r in defects if r.get("fired_axes"))
+    false_pos = sum(1 for r in cleans if r.get("fired_axes"))
+    return {
+        "n_defect": len(defects),
+        "n_caught": caught,
+        "catch_rate": caught / len(defects) if defects else 0.0,
+        "n_clean": len(cleans),
+        "n_false_positive": false_pos,
+        "false_positive_rate": false_pos / len(cleans) if cleans else 0.0,
+    }
+
+
+def tag_accuracy(rows: list[dict]) -> dict[str, float | int]:
+    """E2 headline metric B: when the critic caught the defect, did it
+    tag the correct axis?
+
+    Only counts CAUGHT defect fixtures (labeled_axis != 'clean' and
+    fired_axes non-empty). Among those, a fixture has CORRECT TAG if
+    labeled_axis appears in fired_axes (multi-tag is fine — partial
+    credit for at least getting the right axis in the mix).
+
+    catch_rate * tag_accuracy gives the strict per-axis recall.
+    """
+    caught = [
+        r for r in rows
+        if r["labeled_axis"] != "clean" and r.get("fired_axes")
+    ]
+    correct = sum(1 for r in caught if r["labeled_axis"] in r["fired_axes"])
+    return {
+        "n_caught": len(caught),
+        "n_correct_tag": correct,
+        "tag_accuracy": correct / len(caught) if caught else 0.0,
+    }
+
+
 def per_axis_precision_recall(
     rows: Iterable[dict[str, Any]],
     axes: list[str],

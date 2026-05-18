@@ -70,6 +70,13 @@ CRITIC_INVARIANTS = (
     "Use tools before judging. A green flag without any tool call is suspicious.",
     "Red flag requires ≥1 concrete, evidence-based reason.",
     "Reasons must be specific (cite IDs, name variables, point at numbers).",
+    "EVERY red-flag reason MUST start with an axis tag in square brackets:"
+    " one of [trajectory-axis], [robustness-axis], [tool-gap-axis],"
+    " [memory-axis], [metadata-axis], [actionability-axis], [question-axis],"
+    " or [followup-axis]. The tag tells the synthesizer which rule was"
+    " violated so it can fix the right thing on retry. If a problem doesn't"
+    " fit any of these axes, use [general-axis] as the tag (and prefer to"
+    " green-flag if the issue is minor).",
     "Do not rewrite the hypothesis. Do not propose a fix. Just flag problems.",
     "If previous_attempts is non-empty, the synthesizer was asked to address those prior reasons. Check whether it actually did. If a prior reason was addressed (claim narrowed, overreach removed), acknowledge that — do not raise the same objection again.",
     "If a new attempt fixes the prior critic_reasons but is otherwise sound, file green. Iterative narrowing is the goal.",

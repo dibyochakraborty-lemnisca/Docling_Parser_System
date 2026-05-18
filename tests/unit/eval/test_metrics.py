@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from fermdocs_eval.metrics import (
     bootstrap_ci,
+    catch_rate,
     confusion_matrix,
     over_fire_rate,
     per_axis_precision_recall,
     preference_rate,
+    tag_accuracy,
 )
 from fermdocs_eval.synthetic import CRITIC_AXES
 
@@ -84,6 +86,42 @@ def test_over_fire_rate() -> None:
     assert out["n_clean"] == 2
     assert out["any_fire"] == 1
     assert out["rate"] == 0.5
+
+
+def test_catch_rate_separates_defect_and_clean() -> None:
+    rows = [
+        {"labeled_axis": "trajectory-axis", "fired_axes": ["question-axis"]},  # caught (wrong tag)
+        {"labeled_axis": "trajectory-axis", "fired_axes": ["trajectory-axis"]},  # caught
+        {"labeled_axis": "robustness-axis", "fired_axes": []},  # missed
+        {"labeled_axis": "clean", "fired_axes": []},  # ok
+        {"labeled_axis": "clean", "fired_axes": ["robustness-axis"]},  # false positive
+    ]
+    out = catch_rate(rows)
+    assert out["n_defect"] == 3
+    assert out["n_caught"] == 2
+    assert out["catch_rate"] == 2 / 3
+    assert out["n_clean"] == 2
+    assert out["n_false_positive"] == 1
+    assert out["false_positive_rate"] == 0.5
+
+
+def test_tag_accuracy_partial_credit_for_multitag() -> None:
+    rows = [
+        {"labeled_axis": "trajectory-axis", "fired_axes": ["trajectory-axis", "question-axis"]},  # correct
+        {"labeled_axis": "trajectory-axis", "fired_axes": ["question-axis"]},  # caught but wrong tag
+        {"labeled_axis": "robustness-axis", "fired_axes": []},  # not caught, excluded
+        {"labeled_axis": "robustness-axis", "fired_axes": ["robustness-axis"]},  # correct
+    ]
+    out = tag_accuracy(rows)
+    assert out["n_caught"] == 3  # excludes the not-caught row
+    assert out["n_correct_tag"] == 2
+    assert out["tag_accuracy"] == 2 / 3
+
+
+def test_tag_accuracy_empty() -> None:
+    out = tag_accuracy([])
+    assert out["tag_accuracy"] == 0.0
+    assert out["n_caught"] == 0
 
 
 def test_confusion_matrix_shape() -> None:
