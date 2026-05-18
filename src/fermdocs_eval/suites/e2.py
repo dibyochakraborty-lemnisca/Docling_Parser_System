@@ -29,6 +29,11 @@ from pathlib import Path
 from fermdocs_eval.fixture_builder import DefectSpec, build_fixture
 from fermdocs_eval.harness import EvalRun, RunStatus, append_jsonl, now_iso, read_jsonl
 
+# Tenant scope used for memory-axis fixtures. Matches FERMDOCS_TENANT_ID
+# default. The eval runs in a hermetic StubBackend instance per fixture so
+# no production memory is touched.
+EVAL_TENANT_ID = "eval-e2"
+
 # Critic prefixes its rejection reasons with "[axis-name]:". We scan all
 # reasons across every CritiqueFiledEvent for the fixture's run.
 AXIS_RE = re.compile(r"\[([a-z-]+-axis)\]", re.IGNORECASE)
@@ -64,6 +69,40 @@ def _completed_trial_ids(out_path: Path) -> set[str]:
     return {r["trial_id"] for r in rows if r.get("status") == "ok"}
 
 
+def _make_memory_backend(spec: DefectSpec):
+    """Build a hermetic StubBackend pre-populated with spec.memory_seed.
+
+    Each seed becomes a MemoryRecord with kind='lesson', tenant_id=EVAL_TENANT_ID,
+    and the spec's process_family. The lesson_id is deterministic per fixture
+    so the same fixture re-run produces the same record IDs (helpful when
+    diffing JSONL outputs across runs).
+
+    For non-memory-axis fixtures (empty memory_seed), returns an empty
+    StubBackend so the pipeline still has a valid backend but retrieves
+    nothing.
+    """
+    from fermdocs_memory.base import MemoryRecord
+    from fermdocs_memory.stub import StubBackend
+
+    backend = StubBackend()
+    for i, seed in enumerate(spec.memory_seed):
+        family, summary = seed[0], seed[1]
+        record = MemoryRecord(
+            memory_id=f"L-eval-{spec.fixture_id}-{i:04d}",
+            kind="lesson",
+            summary=summary,
+            process_family=family,
+            organism=None,
+            tenant_id=EVAL_TENANT_ID,
+            provenance={"source": "e2_eval_seed", "fixture_id": spec.fixture_id},
+            embedding_provider="stub",
+            embedding_model="stub",
+            embedding_version="1",
+        )
+        backend.write(record)
+    return backend
+
+
 def _set_e2_env() -> dict[str, str]:
     """Set env vars for the E2 pipeline (all-pro). Returns prior values for cleanup.
 
@@ -75,6 +114,10 @@ def _set_e2_env() -> dict[str, str]:
     overrides = {
         "FERMDOCS_HYPOTHESIS_PROVIDER": "gemini",
         "FERMDOCS_HYPOTHESIS_MODEL": "gemini-3-pro",
+        # Memory-axis fixtures use a hermetic StubBackend under this tenant.
+        # Setting FERMDOCS_TENANT_ID keeps the runner's fetch queries scoped
+        # to the same tenant the seeds were written under.
+        "FERMDOCS_TENANT_ID": EVAL_TENANT_ID,
     }
     prior: dict[str, str] = {}
     for k, v in overrides.items():
@@ -118,6 +161,7 @@ def _run_one_fixture(
     from fermdocs_hypothesis.live_hooks import LiveHooks
     from fermdocs_hypothesis.runner import run_stage
     from fermdocs_hypothesis.schema import BudgetSnapshot
+    from fermdocs_memory.stub import StubBackend
 
     try:
         loaded = load_bundle(bundle_dir)
@@ -126,13 +170,17 @@ def _run_one_fixture(
         run_dir.mkdir(parents=True, exist_ok=True)
         global_md = run_dir / "global.md"
 
+        # Per-fixture hermetic memory backend. Pre-populated from
+        # spec.memory_seed for memory-axis fixtures; empty otherwise.
+        memory_backend = _make_memory_backend(spec)
+
         budget = BudgetSnapshot(
             max_turns=10,
             max_critic_cycles_per_topic=3,
             max_tool_calls_total=80,
             max_total_input_tokens=200_000,
         )
-        hooks = LiveHooks(loaded)
+        hooks = LiveHooks(loaded, memory=memory_backend)
         diagnosis_id = loaded.diagnosis.meta.diagnosis_id
 
         result = run_stage(
@@ -143,6 +191,7 @@ def _run_one_fixture(
             provider="gemini",
             model_name=hooks._client.model_name,
             budget=budget,
+            memory=memory_backend,
             validate=False,  # eval bundles intentionally play with structure
             now_factory=lambda: datetime.now(timezone.utc),
         )

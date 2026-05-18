@@ -353,6 +353,25 @@ def _mut_plant_metadata_anomaly(bundle_dir: Path, *, run_ids: tuple[str, ...] = 
     _write_json(char_path, char)
 
 
+def _mut_set_process_family(bundle_dir: Path, *, family: str = "penicillin_fedbatch") -> None:
+    """Memory-axis prerequisite: plant a resolved process_family on the dossier.
+
+    Without this, _fetch_cross_run_lessons short-circuits (it requires a
+    non-None process_family to query memory). Sets dossier.experiment.process
+    .registered.process_family so bundle_loader resolves it. The family must
+    be a valid closed-vocab entry from src/fermdocs/schema/process_families.yaml.
+    """
+    dossier_path = bundle_dir / "dossier.json"
+    dossier = _read_json(dossier_path)
+    experiment = dossier.setdefault("experiment", {})
+    process = experiment.setdefault("process", {})
+    registered = process.setdefault("registered", {})
+    registered["process_family"] = family
+    # Also set name as a fallback; bundle_loader checks both.
+    registered.setdefault("name", family)
+    _write_json(dossier_path, dossier)
+
+
 _MUTATORS: dict[str, callable] = {
     "strip_findings": _mut_strip_findings,
     "strip_trajectories": _mut_strip_trajectories,
@@ -361,6 +380,7 @@ _MUTATORS: dict[str, callable] = {
     "plant_weak_n": _mut_plant_weak_n,
     "plant_symmetry_violation": _mut_plant_symmetry_violation,
     "plant_metadata_anomaly": _mut_plant_metadata_anomaly,
+    "set_process_family": _mut_set_process_family,
     "noop": _mut_noop,
 }
 

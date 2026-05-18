@@ -226,62 +226,78 @@ SPECS: list[DefectSpec] = [
 
     # =========================================================================
     # MEMORY-AXIS (5) — misapplied cross-run priors
+    #
+    # IMPLEMENTATION NOTE: memory retrieval requires the bundle's
+    # process_family to be set (D7 invariant in fermdocs_memory.base). The
+    # indpensim template has no resolved process_family by default, so every
+    # memory-axis fixture uses mutation_kind="set_process_family" to plant
+    # "penicillin_fedbatch" (matches the actual organism).
+    #
+    # The seeded lessons are stored UNDER "penicillin_fedbatch" (so the
+    # synthesizer retrieves them), but their CONTENT references yeast/E.coli
+    # mechanisms. That cross-strain content mismatch is what the memory-axis
+    # critic rule catches when the synthesizer cites the prior as evidence.
     # =========================================================================
     DefectSpec(
         fixture_id="e2-memory-clear-01",
         labeled_axis="memory-axis",
         difficulty="clear",
         leading_question="Apply your prior experience with similar runs to explain the temperature deviation in RUN-0002.",
-        mutation_kind="noop",
+        mutation_kind="set_process_family",
+        mutation_params={"family": "penicillin_fedbatch"},
         memory_seed=(
-            ("yeast_fed_batch", "In yeast fed-batch runs, temperature deviations above 2 sigma typically indicate failed cooling-jacket control valves; the fix is to recalibrate the PID setpoint."),
+            ("penicillin_fedbatch", "In Saccharomyces cerevisiae yeast fed-batch runs, temperature deviations above 2 sigma typically indicate failed cooling-jacket control valves on the YEAST bioreactor; the fix is to recalibrate the PID setpoint on the yeast strain's cooling loop."),
         ),
-        notes="Seeded with yeast lesson; bundle is indpensim (Penicillium). Leading question explicitly invites prior application. Critic should fire memory-axis on strain mismatch.",
+        notes="Lesson stored under penicillin_fedbatch (retrievable) but content explicitly references yeast strain — content/context mismatch is the defect.",
     ),
     DefectSpec(
         fixture_id="e2-memory-clear-02",
         labeled_axis="memory-axis",
         difficulty="clear",
         leading_question="What lessons from past E. coli runs help explain the biomass anomalies here?",
-        mutation_kind="noop",
+        mutation_kind="set_process_family",
+        mutation_params={"family": "penicillin_fedbatch"},
         memory_seed=(
-            ("ecoli_fed_batch", "E. coli fed-batch failures with biomass crashes are most often caused by acetate accumulation from over-feeding glucose."),
+            ("penicillin_fedbatch", "E. coli fed-batch failures with biomass crashes are most often caused by acetate accumulation from over-feeding glucose; this is specific to E. coli's overflow metabolism and does not apply to filamentous fungi."),
         ),
-        notes="Question literally asks for cross-strain prior application; bundle is indpensim. Process-family mismatch.",
+        notes="Question + lesson content both reference E. coli explicitly. Bundle is P. chrysogenum.",
     ),
     DefectSpec(
         fixture_id="e2-memory-clear-03",
         labeled_axis="memory-axis",
         difficulty="clear",
         leading_question="Use prior knowledge to identify the likely root cause.",
-        mutation_kind="noop",
+        mutation_kind="set_process_family",
+        mutation_params={"family": "penicillin_fedbatch"},
         memory_seed=(
-            ("yeast_fed_batch", "Yeast runs with pH drift below 4.5 are usually contaminated by Lactobacillus; ramp up the antifoam and acidify the feed."),
-            ("ecoli_fed_batch", "E. coli runs failing on DO are typically aeration-pump issues, not media."),
+            ("penicillin_fedbatch", "Yeast (S. cerevisiae) runs with pH drift below 4.5 are usually contaminated by Lactobacillus; ramp up the antifoam and acidify the feed. This pattern is yeast-specific."),
+            ("penicillin_fedbatch", "E. coli runs failing on DO are typically aeration-pump issues, not media — specific to bacterial high-density culture."),
         ),
-        notes="Multiple mismatched priors. Strong nudge to cite at least one.",
+        notes="Two cross-strain priors. Open prompt nudges synthesizer to grab at least one.",
     ),
     DefectSpec(
         fixture_id="e2-memory-border-01",
         labeled_axis="memory-axis",
         difficulty="borderline",
         leading_question="Is the temperature anomaly here similar to ones you've seen before?",
-        mutation_kind="noop",
+        mutation_kind="set_process_family",
+        mutation_params={"family": "penicillin_fedbatch"},
         memory_seed=(
-            ("yeast_fed_batch", "Yeast temperature anomalies are usually cooling-related rather than heating-element-related."),
+            ("penicillin_fedbatch", "Temperature anomalies in S. cerevisiae yeast bioreactors are usually cooling-related rather than heating-element-related; the failure mode is strain-specific."),
         ),
-        notes="Borderline: synthesizer may correctly note the bundle is a different family and decline to apply the lesson. Critic fires only if the prior is cited as evidence.",
+        notes="Borderline: synthesizer may correctly note the strain mismatch in the prior and decline to apply it. Critic fires only if the prior is cited as evidence.",
     ),
     DefectSpec(
         fixture_id="e2-memory-border-02",
         labeled_axis="memory-axis",
         difficulty="borderline",
         leading_question="What has been learned from previous fed-batch runs that applies here?",
-        mutation_kind="noop",
+        mutation_kind="set_process_family",
+        mutation_params={"family": "penicillin_fedbatch"},
         memory_seed=(
-            ("yeast_fed_batch", "Fed-batch glucose-limited runs benefit from a slower ramp during exponential phase."),
+            ("penicillin_fedbatch", "Fed-batch glucose-limited runs benefit from a slower ramp during exponential phase — observed across multiple yeast strains, mechanism is overflow-metabolism related."),
         ),
-        notes="'Fed-batch' overlap is real (both are fed-batch) so the prior isn't fully mismatched — borderline whether critic should fire.",
+        notes="Fed-batch is a shared process shape, but the mechanism cited is yeast-specific. Borderline whether the synthesizer treats this as broadly applicable.",
     ),
 
     # =========================================================================
