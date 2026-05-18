@@ -79,14 +79,16 @@ rates, justifying the per-axis design over a single-pass critic.
 **Path B (full-pipeline) chosen** over Path A (standalone critic) because the
 paper's strongest defense is "we tested the system as deployed."
 
-**Mitigations for Path B's two known problems**:
-1. **Budget** — mixed-model pipeline. `gemini-3-flash` for orchestrator and
-   3 specialists; `gemini-3-pro` for synthesizer + critic + judge. Cuts cost
-   roughly in half. Non-default configuration is disclosed in the paper.
-2. **Synthesizer-fixes-the-defect confound** — fixtures use *force-commit
-   mini-bundles*: leading user question, sparse evidence, dossier hints that
-   make the planted defect the path of least resistance. Engineering work
-   per fixture, but preserves per-axis P/R as the headline metric.
+**Mitigations for Path B's known problem**:
+- **Synthesizer-fixes-the-defect confound** — fixtures use *force-commit
+  mini-bundles*: leading user question, sparse evidence, dossier hints that
+  make the planted defect the path of least resistance. Engineering work
+  per fixture, but preserves per-axis P/R as the headline metric.
+
+**Model strategy**: all-pro (`gemini-3-pro`) across orchestrator, specialists,
+synthesizer, critic, judge. Mixed-model was planned but LiveHooks shares one
+client across the hypothesis stage today, and a per-agent override refactor
+is out of scope for the paper. Budget revised to $60-120 (approved).
 
 **Setup**:
 - 40 fixture mini-bundles. Each is a runnable bundle directory (dossier +
