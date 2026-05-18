@@ -73,33 +73,49 @@ a worked-example callout showing one retrieved lesson being cited.
 
 ### E2 — Critic-axes precision/recall (validates framework)
 
-**Claim**: the 7-axis critic catches axis-specific defects at axis-specific
-rates, justifying the multi-axis design over a single-pass critic.
+**Claim**: the multi-axis critic catches axis-specific defects at axis-specific
+rates, justifying the per-axis design over a single-pass critic.
+
+**Path B (full-pipeline) chosen** over Path A (standalone critic) because the
+paper's strongest defense is "we tested the system as deployed."
+
+**Mitigations for Path B's two known problems**:
+1. **Budget** — mixed-model pipeline. `gemini-3-flash` for orchestrator and
+   3 specialists; `gemini-3-pro` for synthesizer + critic + judge. Cuts cost
+   roughly in half. Non-default configuration is disclosed in the paper.
+2. **Synthesizer-fixes-the-defect confound** — fixtures use *force-commit
+   mini-bundles*: leading user question, sparse evidence, dossier hints that
+   make the planted defect the path of least resistance. Engineering work
+   per fixture, but preserves per-axis P/R as the headline metric.
 
 **Setup**:
-- Author a synthetic test set of **~40 hypotheses** with labeled defect type:
-  - 5× clean (no defect) — control
-  - 5× trajectory-axis violation (claims contradicted by characterization)
-  - 5× robustness-axis violation (single-point claim, no replicate)
-  - 5× tool-gap violation (claims requiring python tool calls without them)
-  - 5× memory-axis violation (ignores cross-run lesson that was injected)
-  - 5× metadata-axis violation (misses anomaly that was planted in dossier)
-  - 5× actionability violation (vague non-actionable recommendation)
-  - 5× question-axis violation (contradicts user question intent)
-- Run critic over each; record per-axis flags.
-- Compute per-axis precision (when axis fires, is it the labeled defect?) and
-  recall (when defect is labeled, does the matching axis fire?).
+- 40 fixture mini-bundles. Each is a runnable bundle directory (dossier +
+  characterization + diagnosis + meta) carrying:
+  - a labeled defect axis (one of 7) or "clean"
+  - a leading user question that forces the synthesizer toward the defect
+  - sparse-but-pointed evidence so the synthesizer commits early
+- 5× clean (control), 5× per axis = 5 × 8 = 40 total
+- Within each defect axis: 3 clear-cut + 2 borderline
+- Run full hypothesis pipeline on each. Record critic axis fires from the
+  ratified hypothesis output (and from the rejection chain leading to it).
 
 **Metrics**:
-- 7×7 confusion matrix (which axes fire on which labeled defect type)
-- Per-axis P/R
-- Over-fire rate on clean hypotheses (false positives)
+- 7×8 confusion matrix (labeled axis × fired axis + "none")
+- Per-axis precision and recall
+- Over-fire rate on clean fixtures
+- Pipeline iteration count per fixture (does multi-axis converge faster?)
 
-**Output for paper**: confusion matrix figure + P/R table.
+**Authoring**: I draft all 40, user spot-checks 5 clean + 5 borderline (the
+trickiest ones) before any pipeline runs.
 
-**Why this is honest at synthetic-only**: we author the defects, so we know
-ground truth. The risk is that synthetic defects are easier than real ones —
-disclose this explicitly in the paper limitations section.
+**Output for paper**: confusion matrix figure + P/R table + appendix
+example bundle showing the planted defect.
+
+**Limitations disclosed in paper**:
+- Synthetic defects may not match the distribution of real failures
+- Mixed-model pipeline is not the production default
+- Mini-bundles are smaller than real bundles (one-batch trajectories), so
+  characterization-stage signals are weaker than typical deployment
 
 ### E3 — End-to-end vs single-shot baseline (strongest claim, most expensive)
 
