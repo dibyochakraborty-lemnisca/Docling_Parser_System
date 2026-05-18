@@ -113,10 +113,13 @@ def _set_e2_env() -> dict[str, str]:
     """
     overrides = {
         "FERMDOCS_HYPOTHESIS_PROVIDER": "gemini",
-        "FERMDOCS_HYPOTHESIS_MODEL": "gemini-3-pro",
+        # GeminiHypothesisClient reads FERMDOCS_GEMINI_MODEL (not the
+        # FERMDOCS_HYPOTHESIS_MODEL we set earlier — that env var is for a
+        # different code path). Dry run on 2026-05-18 surfaced this:
+        # gemini-3-pro returns 404, the actual available model is the preview.
+        "FERMDOCS_GEMINI_MODEL": "gemini-3.1-pro-preview",
+        "FERMDOCS_HYPOTHESIS_MODEL": "gemini-3.1-pro-preview",
         # Memory-axis fixtures use a hermetic StubBackend under this tenant.
-        # Setting FERMDOCS_TENANT_ID keeps the runner's fetch queries scoped
-        # to the same tenant the seeds were written under.
         "FERMDOCS_TENANT_ID": EVAL_TENANT_ID,
     }
     prior: dict[str, str] = {}

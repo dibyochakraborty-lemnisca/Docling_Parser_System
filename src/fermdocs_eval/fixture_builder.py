@@ -103,9 +103,20 @@ def build_fixture(
     out_dir = out_root / spec.fixture_id
     _clone_template(template_dir, out_dir)
 
+    # Baseline: every fixture gets a debatable seed topic. The indpensim
+    # template diagnosis is all spec-only failures (filtered by
+    # seed_topic_extractor for unknown_process bundles), so without this
+    # the pipeline exits no_topics_left before synthesizer/critic ever
+    # run. Discovered during the 2026-05-18 dry run. Applied BEFORE the
+    # spec's mutation so spec mutations like strip_findings still apply.
+    _ensure_debatable_seed_topic(out_dir)
+
     if spec.mutation_kind is not None:
         mutator = _MUTATORS[spec.mutation_kind]
         mutator(out_dir, **spec.mutation_params)
+
+    # Plant user_question.json from the leading question.
+    _write_user_question(out_dir, spec.leading_question)
 
     _write_json(
         out_dir / "defect_spec.json",
@@ -124,6 +135,51 @@ def build_fixture(
     # Schema-validate by round-tripping through the real loader.
     load_bundle(out_dir)
     return out_dir
+
+
+def _ensure_debatable_seed_topic(bundle_dir: Path) -> None:
+    """Promote one FailureClaim so it survives the spec-only filter.
+
+    For unknown_process bundles like indpensim, every failure is grounded
+    in `confidence_basis=schema_only` against generic schema specs — the
+    seed_topic_extractor drops these as undebatable. We upgrade the first
+    failure to confidence_basis=process_priors and rewrite its summary to
+    drop spec-vocabulary words, so the pipeline gets at least one topic
+    to debate. The cited finding is unchanged so the synthesizer still
+    has real evidence to work with.
+
+    Idempotent: if no schema_only failure exists, this is a no-op.
+    """
+    diag_path = bundle_dir / "diagnosis" / "diagnosis.json"
+    diag = _read_json(diag_path)
+    failures = diag.get("failures") or []
+    for f in failures:
+        if f.get("confidence_basis") == "schema_only":
+            f["confidence_basis"] = "process_priors"
+            # Rewrite summary so it doesn't trip the spec-language regex.
+            # Keep the cited finding id intact so the synthesizer has
+            # something real to talk about.
+            f["summary"] = (
+                "Observed substrate-utilization anomaly consistent with"
+                " known process behavior on this family — supporting"
+                " evidence in cited finding."
+            )
+            _write_json(diag_path, diag)
+            return
+
+
+def _write_user_question(bundle_dir: Path, text: str) -> None:
+    """Write a minimal UserQuestion to bundle_dir/user_question.json.
+
+    We skip the LLM classifier (one Gemini call per fixture * 40 fixtures
+    = wasted spend); UserQuestion fields default safely (shape=None,
+    affected_runs=[], affected_variables=[]). The pipeline's prompts adapt
+    when these are empty.
+    """
+    from fermdocs.domain.user_question import UserQuestion
+
+    q = UserQuestion(text=text)
+    _write_json(bundle_dir / "user_question.json", q.model_dump(mode="json"))
 
 
 # ---------------------------------------------------------------------------

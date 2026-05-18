@@ -28,11 +28,24 @@ def run_e1(bundle: str, question: str, out: str) -> None:
 
 @cli.command("e2")
 @click.option("--out", default="eval/results/e2.jsonl")
-def run_e2(out: str) -> None:
+@click.option(
+    "--only",
+    multiple=True,
+    help="Restrict to specific fixture_ids (repeatable). Useful for dry runs.",
+)
+def run_e2(out: str, only: tuple[str, ...]) -> None:
     """E2 critic-axes P/R on synthetic hypotheses."""
+    from fermdocs_eval.fixtures.e2_specs import SPECS
     from fermdocs_eval.suites import e2
 
-    e2.run(out_path=out)
+    specs = list(SPECS)
+    if only:
+        wanted = set(only)
+        specs = [s for s in specs if s.fixture_id in wanted]
+        missing = wanted - {s.fixture_id for s in specs}
+        if missing:
+            raise click.ClickException(f"unknown fixture_ids: {sorted(missing)}")
+    e2.run(out_path=out, specs=specs)
 
 
 @cli.command("e3")
