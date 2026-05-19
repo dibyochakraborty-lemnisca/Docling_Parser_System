@@ -27,3 +27,13 @@ out/hypothesis/
 out/api
 node_modules/
 .next/
+
+# Eval artifacts: regeneratable, large (1GB+ cloned bundles).
+# Keep the report markdown + results JSONL committed; everything else
+# (cloned fixtures, per-run pipeline state, stdout logs) is reproducible
+# from the spec file + the runner.
+eval/fixtures/
+eval/runs/
+eval/results/*.log
+eval/results/*_dryrun.jsonl
+eval/results/*_retry.log

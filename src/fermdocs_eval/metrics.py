@@ -2,12 +2,18 @@
 
 Kept deterministic so paper figures can be regenerated from results.jsonl
 without re-running anything.
+
+Scope: head-to-head agent-vs-baseline preference rate, multi-axis score
+aggregation, and bootstrap CIs. Earlier axis-based metrics (per-axis P/R,
+confusion matrix, catch_rate, tag_accuracy) were removed when the eval
+scope was narrowed to head-to-head only.
 """
 
 from __future__ import annotations
 
 import random
-from collections import Counter, defaultdict
+import statistics
+from collections import Counter
 from typing import Any, Iterable
 
 
@@ -59,129 +65,78 @@ def bootstrap_ci(
     return (lo, hi)
 
 
-def catch_rate(rows: list[dict]) -> dict[str, float | int]:
-    """E2 headline metric A: did the critic catch the defect at all?
-
-    A defect-labeled fixture (labeled_axis != 'clean') is a CATCH if
-    ANY axis fired. A clean-labeled fixture is a FALSE POSITIVE if any
-    axis fired.
-
-    Reports catch rate over defect fixtures and false-positive rate over
-    clean fixtures separately so they aren't conflated.
-    """
-    defects = [r for r in rows if r["labeled_axis"] != "clean"]
-    cleans = [r for r in rows if r["labeled_axis"] == "clean"]
-    caught = sum(1 for r in defects if r.get("fired_axes"))
-    false_pos = sum(1 for r in cleans if r.get("fired_axes"))
-    return {
-        "n_defect": len(defects),
-        "n_caught": caught,
-        "catch_rate": caught / len(defects) if defects else 0.0,
-        "n_clean": len(cleans),
-        "n_false_positive": false_pos,
-        "false_positive_rate": false_pos / len(cleans) if cleans else 0.0,
-    }
-
-
-def tag_accuracy(rows: list[dict]) -> dict[str, float | int]:
-    """E2 headline metric B: when the critic caught the defect, did it
-    tag the correct axis?
-
-    Only counts CAUGHT defect fixtures (labeled_axis != 'clean' and
-    fired_axes non-empty). Among those, a fixture has CORRECT TAG if
-    labeled_axis appears in fired_axes (multi-tag is fine — partial
-    credit for at least getting the right axis in the mix).
-
-    catch_rate * tag_accuracy gives the strict per-axis recall.
-    """
-    caught = [
-        r for r in rows
-        if r["labeled_axis"] != "clean" and r.get("fired_axes")
-    ]
-    correct = sum(1 for r in caught if r["labeled_axis"] in r["fired_axes"])
-    return {
-        "n_caught": len(caught),
-        "n_correct_tag": correct,
-        "tag_accuracy": correct / len(caught) if caught else 0.0,
-    }
-
-
-def per_axis_precision_recall(
+def per_axis_means(
     rows: Iterable[dict[str, Any]],
-    axes: list[str],
+    *,
+    axes: tuple[str, ...] = ("specificity", "grounding", "actionability", "honesty"),
+    role: str = "treatment",
 ) -> dict[str, dict[str, float | int]]:
-    """E2 metric: per critic axis precision and recall.
+    """Aggregate multi-axis scores from judge rows.
 
-    Each row must have:
-      - `labeled_axis`: ground-truth axis name (or "clean" for negatives)
-      - `fired_axes`: list of axes the critic flagged
+    Each row must carry per-axis scores under
+        row["scores"][role][axis_name]  ->  int in 1-10.
 
-    Precision_a = correct fires on axis a / total fires on axis a
-    Recall_a    = correct fires on axis a / total labeled axis-a cases
+    `role` is "treatment" or "baseline" — we compute both by calling twice.
+
+    Returns {axis: {n, mean, stdev, min, max}}.
     """
-    rows = list(rows)
-    tp: dict[str, int] = defaultdict(int)
-    fp: dict[str, int] = defaultdict(int)
-    fn: dict[str, int] = defaultdict(int)
-    labeled_counts: dict[str, int] = defaultdict(int)
-
-    for r in rows:
-        labeled = r["labeled_axis"]
-        fired = set(r.get("fired_axes", []))
-        labeled_counts[labeled] += 1
-        for axis in axes:
-            if axis in fired and labeled == axis:
-                tp[axis] += 1
-            elif axis in fired and labeled != axis:
-                fp[axis] += 1
-            elif axis not in fired and labeled == axis:
-                fn[axis] += 1
-
     out: dict[str, dict[str, float | int]] = {}
+    rows = list(rows)
     for axis in axes:
-        denom_p = tp[axis] + fp[axis]
-        denom_r = tp[axis] + fn[axis]
-        out[axis] = {
-            "tp": tp[axis],
-            "fp": fp[axis],
-            "fn": fn[axis],
-            "precision": tp[axis] / denom_p if denom_p else 0.0,
-            "recall": tp[axis] / denom_r if denom_r else 0.0,
-            "labeled_count": labeled_counts.get(axis, 0),
-        }
+        values: list[float] = []
+        for r in rows:
+            scores = r.get("scores") or {}
+            role_scores = scores.get(role) or {}
+            v = role_scores.get(axis)
+            if isinstance(v, (int, float)):
+                values.append(float(v))
+        if not values:
+            out[axis] = {"n": 0, "mean": 0.0, "stdev": 0.0, "min": 0.0, "max": 0.0}
+        else:
+            out[axis] = {
+                "n": len(values),
+                "mean": statistics.fmean(values),
+                "stdev": statistics.stdev(values) if len(values) > 1 else 0.0,
+                "min": min(values),
+                "max": max(values),
+            }
     return out
 
 
-def over_fire_rate(rows: Iterable[dict[str, Any]]) -> dict[str, float | int]:
-    """E2: how often any axis fires on a labeled-clean hypothesis."""
-    rows = list(rows)
-    clean = [r for r in rows if r["labeled_axis"] == "clean"]
-    if not clean:
-        return {"n_clean": 0, "any_fire": 0, "rate": 0.0}
-    any_fire = sum(1 for r in clean if r.get("fired_axes"))
-    return {"n_clean": len(clean), "any_fire": any_fire, "rate": any_fire / len(clean)}
-
-
-def confusion_matrix(
+def per_axis_delta(
     rows: Iterable[dict[str, Any]],
-    axes: list[str],
-) -> dict[str, dict[str, int]]:
-    """E2: nested dict [labeled_axis][fired_axis] = count.
+    *,
+    axes: tuple[str, ...] = ("specificity", "grounding", "actionability", "honesty"),
+) -> dict[str, dict[str, float | int]]:
+    """Per-axis treatment-minus-baseline score delta.
 
-    A row contributes to every (labeled, fired) pair it presents — multi-fire
-    rows count in multiple columns.
+    Each row must carry both treatment and baseline scores under
+        row["scores"]["treatment"][axis] and row["scores"]["baseline"][axis].
+    Returns {axis: {n, mean_delta, wins, losses, ties}}.
     """
-    matrix: dict[str, dict[str, int]] = {
-        labeled: {fired: 0 for fired in axes + ["none"]}
-        for labeled in axes + ["clean"]
-    }
-    for r in rows:
-        labeled = r["labeled_axis"]
-        fired = r.get("fired_axes", [])
-        if not fired:
-            matrix[labeled]["none"] += 1
-        else:
-            for f in fired:
-                if f in matrix[labeled]:
-                    matrix[labeled][f] += 1
-    return matrix
+    out: dict[str, dict[str, float | int]] = {}
+    rows = list(rows)
+    for axis in axes:
+        deltas: list[float] = []
+        wins = losses = ties = 0
+        for r in rows:
+            scores = r.get("scores") or {}
+            t = (scores.get("treatment") or {}).get(axis)
+            b = (scores.get("baseline") or {}).get(axis)
+            if isinstance(t, (int, float)) and isinstance(b, (int, float)):
+                d = float(t) - float(b)
+                deltas.append(d)
+                if d > 0:
+                    wins += 1
+                elif d < 0:
+                    losses += 1
+                else:
+                    ties += 1
+        out[axis] = {
+            "n": len(deltas),
+            "mean_delta": statistics.fmean(deltas) if deltas else 0.0,
+            "wins": wins,
+            "losses": losses,
+            "ties": ties,
+        }
+    return out

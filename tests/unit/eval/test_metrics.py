@@ -2,14 +2,10 @@ from __future__ import annotations
 
 from fermdocs_eval.metrics import (
     bootstrap_ci,
-    catch_rate,
-    confusion_matrix,
-    over_fire_rate,
-    per_axis_precision_recall,
+    per_axis_delta,
+    per_axis_means,
     preference_rate,
-    tag_accuracy,
 )
-from fermdocs_eval.synthetic import CRITIC_AXES
 
 
 def test_preference_rate_basic() -> None:
@@ -40,96 +36,40 @@ def test_bootstrap_ci_collapses_on_unanimous() -> None:
 
 
 def test_bootstrap_ci_brackets_truth() -> None:
-    # 7/10 A wins. CI should bracket 0.7 reasonably.
     rows = [{"winner": "A"}] * 7 + [{"winner": "B"}] * 3
     lo, hi = bootstrap_ci(rows, treatment="A", n_resamples=2000, seed=7)
     assert 0.3 <= lo <= 0.7
     assert 0.7 <= hi <= 1.0
 
 
-def test_per_axis_pr_perfect() -> None:
+def test_per_axis_means_basic() -> None:
     rows = [
-        {"labeled_axis": "trajectory-axis", "fired_axes": ["trajectory-axis"]},
-        {"labeled_axis": "trajectory-axis", "fired_axes": ["trajectory-axis"]},
-        {"labeled_axis": "robustness-axis", "fired_axes": ["robustness-axis"]},
-        {"labeled_axis": "clean", "fired_axes": []},
+        {"scores": {"treatment": {"specificity": 8, "grounding": 7}}},
+        {"scores": {"treatment": {"specificity": 6, "grounding": 9}}},
     ]
-    out = per_axis_precision_recall(rows, CRITIC_AXES)
-    assert out["trajectory-axis"]["precision"] == 1.0
-    assert out["trajectory-axis"]["recall"] == 1.0
-    assert out["robustness-axis"]["precision"] == 1.0
-    assert out["robustness-axis"]["recall"] == 1.0
+    out = per_axis_means(rows, axes=("specificity", "grounding"), role="treatment")
+    assert out["specificity"]["n"] == 2
+    assert out["specificity"]["mean"] == 7.0
+    assert out["grounding"]["mean"] == 8.0
 
 
-def test_per_axis_pr_with_misfire() -> None:
+def test_per_axis_means_missing_role_returns_zeros() -> None:
+    rows = [{"scores": {"treatment": {"specificity": 8}}}]
+    out = per_axis_means(rows, axes=("specificity",), role="baseline")
+    assert out["specificity"]["n"] == 0
+    assert out["specificity"]["mean"] == 0.0
+
+
+def test_per_axis_delta_wins_losses_ties() -> None:
     rows = [
-        # critic flagged trajectory but the truth is robustness — FP on trajectory, FN on robustness
-        {"labeled_axis": "robustness-axis", "fired_axes": ["trajectory-axis"]},
-        # correct trajectory fire — TP on trajectory
-        {"labeled_axis": "trajectory-axis", "fired_axes": ["trajectory-axis"]},
+        {"scores": {"treatment": {"specificity": 8}, "baseline": {"specificity": 5}}},
+        {"scores": {"treatment": {"specificity": 6}, "baseline": {"specificity": 8}}},
+        {"scores": {"treatment": {"specificity": 7}, "baseline": {"specificity": 7}}},
     ]
-    out = per_axis_precision_recall(rows, CRITIC_AXES)
-    # trajectory: 1 TP + 1 FP -> precision 0.5
-    assert out["trajectory-axis"]["precision"] == 0.5
-    assert out["trajectory-axis"]["recall"] == 1.0
-    # robustness: 0 TP + 1 FN -> recall 0
-    assert out["robustness-axis"]["recall"] == 0.0
-
-
-def test_over_fire_rate() -> None:
-    rows = [
-        {"labeled_axis": "clean", "fired_axes": []},
-        {"labeled_axis": "clean", "fired_axes": ["robustness-axis"]},
-        {"labeled_axis": "trajectory-axis", "fired_axes": ["trajectory-axis"]},
-    ]
-    out = over_fire_rate(rows)
-    assert out["n_clean"] == 2
-    assert out["any_fire"] == 1
-    assert out["rate"] == 0.5
-
-
-def test_catch_rate_separates_defect_and_clean() -> None:
-    rows = [
-        {"labeled_axis": "trajectory-axis", "fired_axes": ["question-axis"]},  # caught (wrong tag)
-        {"labeled_axis": "trajectory-axis", "fired_axes": ["trajectory-axis"]},  # caught
-        {"labeled_axis": "robustness-axis", "fired_axes": []},  # missed
-        {"labeled_axis": "clean", "fired_axes": []},  # ok
-        {"labeled_axis": "clean", "fired_axes": ["robustness-axis"]},  # false positive
-    ]
-    out = catch_rate(rows)
-    assert out["n_defect"] == 3
-    assert out["n_caught"] == 2
-    assert out["catch_rate"] == 2 / 3
-    assert out["n_clean"] == 2
-    assert out["n_false_positive"] == 1
-    assert out["false_positive_rate"] == 0.5
-
-
-def test_tag_accuracy_partial_credit_for_multitag() -> None:
-    rows = [
-        {"labeled_axis": "trajectory-axis", "fired_axes": ["trajectory-axis", "question-axis"]},  # correct
-        {"labeled_axis": "trajectory-axis", "fired_axes": ["question-axis"]},  # caught but wrong tag
-        {"labeled_axis": "robustness-axis", "fired_axes": []},  # not caught, excluded
-        {"labeled_axis": "robustness-axis", "fired_axes": ["robustness-axis"]},  # correct
-    ]
-    out = tag_accuracy(rows)
-    assert out["n_caught"] == 3  # excludes the not-caught row
-    assert out["n_correct_tag"] == 2
-    assert out["tag_accuracy"] == 2 / 3
-
-
-def test_tag_accuracy_empty() -> None:
-    out = tag_accuracy([])
-    assert out["tag_accuracy"] == 0.0
-    assert out["n_caught"] == 0
-
-
-def test_confusion_matrix_shape() -> None:
-    rows = [
-        {"labeled_axis": "trajectory-axis", "fired_axes": ["trajectory-axis", "robustness-axis"]},
-        {"labeled_axis": "clean", "fired_axes": []},
-    ]
-    m = confusion_matrix(rows, CRITIC_AXES)
-    assert m["trajectory-axis"]["trajectory-axis"] == 1
-    assert m["trajectory-axis"]["robustness-axis"] == 1
-    assert m["clean"]["none"] == 1
+    out = per_axis_delta(rows, axes=("specificity",))
+    assert out["specificity"]["n"] == 3
+    assert out["specificity"]["wins"] == 1
+    assert out["specificity"]["losses"] == 1
+    assert out["specificity"]["ties"] == 1
+    # mean delta = (3 + -2 + 0) / 3 = 1/3
+    assert abs(out["specificity"]["mean_delta"] - (1.0 / 3.0)) < 1e-9

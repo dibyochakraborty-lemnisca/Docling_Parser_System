@@ -238,9 +238,34 @@ class HypothesisToolBundle:
                 run_id=args.get("run_id"),
                 tag=args.get("tag"),
                 variable=args.get("variable"),
-                limit=int(args.get("limit", 50)),
+                limit=_safe_limit(args.get("limit"), default=50),
             )
         return {"error": f"unknown read-tool: {tool_name!r}"}
+
+
+def _safe_limit(raw: object, *, default: int, cap: int = 10_000) -> int:
+    """Coerce an LLM-emitted limit value to a sane int.
+
+    Handles three failure modes seen in production:
+      - explicit None (LLM passed `limit: null`)
+      - non-numeric strings ('all', 'max')
+      - absurdly long numeric strings (>4300 digits triggers Python 3.11+
+        `ValueError: Exceeds the limit for integer string conversion`)
+    """
+    if raw is None:
+        return default
+    if isinstance(raw, str):
+        # Truncate before int() so we don't trip the digit limit.
+        raw = raw.strip()[:8]
+        if not raw or not raw.lstrip("-").isdigit():
+            return default
+    try:
+        n = int(raw)
+    except (ValueError, TypeError):
+        return default
+    if n <= 0:
+        return default
+    return min(n, cap)
 
 
 # ---------- helpers ----------

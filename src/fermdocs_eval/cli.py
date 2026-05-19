@@ -1,67 +1,76 @@
 """CLI entry: `python -m fermdocs_eval.cli <suite> ...`
 
-Suites are implemented as separate modules under fermdocs_eval.suites and
-register themselves here. v1 ships the e2 wiring first because it doesn't
-depend on bundle re-ingest.
+Single suite: `headtohead` — agent vs single-shot Gemini baseline, judged
+multi-axis. Earlier multi-suite plans (E1 memory cold/warm, E2 critic
+axes) were dropped when the eval scope was narrowed.
 """
 
 from __future__ import annotations
+
+import sys
+
+# Disable Python 3.11+'s 4300-digit limit on int-from-string conversion.
+# Gemini occasionally returns responses containing very long numeric
+# strings, and the google-genai SDK's internal json.loads then crashes
+# with ValueError. The CVE this limit guards against (quadratic-time
+# attacks on huge integers) doesn't apply here — we control the input
+# distribution and there are no untrusted callers. Scoped to the eval
+# process only.
+if hasattr(sys, "set_int_max_str_digits"):
+    sys.set_int_max_str_digits(0)
 
 import click
 
 
 @click.group()
 def cli() -> None:
-    """fermdocs_eval — paper evaluation suites."""
+    """fermdocs_eval — paper evaluation."""
 
 
-@cli.command("e1")
+@cli.command("headtohead")
 @click.option("--bundle", required=True, type=click.Path(exists=True))
-@click.option("--question", required=True, help="Tailored user question for this bundle.")
-@click.option("--process-family", default="penicillin_fedbatch", help="Process family for memory queries.")
-@click.option("--out", default="eval/results/e1.jsonl")
-@click.option("--no-score", is_flag=True, help="Skip LLM specificity scoring.")
-def run_e1(bundle: str, question: str, process_family: str, out: str, no_score: bool) -> None:
-    """E1 memory mechanism: cold then warm run on the same bundle."""
-    from fermdocs_eval.suites import e1
-
-    e1.run(
-        bundle_dir=bundle, question=question, process_family=process_family,
-        out_path=out, score_specificity=not no_score,
-    )
-
-
-@cli.command("e2")
-@click.option("--out", default="eval/results/e2.jsonl")
+@click.option(
+    "--questions",
+    default="eval/questions.json",
+    help="JSON file mapping qid -> question text.",
+)
+@click.option("--out", default="eval/results/headtohead.jsonl")
 @click.option(
     "--only",
     multiple=True,
-    help="Restrict to specific fixture_ids (repeatable). Useful for dry runs.",
+    help="Restrict to specific qids (repeatable). Useful for dry runs.",
 )
-def run_e2(out: str, only: tuple[str, ...]) -> None:
-    """E2 critic-axes P/R on synthetic hypotheses."""
-    from fermdocs_eval.fixtures.e2_specs import SPECS
-    from fermdocs_eval.suites import e2
+def run_headtohead(bundle: str, questions: str, out: str, only: tuple[str, ...]) -> None:
+    """Run the agent vs single-shot baseline on the bundle's questions."""
+    import json
+    from pathlib import Path
 
-    specs = list(SPECS)
+    from fermdocs_eval.suites import headtohead
+
+    q_all = json.loads(Path(questions).read_text())
     if only:
         wanted = set(only)
-        specs = [s for s in specs if s.fixture_id in wanted]
-        missing = wanted - {s.fixture_id for s in specs}
+        q = {k: v for k, v in q_all.items() if k in wanted}
+        missing = wanted - set(q.keys())
         if missing:
-            raise click.ClickException(f"unknown fixture_ids: {sorted(missing)}")
-    e2.run(out_path=out, specs=specs)
+            raise click.ClickException(f"unknown qids: {sorted(missing)}")
+    else:
+        q = q_all
 
+    # Write filtered questions to a temp file so the suite reads the right set.
+    if only:
+        tmp = Path(out).parent / "_questions_subset.json"
+        tmp.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(q, indent=2))
+        questions_path = str(tmp)
+    else:
+        questions_path = questions
 
-@cli.command("e3")
-@click.option("--bundle", required=True, type=click.Path(exists=True))
-@click.option("--question", required=True, help="Tailored user question for this bundle.")
-@click.option("--out", default="eval/results/e3.jsonl")
-def run_e3(bundle: str, question: str, out: str) -> None:
-    """E3 case study: pipeline vs single-shot Gemini baseline."""
-    from fermdocs_eval.suites import e3
-
-    e3.run(bundle_dir=bundle, question=question, out_path=out)
+    headtohead.run(
+        bundle_dir=bundle,
+        questions_path=questions_path,
+        out_path=out,
+    )
 
 
 if __name__ == "__main__":

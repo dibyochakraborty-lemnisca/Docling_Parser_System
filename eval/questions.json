@@ -1,0 +1,12 @@
+{
+  "q1": "What were the most severe deviations observed in this fermentation bundle, and which variables did they involve?",
+  "q2": "Summarize how RUN-0001 and RUN-0002 compare in terms of overall process health.",
+  "q3": "What is the most likely cause of the sustained super-nominal biomass values observed in both runs after 130 hours?",
+  "q4": "The PAA (phenylacetic acid) concentration shows persistent deviations from nominal. What process mechanism best explains this, and how is it likely connected to the biomass anomaly?",
+  "q5": "Walk through the metabolic mechanism that ties together substrate utilization, biomass growth, and PAA precursor feeding in this Penicillium chrysogenum fed-batch. Which findings in the bundle support or contradict your account?",
+  "q6": "Compare the temporal profiles of biomass and PAA across RUN-0001 and RUN-0002. Are the deviations synchronized? What does that tell us?",
+  "q7": "If you had to recommend three specific parameter changes for the next batch to reduce critical-severity findings, what would they be and what evidence supports each?",
+  "q8": "What is the single highest-value piece of additional data you would collect on the next run, and which decision would it enable?",
+  "q9": "What in this bundle is genuinely ambiguous — i.e., findings where the evidence does not uniquely determine a root cause? Be specific about which findings, and what additional evidence would resolve them.",
+  "q10": "The 'nominal 0.5 ± 0.05 g/L' reference for biomass produces enormous sigma deviations (400+σ). Is this a real process anomaly, a schema-spec mismatch, or both? Defend your reading with citations."
+}
