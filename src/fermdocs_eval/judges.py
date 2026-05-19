@@ -30,7 +30,7 @@ def _judge_model() -> str:
     return os.environ.get("FERMDOCS_EVAL_JUDGE_MODEL", JUDGE_DEFAULT_MODEL)
 
 
-HEAD_TO_HEAD_PROMPT = """\
+HEAD_TO_HEAD_PROMPT_TEMPLATE = """\
 You are an expert reviewer of fermentation-process analyses. Two systems
 were given the SAME bundle and the SAME question. They produced the two
 answers below. Score each answer on four axes (1-10) and pick an overall
@@ -47,25 +47,32 @@ Axes (each 1-10, integers only):
   HONESTY: acknowledges uncertainty, schema artifacts, or limits in the
     data. Penalize overclaiming.
 
-Output STRICT JSON (no prose around it):
-{
-  "scores": {
-    "A": {"specificity": <1-10>, "grounding": <1-10>, "actionability": <1-10>, "honesty": <1-10>},
-    "B": {"specificity": <1-10>, "grounding": <1-10>, "actionability": <1-10>, "honesty": <1-10>}
-  },
-  "winner": "A" | "B" | "tie",
-  "rationale": "<one short sentence>"
-}
+Output STRICT JSON (no prose around it) with this shape:
+  - top-level "scores" object containing "A" and "B" sub-objects
+  - each sub-object has integer keys "specificity", "grounding",
+    "actionability", "honesty" valued 1-10
+  - top-level "winner" string: "A", "B", or "tie"
+  - top-level "rationale" string, one short sentence
 
 QUESTION:
-{question}
+__QUESTION__
 
 ANSWER A:
-{a_text}
+__A_TEXT__
 
 ANSWER B:
-{b_text}
+__B_TEXT__
 """
+
+
+def _build_head_to_head_prompt(question: str, a_text: str, b_text: str) -> str:
+    """Manual substitution so we don't trip on stray { } in the JSON spec."""
+    return (
+        HEAD_TO_HEAD_PROMPT_TEMPLATE
+        .replace("__QUESTION__", question)
+        .replace("__A_TEXT__", a_text)
+        .replace("__B_TEXT__", b_text)
+    )
 
 
 def _strip_json(text: str) -> str:
@@ -112,9 +119,7 @@ def judge_head_to_head(
     if not question.strip():
         return {"status": "error", "error": "empty question"}
 
-    prompt = HEAD_TO_HEAD_PROMPT.format(
-        question=question, a_text=a_text, b_text=b_text
-    )
+    prompt = _build_head_to_head_prompt(question, a_text, b_text)
     try:
         raw = _call_gemini(prompt, _judge_model())
         parsed = json.loads(_strip_json(raw))

@@ -92,26 +92,48 @@ class GeminiHypothesisClient:
         from google.genai import types
 
         client = genai.Client(api_key=self._api_key)
-        response = client.models.generate_content(
-            model=self._model,
-            contents=[
-                {"role": "user", "parts": [{"text": user_text}]},
-            ],
-            config=types.GenerateContentConfig(
-                system_instruction=system,
-                response_mime_type="application/json",
-                response_schema=response_schema,
-                temperature=temperature,
-            ),
-        )
-        text = response.text
+
+        def _one_call() -> tuple[Any, str]:
+            response = client.models.generate_content(
+                model=self._model,
+                contents=[
+                    {"role": "user", "parts": [{"text": user_text}]},
+                ],
+                config=types.GenerateContentConfig(
+                    system_instruction=system,
+                    response_mime_type="application/json",
+                    response_schema=response_schema,
+                    temperature=temperature,
+                    # Raise output cap. Default behaviour leaves Gemini's
+                    # implicit cap in place and structured-output JSON gets
+                    # truncated mid-string under verbose tool/critic flows,
+                    # producing JSONDecodeError ("Invalid \\uXXXX escape" at
+                    # ~65k chars). 16k tokens is enough headroom for the
+                    # largest agent outputs we've seen in this pipeline.
+                    max_output_tokens=16384,
+                ),
+            )
+            return response, response.text
+
+        response, text = _one_call()
         if os.environ.get("FERMDOCS_DEBUG_HYPOTHESIS"):
             import sys
 
             print(f"[gemini-hypothesis] raw_response={text!r}", file=sys.stderr)
         if not text:
             raise ValueError("Gemini returned empty hypothesis response")
-        parsed = json.loads(text)
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            # One retry on malformed JSON. Truncation under heavy load
+            # appears non-deterministic (different runs land different
+            # outputs from the same prompt); one retry usually clears it.
+            # If the retry also fails, the original exception type bubbles
+            # to the runner which records an error row.
+            response, text = _one_call()
+            if not text:
+                raise
+            parsed = json.loads(text)
         in_tok, out_tok = _extract_usage(response, system, user_text, text)
         return parsed, in_tok, out_tok
 

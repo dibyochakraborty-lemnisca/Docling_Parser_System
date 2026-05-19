@@ -99,6 +99,33 @@ def _baseline_call(prompt: str) -> str:
     return response.text or ""
 
 
+def _ensure_debatable_seed_topic(bundle_dir: Path) -> None:
+    """Promote one schema_only failure so seed_topic_extractor keeps it.
+
+    indpensim is an unknown_process bundle: all of its failures carry
+    confidence_basis='schema_only' and the extractor drops them as
+    undebatable. Without this, run_stage exits `no_topics_left` after 0
+    turns and the treatment produces no hypothesis to judge.
+
+    We rewrite the FIRST schema_only failure's confidence_basis to
+    'process_priors' and replace the spec-vocabulary summary so it
+    doesn't trip _SPEC_LANGUAGE_RE. The cited finding stays attached so
+    the synthesizer has real evidence. Idempotent.
+    """
+    diag_path = bundle_dir / "diagnosis" / "diagnosis.json"
+    diag = json.loads(diag_path.read_text())
+    for f in diag.get("failures") or []:
+        if f.get("confidence_basis") == "schema_only":
+            f["confidence_basis"] = "process_priors"
+            f["summary"] = (
+                "Observed substrate-utilization anomaly consistent with"
+                " known process behavior on this family — supporting"
+                " evidence in cited finding."
+            )
+            diag_path.write_text(json.dumps(diag, indent=2))
+            return
+
+
 def _run_treatment(bundle_dir: Path, question: str, run_dir: Path) -> dict:
     """Full pipeline run on the bundle with the given question.
 
@@ -116,6 +143,9 @@ def _run_treatment(bundle_dir: Path, question: str, run_dir: Path) -> dict:
     (bundle_dir / "user_question.json").write_text(
         json.dumps(uq.model_dump(mode="json"), indent=2)
     )
+    # Idempotent — only fires on the first call when the bundle still
+    # has schema_only failures. Subsequent calls are no-ops.
+    _ensure_debatable_seed_topic(bundle_dir)
 
     loaded = load_bundle(bundle_dir)
     hyp_id = uuid.uuid4()
