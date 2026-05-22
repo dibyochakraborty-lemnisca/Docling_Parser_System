@@ -344,16 +344,23 @@ This is written to `user_question.json` in the bundle when applicable.
 There are two interactive modes:
 
 ```text
-answers/resume
-  The run pauses on open questions. User answers are attached and the same
-  debate resumes. Lesson buffer survives the pause via
-  <bundle>/lesson_buffer.json.
+answers/resume (HITL)
+  Triggered via CLI (`--hitl`) or API (`POST /api/runs/{run_id}/answers`).
+  The run pauses when agents emit open questions. The CLI prompts the user,
+  captures their answers as `HumanInputReceivedEvent`s, and the same
+  debate resumes. The lesson buffer survives the pause via 
+  <bundle>/lesson_buffer.json. This ensures human feedback is organically 
+  integrated into the final synthesis and cross-run memory.
 
 follow-up
   The bundle is frozen. A new user question overwrites user_question.json and
   only the hypothesis stage runs again. Memory layer reads/writes are
   per-followup-run, not per-original-run.
 ```
+
+
+*Note on `HumanInputRecord`: While the system supports interactive open-question answering (via event injection), the `HumanInputRecord` schema object attached to individual debate attempts is currently a stub reserved for future explicit trajectory steering (e.g., a human forcing a "red flag" override directly into a specific specialist's output context).*
+
 
 Diagnosis open questions intentionally do not include `re_run_from`.
 Hypothesis open questions may include `re_run_from` because only hypothesis

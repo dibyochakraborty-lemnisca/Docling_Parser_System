@@ -381,6 +381,23 @@ structured contract.
 The CLI uses `NoopBackend` for memory by default. The API runner reads
 `FERMDOCS_MEMORY=synap` to enable the live memory backend.
 
+
+### 4. Human-in-the-Loop (HITL) Interaction
+
+When running the hypothesis stage, you can explicitly enable HITL mode. If the agents encounter ambiguity and emit `open_questions`, the system will pause and ask the operator for ground-truth answers.
+
+```bash
+fermdocs-hypothesize run \
+  --bundle-dir out/bundle-EXP-001 \
+  --hitl \
+  --out-dir out/hyp-EXP-001
+```
+
+If open questions are generated, the CLI prompts:
+`N open question(s). Answer them and re-run? [Y/n]:`
+
+The user's answers are captured as `HumanInputReceivedEvent`s and `QuestionResolvedEvent`s, appended to the event log, and the stage automatically resumes. The agents then factor the operator's input into the next round of debate.
+
 ## API Surface
 
 The local API lives under `/api`:
