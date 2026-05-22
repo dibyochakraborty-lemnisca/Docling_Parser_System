@@ -3,7 +3,7 @@ processes:
   - id: penicillin_indpensim
     organism: "Penicillium chrysogenum"
     product: "penicillin"
-    process_family: "fed-batch"
+    process_family: "penicillin_fedbatch"
     typical_scale_l: 58000
     aliases:
       organism: ["P. chrysogenum", "P chrysogenum"]

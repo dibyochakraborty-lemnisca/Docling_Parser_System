@@ -121,7 +121,31 @@ def _extract_organism_and_family(dossier: dict) -> tuple[str | None, str | None]
     registered = process.get("registered") or {}
     organism = (observed.get("organism") or "").strip() or None
     process_family = (registered.get("process_family") or registered.get("name") or "").strip() or None
+    if process_family is None:
+        process_family = _resolve_family_from_process_id(registered.get("process_id"))
     return organism, process_family
+
+
+def _resolve_family_from_process_id(process_id: str | None) -> str | None:
+    """Fall back to the process registry when the dossier lacks process_family.
+
+    Legacy dossiers (pre-closed-vocab manifest) carry process_id but not
+    the canonical process_family. The registry maps process_id →
+    process_family; we validate the result against process_families.yaml
+    so only closed-vocab values propagate.
+    """
+    if not process_id:
+        return None
+    try:
+        from fermdocs.mapping.process_registry import cached_registry
+        entry = cached_registry().by_id().get(process_id)
+        if entry is None:
+            return None
+        from fermdocs.domain.process_families import load_process_families
+        allowed = set(load_process_families().keys())
+        return entry.process_family if entry.process_family in allowed else None
+    except Exception:
+        return None
 
 
 def _load_user_question(bundle_dir):

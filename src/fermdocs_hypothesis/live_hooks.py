@@ -16,6 +16,8 @@ HITL, SuperMemory) are still intact.
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 from fermdocs_hypothesis.agents.critic import CriticAgent, build_critic
 from fermdocs_hypothesis.agents.judge import JudgeAgent, build_judge
 from fermdocs_hypothesis.agents.lessons_summarizer import (
@@ -61,6 +63,7 @@ class LiveHooks:
         *,
         client: GeminiHypothesisClient | None = None,
         memory: "object | None" = None,
+        run_id: str | None = None,
     ):
         self._bundle = bundle
         # Memory backend (NoopBackend by default). The runner constructs
@@ -91,10 +94,10 @@ class LiveHooks:
         self._synthesizer = build_synthesizer(self._client)
         self._critic = build_critic(self._client, self._tools)
         self._judge = build_judge(self._client)
-        # Lessons summarizer is a small LLM call that compresses recurring
-        # critic complaints into a digest, surfaced into synth/critic/judge
-        # views on retries. Lives outside the main debate cycle.
-        self._lessons: LessonsSummarizerAgent = build_lessons_summarizer(self._client)
+        self._run_id = run_id or str(uuid4())
+        self._lessons: LessonsSummarizerAgent = build_lessons_summarizer(
+            self._client, run_id=self._run_id,
+        )
         self._specialists: dict[SpecialistRole, SpecialistAgent] = {
             "kinetics": self._kinetics,
             "mass_transfer": self._mass_transfer,

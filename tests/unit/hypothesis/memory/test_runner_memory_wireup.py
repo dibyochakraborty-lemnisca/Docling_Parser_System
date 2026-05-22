@@ -1,13 +1,13 @@
-"""Runner integrates with MemoryBackend on clean exit only (D6).
+"""Runner integrates with MemoryBackend on normal exit (D6 revised).
 
 Plan ref: plans/2026-05-10-memory-layer.md commit 3.
 
 REGRESSION-CRITICAL: with NoopBackend (default), behavior is unchanged.
 Tests assert:
 
-  1. Clean-exit runs with a process_family persist their lessons via
-     memory.write.
-  2. Failed/budget-exhausted runs do NOT write (D6 invariant).
+  1. Any recognised ExitReason with a process_family persists lessons
+     via memory.write (the lessons summarizer is the quality gate).
+  2. exit_reason=None does NOT write (defensive guard).
   3. Runs without process_family do NOT write (we have no scope key).
   4. NoopBackend default keeps the runner contract identical.
   5. Memory write exceptions are absorbed (memory is opt-in).
@@ -159,7 +159,9 @@ def test_persist_writes_on_clean_exit_no_topics_left():
     assert len(spy.writes) == 1
 
 
-def test_persist_skips_on_budget_exhausted():
+def test_persist_writes_on_budget_exhausted():
+    """D6 revised: budget-exhausted runs still produced valid debate —
+    the lessons summarizer is the quality gate, not the exit reason."""
     spy = _SpyBackend()
     events = [_make_event_with_lessons([Lesson(lesson_id="L-1", text="x")])]
     n = _persist_lessons_to_memory(
@@ -169,11 +171,12 @@ def test_persist_skips_on_budget_exhausted():
         exit_reason="budget_exhausted",
         run_id="run-1",
     )
-    assert n == 0
-    assert spy.writes == []
+    assert n == 1
+    assert len(spy.writes) == 1
 
 
-def test_persist_skips_on_max_turns_reached():
+def test_persist_writes_on_max_turns_reached():
+    """D6 revised: max-turns runs completed their full allocation."""
     spy = _SpyBackend()
     events = [_make_event_with_lessons([Lesson(lesson_id="L-1", text="x")])]
     n = _persist_lessons_to_memory(
@@ -183,7 +186,22 @@ def test_persist_skips_on_max_turns_reached():
         exit_reason="max_turns_reached",
         run_id="run-1",
     )
+    assert n == 1
+
+
+def test_persist_skips_on_none_exit_reason():
+    """Defensive guard: if exit_reason is somehow None, skip persist."""
+    spy = _SpyBackend()
+    events = [_make_event_with_lessons([Lesson(lesson_id="L-1", text="x")])]
+    n = _persist_lessons_to_memory(
+        memory=spy,
+        events=events,
+        hyp_input=_make_hyp_input(),
+        exit_reason=None,
+        run_id="run-1",
+    )
     assert n == 0
+    assert spy.writes == []
 
 
 def test_persist_skips_when_process_family_is_none():

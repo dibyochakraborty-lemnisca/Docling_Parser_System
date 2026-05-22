@@ -503,6 +503,7 @@ class BudgetSnapshot(BaseModel):
     max_tokens_per_agent_call: int = 4000
     max_open_questions: int = 15
     max_total_input_tokens: int = 200_000
+    skip_critic: bool = False
 
     turns_used: int = 0
     tool_calls_used: int = 0

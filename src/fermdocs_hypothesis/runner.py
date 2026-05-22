@@ -145,6 +145,7 @@ class RunnerState:
     finalized_rejected: tuple[RejectedHypothesis, ...] = ()
     exit_reason: ExitReason | None = None
     pending_question_seeds: tuple[tuple[str, list[str]], ...] = ()
+    specialist_order: tuple[SpecialistRole, ...] = SPECIALIST_ORDER
     # Set by finalize_turn rejection branch when the topic should be re-attempted
     # (under max_critic_cycles_per_topic). Consumed by retry_topic phase, which
     # re-emits topic_selected so the cycle counter ticks.
@@ -480,9 +481,10 @@ def step(
         )
 
     if state.phase == "contribute_facet":
-        if state.next_specialist_idx >= len(SPECIALIST_ORDER):
+        order = state.specialist_order
+        if state.next_specialist_idx >= len(order):
             return (replace(state, phase="synthesize"), [])
-        role = SPECIALIST_ORDER[state.next_specialist_idx]
+        role = order[state.next_specialist_idx]
         new_facet_counter = state.facet_counter + 1
         facet_id = f"FCT-{new_facet_counter:04d}"
         facet, in_tok, out_tok = hooks.contribute_facet(state, role, facet_id)
@@ -542,13 +544,24 @@ def step(
             output_tokens=out_tok,
         )
         new_budget = add_tool_calls(new_budget, 1)
+        next_phase = "critique"
+        extra_fields: dict = {}
+        if state.budget.skip_critic:
+            next_phase = "finalize_turn"
+            extra_fields = {
+                "current_critique": CritiqueFull(
+                    hyp_id=hyp_id, flag="green", reasons=[], tool_calls_used=0,
+                ),
+                "current_judge_valid": False,
+            }
         return (
             replace(
                 state,
-                phase="critique",
+                phase=next_phase,
                 budget=new_budget,
                 current_hypothesis=hyp,
                 hyp_counter=new_hyp_counter,
+                **extra_fields,
             ),
             [
                 HypothesisSynthesizedEvent(
@@ -719,7 +732,7 @@ def step(
 
         # Accept path
         new_finals = state.finalized_finals + (
-            _build_final(state.current_hypothesis, state.current_critique, state.current_judge_valid),
+            _build_final(state.current_hypothesis, state.current_critique, state.current_judge_valid, state.specialist_order),
         )
         ev = HypothesisAcceptedEvent(
             ts=now,
@@ -801,11 +814,13 @@ def _persist_lessons_to_memory(
     exit_reason: ExitReason | None,
     run_id: str,
 ) -> int:
-    """Write buffered lessons to the memory backend on clean exit only.
+    """Write buffered lessons to the memory backend on normal exit.
 
-    D6: failed/budget-exhausted runs do not pollute the store. Returns
-    the number of records written so the runner can surface a counter
-    in the token report.
+    D6 (revised): lessons are persisted on any recognised ExitReason.
+    The lessons summarizer only fires after meaningful critic debate,
+    so the lessons themselves are the quality gate — not the exit
+    reason. If exit_reason is None (should not happen on a normal
+    run), we skip as a defensive guard.
 
     Tenant_id: read from FERMDOCS_TENANT_ID env (matches SynapBackend
     default); falls back to "default" for single-tenant Phase 1.
@@ -815,7 +830,7 @@ def _persist_lessons_to_memory(
     process_family=None; the SynapBackend will refuse to write a
     lesson record without process_family, so we skip those records.
     """
-    if exit_reason not in {"consensus_reached", "no_topics_left"}:
+    if exit_reason is None:
         return 0
     process_family = getattr(hyp_input, "process_family", None)
     if process_family is None:
@@ -965,7 +980,10 @@ def _render_charts_into_finals(
 
 
 def _build_final(
-    hyp: HypothesisFull, crit: CritiqueFull, judge_valid: bool
+    hyp: HypothesisFull,
+    crit: CritiqueFull,
+    judge_valid: bool,
+    specialist_order: tuple[SpecialistRole, ...] = SPECIALIST_ORDER,
 ) -> FinalHypothesis:
     return FinalHypothesis(
         hyp_id=hyp.hyp_id,
@@ -978,7 +996,7 @@ def _build_final(
         confidence=hyp.confidence,
         confidence_basis=hyp.confidence_basis,
         provenance_downgraded=hyp.provenance_downgraded,
-        supporting_specialists=list(SPECIALIST_ORDER),
+        supporting_specialists=list(specialist_order),
         critic_flag=crit.flag,
         judge_ruled_criticism_valid=judge_valid,
         # Carry the synthesizer-populated question response forward unchanged.
@@ -1022,6 +1040,7 @@ def run_stage(
     memory: MemoryBackend | None = None,
     now_factory=lambda: datetime.now(timezone.utc),
     validate: bool = False,
+    specialist_order: tuple[SpecialistRole, ...] | None = None,
 ) -> RunResult:
     """Drive the step-function loop until phase == 'done'.
 
@@ -1041,6 +1060,7 @@ def run_stage(
         budget=initial_budget,
         seed_topics=seed_topics_tuple,
         pending_question_seeds=tuple(pending_question_seeds or ()),
+        specialist_order=specialist_order or SPECIALIST_ORDER,
     )
 
     observer = Observer(global_md_path)
