@@ -11,7 +11,7 @@
 
 organism: Penicillium chrysogenum
 product: penicillin
-process_family: industrial fed-batch fermentation
+process_family: penicillin_fedbatch
 process_id: penicillin_indpensim
 
 scale:

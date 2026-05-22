@@ -39,6 +39,13 @@ class FindingType(str, Enum):
     # v3+:
     PRECEDES_WITH_LAG = "precedes_with_lag"
     KINETIC_ANOMALY = "kinetic_anomaly"
+    # v4 (May 2026): generic bucket for LLM-discovered trajectory patterns.
+    # Sub-discrimination lives in `Finding.statistics["pattern_kind"]` —
+    # e.g. "phase_boundary", "cross_batch_variance", "correlation",
+    # "outlier_batch". Open-ended on purpose: the trajectory analyzer
+    # surfaces patterns we haven't pre-enumerated, and forcing them into
+    # narrower types makes the contract dishonest.
+    TRAJECTORY_PATTERN = "trajectory_pattern"
 
 
 class Severity(str, Enum):
@@ -93,6 +100,12 @@ class Tier(str, Enum):
     A: direct measurement violation (range_violation against measured nominal+std_dev)
     B: derived from measurements (rates, yields, ratios)
     C: modeled / process-priors-derived (back-calculated from priors)
+    P: product-side KPIs (final/peak titer, decline, productivity,
+       precursor utilization). Tier P entries are direct measurements
+       on the product variable; trust-equivalent to Tier A but kept
+       distinct so the synthesizer can route product evidence to the
+       'which run was better?' angle without competing with kinetic
+       Tier-A findings.
 
     Hypothesis-stage agents weight evidence by tier; downgrade C in early debate.
     """
@@ -100,6 +113,7 @@ class Tier(str, Enum):
     A = "A"
     B = "B"
     C = "C"
+    P = "P"
 
 
 class NarrativeTag(str, Enum):

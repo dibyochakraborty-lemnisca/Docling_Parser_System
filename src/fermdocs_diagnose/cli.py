@@ -106,6 +106,17 @@ def cli() -> None:
         "Use 'fake' or 'none' to skip the LLM call (meta.error path)."
     ),
 )
+@click.option(
+    "--user-question-path",
+    "user_question_path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help=(
+        "Path to a UserQuestion JSON file (PR-A). When provided, the"
+        " question threads into the diagnose agent's prompt prefix and"
+        " enforces the emit-≥1-claim contract. Optional; legacy runs omit."
+    ),
+)
 def run(
     dossier: Path | None,
     characterization: Path | None,
@@ -113,6 +124,7 @@ def run(
     output: Path | None,
     emit_markdown: Path | None,
     provider: str | None,
+    user_question_path: Path | None,
 ) -> None:
     """Run the diagnosis agent on a (dossier, characterization) pair or a bundle."""
     if bundle_dir is not None and (dossier is not None or characterization is not None):
@@ -160,7 +172,24 @@ def run(
     if resolved_provider not in ("anthropic", "gemini"):
         resolved_provider = "gemini"  # meta.provider only accepts those two
     agent = DiagnosisAgent(client=client, provider=resolved_provider)
-    result = agent.diagnose(dossier_data, char_output, bundle=reader)
+
+    user_question = None
+    if user_question_path is not None:
+        from fermdocs.domain.user_question import UserQuestion as _UQ
+        try:
+            uq_data = json.loads(user_question_path.read_text())
+            user_question = _UQ.model_validate(uq_data)
+        except (json.JSONDecodeError, OSError, ValueError) as exc:
+            click.echo(
+                f"warning: failed to load user_question from {user_question_path}: {exc};"
+                " continuing without it",
+                err=True,
+            )
+            user_question = None
+
+    result = agent.diagnose(
+        dossier_data, char_output, bundle=reader, user_question=user_question,
+    )
 
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(result.model_dump(mode="json"), indent=2))

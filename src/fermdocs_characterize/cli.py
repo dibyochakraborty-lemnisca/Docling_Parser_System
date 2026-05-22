@@ -1,7 +1,7 @@
 """CLI: read a dossier JSON, run characterization, write the output JSON.
 
     fermdocs-characterize <dossier.json> [--out <output.json>] [--no-validate]
-                          [--bundle <out_root>]
+                          [--bundle <out_root>] [--no-trajectory-analyzer]
 
 The dossier may carry `_specs` (synthetic fixture format). For real ingestion
 dossiers a separate setpoint table will be wired in via a SpecsProvider; for
@@ -11,11 +11,20 @@ If `--bundle` is given, a bundle directory is written under <out_root> in
 addition to (or instead of) the legacy --out JSON. The bundle holds the
 dossier and characterization output as a file-based handoff for the
 diagnose stage.
+
+The trajectory_analyzer (May 2026) runs after deterministic spec checks
+to surface trajectory-grounded patterns via execute_python. Default ON
+when a Gemini client can be built (env: FERMDOCS_CHARACTERIZE_PROVIDER /
+FERMDOCS_HYPOTHESIS_PROVIDER / FERMDOCS_DIAGNOSIS_PROVIDER ladder; falls
+back to stub when provider is 'fake'/'none' or GEMINI_API_KEY is unset).
+Pass --no-trajectory-analyzer to force-disable.
 """
 
 from __future__ import annotations
 
 import json
+import logging
+import os
 import sys
 from pathlib import Path
 
@@ -24,9 +33,15 @@ import click
 from fermdocs import __version__ as FERMDOCS_VERSION
 from fermdocs.bundle import BundleWriter
 from fermdocs.domain.golden_schema import schema_version as golden_schema_version
+from fermdocs_characterize.agents.llm_client import build_characterize_client
+from fermdocs_characterize.agents.trajectory_analyzer import (
+    build_trajectory_analyzer,
+)
 from fermdocs_characterize.pipeline import CharacterizationPipeline
 from fermdocs_characterize.schema import CharacterizationOutput
 from fermdocs_characterize.validators.output_validator import ValidationError
+
+_log = logging.getLogger(__name__)
 
 
 def _flatten_trajectories(output: CharacterizationOutput) -> list[dict]:
@@ -100,15 +115,51 @@ def _collect_run_ids(output: CharacterizationOutput, dossier: dict) -> list[str]
     default=False,
     help="Skip cross-cutting output validation (Pydantic still runs).",
 )
+@click.option(
+    "--no-trajectory-analyzer",
+    is_flag=True,
+    default=False,
+    help="Disable LLM-driven trajectory pattern analyzer. Default is ON"
+    " when a Gemini client builds; this flag force-disables.",
+)
 def main(
     dossier_path: Path,
     out_path: Path | None,
     bundle_root: Path | None,
     no_validate: bool,
+    no_trajectory_analyzer: bool,
 ) -> None:
     """Run characterization on DOSSIER_PATH."""
     dossier = json.loads(dossier_path.read_text())
-    pipeline = CharacterizationPipeline(validate=not no_validate)
+
+    # Build trajectory_analyzer unless disabled. build_characterize_client
+    # respects FERMDOCS_CHARACTERIZE_PROVIDER (with fallback ladder); it
+    # returns None for 'fake'/'none', and the analyzer's stub mode then
+    # makes it a no-op. So passing the analyzer in is safe even when no
+    # Gemini key is set — the pipeline still produces deterministic
+    # findings only.
+    analyzer = None
+    if not no_trajectory_analyzer:
+        try:
+            client = build_characterize_client()
+            analyzer = build_trajectory_analyzer(client)
+            if client is not None:
+                click.echo(
+                    "trajectory_analyzer: enabled (provider="
+                    f"{client.model_name})",
+                    err=True,
+                )
+        except Exception as exc:
+            click.echo(
+                f"trajectory_analyzer: disabled ({exc.__class__.__name__}: {exc})",
+                err=True,
+            )
+            analyzer = None
+
+    pipeline = CharacterizationPipeline(
+        validate=not no_validate,
+        trajectory_analyzer=analyzer,
+    )
     try:
         output = pipeline.run(dossier)
     except ValidationError as e:

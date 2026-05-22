@@ -1,0 +1,260 @@
+"""Load a bundle directory into a HypothesisInput.
+
+Plan ref: plans/2026-05-03-hypothesis-debate-v0.md §9.
+
+Reads:
+  - <bundle>/diagnosis/diagnosis.json       (DiagnosisOutput)
+  - <bundle>/characterization/characterization.json
+  - <bundle>/characterization/narrative_observations.json (optional)
+  - <bundle>/dossier.json                   (for organism/process_family)
+
+Produces:
+  - HypothesisInput with seed_topics already extracted
+  - Reference pools the projector consumes (FindingRef, NarrativeRef,
+    TrajectoryViewRef, ResolvedPriorRef) — built lazily by `build_reference_pools`.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from pathlib import Path
+
+from fermdocs.bundle.reader import BundleReader
+from fermdocs.domain.process_priors import (
+    ProcessPriors,
+    cached_priors,
+    resolve_priors,
+)
+from fermdocs_characterize.schema import CharacterizationOutput
+from fermdocs_diagnose.schema import DiagnosisOutput
+from fermdocs_hypothesis.schema import (
+    AnalysisRef,
+    FindingRef,
+    FollowupContext,
+    HypothesisInput,
+    NarrativeRef,
+    ResolvedPriorRef,
+    TrajectoryViewRef,
+)
+from fermdocs_hypothesis.seed_topic_extractor import extract_seed_topics
+
+
+@dataclass
+class LoadedBundle:
+    """Container for everything Stage 2 needs from a bundle."""
+
+    hyp_input: HypothesisInput
+    diagnosis: DiagnosisOutput
+    characterization: CharacterizationOutput
+    findings_pool: list[FindingRef]
+    narratives_pool: list[NarrativeRef]
+    trajectories_pool: list[TrajectoryViewRef]
+    priors_pool: list[ResolvedPriorRef]
+    analyses_pool: list[AnalysisRef]
+    bundle_dir: Path
+
+
+def load_bundle(
+    bundle_dir: str | Path,
+    *,
+    followup_context: FollowupContext | None = None,
+) -> LoadedBundle:
+    """Load all artifacts from a bundle directory."""
+    reader = BundleReader(bundle_dir)
+    diagnosis_json = reader.get_diagnosis_json()
+    diagnosis = DiagnosisOutput.model_validate_json(diagnosis_json)
+
+    char_json = reader.get_characterization_json()
+    characterization = CharacterizationOutput.model_validate_json(char_json)
+
+    # Load narrative observations into characterization if not already present.
+    if reader.has_narrative_observations() and not characterization.narrative_observations:
+        narr_raw = json.loads(reader.get_narrative_observations_json())
+        # Re-build characterization with narratives attached.
+        char_dict = json.loads(char_json)
+        char_dict["narrative_observations"] = narr_raw
+        characterization = CharacterizationOutput.model_validate(char_dict)
+
+    dossier = reader.get_dossier()
+    organism, process_family = _extract_organism_and_family(dossier)
+
+    # PR-A on caisc-hitl: bundle dir may contain a user_question.json
+    # written by the API runner after characterize. Load it if present;
+    # absent → legacy run, hyp_input.user_question stays None.
+    user_question = _load_user_question(reader.dir)
+
+    seed_topics = extract_seed_topics(diagnosis, user_question=user_question)
+
+    findings_pool = _build_findings_pool(characterization)
+    narratives_pool = _build_narratives_pool(characterization)
+    trajectories_pool = _build_trajectories_pool(characterization)
+    priors_pool = _build_priors_pool(organism, process_family)
+    analyses_pool = _build_analyses_pool(diagnosis)
+
+    hyp_input = HypothesisInput(
+        diagnosis=diagnosis,
+        characterization=characterization,
+        bundle_path=str(reader.dir),
+        seed_topics=seed_topics,
+        organism=organism,
+        process_family=process_family,
+        user_question=user_question,
+        followup_context=followup_context,
+    )
+    return LoadedBundle(
+        hyp_input=hyp_input,
+        diagnosis=diagnosis,
+        characterization=characterization,
+        findings_pool=findings_pool,
+        narratives_pool=narratives_pool,
+        trajectories_pool=trajectories_pool,
+        priors_pool=priors_pool,
+        analyses_pool=analyses_pool,
+        bundle_dir=Path(bundle_dir),
+    )
+
+
+def _extract_organism_and_family(dossier: dict) -> tuple[str | None, str | None]:
+    process = (dossier.get("experiment") or {}).get("process") or {}
+    observed = process.get("observed") or {}
+    registered = process.get("registered") or {}
+    organism = (observed.get("organism") or "").strip() or None
+    process_family = (registered.get("process_family") or registered.get("name") or "").strip() or None
+    if process_family is None:
+        process_family = _resolve_family_from_process_id(registered.get("process_id"))
+    return organism, process_family
+
+
+def _resolve_family_from_process_id(process_id: str | None) -> str | None:
+    """Fall back to the process registry when the dossier lacks process_family.
+
+    Legacy dossiers (pre-closed-vocab manifest) carry process_id but not
+    the canonical process_family. The registry maps process_id →
+    process_family; we validate the result against process_families.yaml
+    so only closed-vocab values propagate.
+    """
+    if not process_id:
+        return None
+    try:
+        from fermdocs.mapping.process_registry import cached_registry
+        entry = cached_registry().by_id().get(process_id)
+        if entry is None:
+            return None
+        from fermdocs.domain.process_families import load_process_families
+        allowed = set(load_process_families().keys())
+        return entry.process_family if entry.process_family in allowed else None
+    except Exception:
+        return None
+
+
+def _load_user_question(bundle_dir):
+    """Load <bundle_dir>/user_question.json if it exists, else None.
+
+    PR-A on caisc-hitl. Bundles produced by the API runner with a
+    user-typed question carry this file; legacy bundles don't, and
+    bundle_loader returns None — back-compat preserved.
+
+    Errors during load are logged and treated as None — never blocks
+    the hypothesis stage.
+    """
+    from fermdocs.domain.user_question import UserQuestion
+
+    path = Path(bundle_dir) / "user_question.json"
+    if not path.exists():
+        return None
+    try:
+        return UserQuestion.model_validate_json(path.read_text())
+    except (json.JSONDecodeError, OSError, ValueError) as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            "bundle_loader: failed to load user_question.json (%s: %s); proceeding without it",
+            exc.__class__.__name__, str(exc)[:200],
+        )
+        return None
+
+
+def _build_findings_pool(char: CharacterizationOutput) -> list[FindingRef]:
+    out: list[FindingRef] = []
+    for f in char.findings:
+        # statistics is a free-form dict on Finding; only trajectory_pattern
+        # findings carry metric_id today, set by the trajectory_analyzer
+        # coercer when the pattern is grounded in a ready catalog entry.
+        metric_id = None
+        if isinstance(f.statistics, dict):
+            raw = f.statistics.get("metric_id")
+            if isinstance(raw, str) and raw:
+                metric_id = raw
+        out.append(
+            FindingRef(
+                finding_id=f.finding_id,
+                summary=f.summary,
+                variables_involved=list(f.variables_involved),
+                metric_id=metric_id,
+            )
+        )
+    return out
+
+
+def _build_narratives_pool(char: CharacterizationOutput) -> list[NarrativeRef]:
+    out: list[NarrativeRef] = []
+    for n in char.narrative_observations:
+        out.append(
+            NarrativeRef(
+                narrative_id=n.narrative_id,
+                tag=n.tag.value if hasattr(n.tag, "value") else str(n.tag),
+                summary=n.text,
+                run_id=n.run_id,
+            )
+        )
+    return out
+
+
+def _build_trajectories_pool(char: CharacterizationOutput) -> list[TrajectoryViewRef]:
+    return [
+        TrajectoryViewRef(
+            run_id=t.run_id,
+            variable=t.variable,
+            note=f"unit={t.unit}, quality={t.quality:.2f}",
+        )
+        for t in char.trajectories
+    ]
+
+
+def _build_analyses_pool(diag: DiagnosisOutput) -> list[AnalysisRef]:
+    """Project DiagnosisOutput.analysis into AnalysisRefs that the projector
+    can match against topic citations."""
+    return [
+        AnalysisRef(
+            claim_id=a.claim_id,
+            summary=a.summary,
+            kind=a.kind,
+            cited_finding_ids=list(a.cited_finding_ids),
+            affected_variables=list(a.affected_variables),
+        )
+        for a in diag.analysis
+    ]
+
+
+def _build_priors_pool(
+    organism: str | None, process_family: str | None
+) -> list[ResolvedPriorRef]:
+    if not organism:
+        return []
+    try:
+        priors: ProcessPriors = cached_priors()
+    except Exception:
+        return []
+    resolved = resolve_priors(priors, organism=organism, process_family=process_family)
+    return [
+        ResolvedPriorRef(
+            organism=r.organism,
+            process_family=r.process_family,
+            variable=r.variable,
+            range_low=r.range[0],
+            range_high=r.range[1],
+            typical=r.typical,
+            source=r.source,
+        )
+        for r in resolved
+    ]

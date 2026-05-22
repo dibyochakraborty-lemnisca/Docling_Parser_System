@@ -34,6 +34,7 @@ from fermdocs.mapping.narrative_extractor import (
     is_dup_of_table_observations,
     verify_evidence,
 )
+from fermdocs.parsing.document_segmenter import DocumentSegmenter
 from fermdocs.parsing.router import FormatRouter
 from fermdocs.parsing.run_id_resolver import RunIdResolution, RunIdResolver
 from fermdocs.storage.repository import FileRecord, Repository
@@ -41,6 +42,11 @@ from fermdocs.units.converter import UnitConverter
 from fermdocs.units.normalizer import UnitNormalizer
 
 EXTRACTOR_VERSION = "v0.1.0"
+
+# File suffixes that go through DoclingPdfParser. The segmenter only runs
+# for these — CSV/Excel paths skip the LLM call entirely and use the
+# existing column-heuristic chain unchanged.
+_PDF_SUFFIXES = {".pdf"}
 
 
 class IngestionPipeline:
@@ -55,6 +61,7 @@ class IngestionPipeline:
         normalizer: UnitNormalizer | None = None,
         narrative_extractor: NarrativeExtractor | None = None,
         run_id_resolver: "RunIdResolver | None" = None,
+        document_segmenter: DocumentSegmenter | None = None,
     ):
         self._router = router
         self._mapper = mapper
@@ -70,15 +77,44 @@ class IngestionPipeline:
         from fermdocs.parsing.run_id_resolver import RunIdResolver as _RIR
 
         self._run_id_resolver = run_id_resolver or _RIR()
+        # PDF-only LLM document segmenter. None disables segmentation and
+        # the pipeline falls back to the existing column-heuristic chain
+        # for every table. CSV/Excel paths never invoke the segmenter
+        # regardless of this setting.
+        self._segmenter = document_segmenter
 
-    def ingest(self, experiment_id: str, files: list[Path]) -> IngestionResult:
+    def ingest(
+        self,
+        experiment_id: str,
+        files: list[Path],
+        *,
+        manifest_run_id: str | None = None,
+    ) -> IngestionResult:
+        """Ingest files for an experiment.
+
+        `manifest_run_id`, when supplied, pins every observation in every
+        file to that run-id. The segmenter still runs (its output is
+        recorded for inspection) and emits a WARN if it disagrees with the
+        manifest. CLI plumbing for this parameter lands in a follow-up
+        commit; for now it defaults to None to preserve existing behavior.
+        """
         self._repo.upsert_experiment(experiment_id)
         results: list[IngestionFileResult] = []
         for path in files:
-            results.append(self._ingest_one(experiment_id, path))
+            results.append(
+                self._ingest_one(
+                    experiment_id, path, manifest_run_id=manifest_run_id
+                )
+            )
         return IngestionResult(experiment_id=experiment_id, files=results)
 
-    def _ingest_one(self, experiment_id: str, path: Path) -> IngestionFileResult:
+    def _ingest_one(
+        self,
+        experiment_id: str,
+        path: Path,
+        *,
+        manifest_run_id: str | None = None,
+    ) -> IngestionFileResult:
         stored = self._files.put(path)
         mime, _ = mimetypes.guess_type(path.name)
         record = FileRecord(
@@ -106,11 +142,51 @@ class IngestionPipeline:
         tables = parsed.tables
         narrative_blocks = parsed.narrative_blocks
 
+        # PDF-only: run the LLM segmenter to assign each table to an
+        # experimental run. CSV/Excel inputs skip this entirely (the
+        # column-heuristic chain works fine for tabular files with real
+        # run-id columns). The segmenter is best-effort; on any failure
+        # it returns None and the existing chain handles every table.
+        # When manifest_run_id is pinned, segmenter still runs and logs a
+        # disagreement warning if it detects multiple distinct runs —
+        # operator's signal that the manifest may be wrong.
+        doc_map = None
+        if (
+            self._segmenter is not None
+            and path.suffix.lower() in _PDF_SUFFIXES
+        ):
+            doc_map = self._segmenter.segment(
+                parsed,
+                file_id=str(file_id),
+                manifest_run_id=manifest_run_id,
+            )
+
         mapping = self._mapper.map(tables, self._schema)
         mapping_by_table = {tm.table_id: tm for tm in mapping.tables}
 
         table_observations: list[Observation] = []
         residual = ResidualPayload()
+
+        # Stash any operator-supplied feeding-schedule tables (PDF only;
+        # always empty for CSV/Excel). These were filtered out of the
+        # observation stream by the parser to avoid polluting
+        # feed_rate_l_per_h with planned-setpoint values.
+        if parsed.feed_plan_tables:
+            residual.process_recipe = [
+                {
+                    "table_id": t.table_id,
+                    "headers": t.headers,
+                    "rows": t.rows,
+                    "locator": t.locator,
+                }
+                for t in parsed.feed_plan_tables
+            ]
+
+        # Persist DocumentMap to residual for inspection by downstream
+        # agents (diagnose can cite "BATCH-04 REPORT (page 9)" instead of
+        # raw run_ids).
+        if doc_map is not None:
+            residual.document_map = doc_map.model_dump(mode="json")
 
         for table in tables:
             tm = mapping_by_table.get(table.table_id)
@@ -118,7 +194,12 @@ class IngestionPipeline:
                 _add_unmapped(residual, table, reason="no_mapping_returned")
                 continue
             obs, partial = self._observations_for_table(
-                experiment_id, file_id, table, tm
+                experiment_id,
+                file_id,
+                table,
+                tm,
+                doc_map=doc_map,
+                manifest_run_id=manifest_run_id,
             )
             table_observations.extend(obs)
             if partial:
@@ -266,11 +347,30 @@ class IngestionPipeline:
         file_id: uuid.UUID,
         table: ParsedTable,
         mapping: TableMapping,
+        *,
+        doc_map: Any | None = None,
+        manifest_run_id: str | None = None,
     ) -> tuple[list[Observation], list[dict]]:
         observations: list[Observation] = []
         unmapped_columns: list[dict] = []
         col_index = {h: i for i, h in enumerate(table.headers)}
         time_col_idx = _detect_time_column(table.headers)
+        # Run-id precedence (highest first):
+        #   1. Operator manifest (manifest_run_id)
+        #   2. DocumentMap.run_for_table(idx)        — LLM segmenter output
+        #   3. RunIdResolver chain                   — column / filename / synthetic
+        # Manifest wins; segmenter output is the next-best signal; resolver
+        # chain handles the fallthrough. The disagreement warning between
+        # (1) and (2) is emitted by DocumentSegmenter.segment().
+        seg_manifest_run_id: str | None = manifest_run_id
+        if seg_manifest_run_id is None and doc_map is not None and isinstance(
+            table.locator, dict
+        ):
+            table_idx = table.locator.get("table_idx")
+            if isinstance(table_idx, int):
+                run_segment = doc_map.run_for_table(table_idx)
+                if run_segment is not None:
+                    seg_manifest_run_id = run_segment.run_id
         # Run-id resolution via strategy chain. ColumnStrategy returns
         # column_idx → per-row read; other strategies return a single value
         # used for every row.
@@ -278,7 +378,7 @@ class IngestionPipeline:
             headers=table.headers,
             rows=table.rows,
             filename=table.locator.get("file") if isinstance(table.locator, dict) else None,
-            manifest_run_id=None,  # CLI manifest threading is a future enhancement
+            manifest_run_id=seg_manifest_run_id,
         )
 
         for entry in mapping.entries:

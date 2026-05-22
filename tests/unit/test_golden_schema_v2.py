@@ -71,18 +71,30 @@ def test_nominal_and_std_dev_optional():
 
 def test_production_yaml_loads_as_v2():
     schema = load_schema()
-    assert schema.version == "2.0"
+    # v2.1: dropped static nominal/std_dev for fed-batch dynamic variables
+    # (substrate_g_l, volume_l, weight_kg) — these grow / spike legitimately
+    # in fed-batch processes and produced false range_violation findings.
+    # See plans/2026-05-03-hypothesis-debate-v0.md IndPenSim postmortem.
+    assert schema.version == "2.1"
     by_name = schema.by_name()
     expected_variables = {
         "biomass_g_l", "mu_x_max_per_h", "mu_p_max_per_h", "substrate_g_l",
         "dissolved_o2_mg_l", "volume_l", "weight_kg", "ph", "temperature_k",
         "paa_mg_l", "nh3_mg_l", "alpha_kla",
     }
+    # Vars that intentionally have no static bounds in v2.1.
+    fed_batch_dynamic = {"substrate_g_l", "volume_l", "weight_kg"}
     for var in expected_variables:
         assert var in by_name, f"missing variable {var} in v2 schema"
         col = by_name[var]
-        assert col.nominal is not None, f"{var} missing nominal in production YAML"
-        assert col.std_dev is not None, f"{var} missing std_dev in production YAML"
+        if var in fed_batch_dynamic:
+            assert col.nominal is None, (
+                f"{var} should have no nominal (fed-batch dynamic) in v2.1"
+            )
+            assert col.std_dev is None
+        else:
+            assert col.nominal is not None, f"{var} missing nominal in production YAML"
+            assert col.std_dev is not None, f"{var} missing std_dev in production YAML"
 
 
 def test_production_yaml_identifier_columns_have_no_specs():

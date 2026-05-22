@@ -33,7 +33,13 @@ from fermdocs_characterize.agent_context import (
     build_agent_context,
     serialize_for_agent,
 )
-from fermdocs_characterize.schema import CharacterizationOutput
+from fermdocs.domain.user_question import UserQuestion
+from fermdocs_characterize.schema import (
+    CharacterizationOutput,
+    ExtractedVia,
+    NarrativeTag,
+    Severity,
+)
 from fermdocs_characterize.specs import DictSpecsProvider, SpecsProvider
 from fermdocs_diagnose.audit.trace_writer import TraceWriter
 from fermdocs_diagnose.schema import (
@@ -162,9 +168,56 @@ _BUNDLE_SYSTEM_PROMPT = (
     "  2. Cite real IDs. Every claim must reference a real finding_id or\n"
     "     a (run_id, variable) trajectory pair. Do not invent IDs.\n"
     "  3. Confidence ≤ 0.85 on every claim.\n"
-    "  4. Under UNKNOWN_PROCESS or UNKNOWN_ORGANISM flags, use\n"
-    "     confidence_basis='schema_only' and note that recipe-specific priors\n"
-    "     are unavailable.\n"
+    "  4. Under UNKNOWN_PROCESS or UNKNOWN_ORGANISM flags:\n"
+    "       (a) For TRAJECTORY-GROUNDED claims (numerical anomalies you\n"
+    "           computed via execute_python): use\n"
+    "           confidence_basis='schema_only' and note that recipe-specific\n"
+    "           priors are unavailable.\n"
+    "       (b) NARRATIVE OBSERVATIONS REMAIN PRIMARY EVIDENCE. Closure\n"
+    "           events, interventions, deviations, and operator observations\n"
+    "           describe what actually happened in the run. They do NOT\n"
+    "           require process priors to interpret. The flag does NOT\n"
+    "           exempt you from emitting failure / analysis claims grounded\n"
+    "           in narrative — those claims are still valid and still must\n"
+    "           be emitted. Cite them with cited_narrative_ids.\n"
+    "       (c) Do NOT make the registry mismatch (\"observed organism is X,\n"
+    "           registry has Y\") your headline finding. The flag is a\n"
+    "           routing signal about prior availability — it is not a\n"
+    "           diagnosis of the experiment. The experiment itself almost\n"
+    "           always has a real, document-grounded story (closure events,\n"
+    "           interventions, cross-run patterns); find that story.\n"
+    "       (d) TRAJECTORY_PATTERN FINDINGS ARE PRIMARY EVIDENCE. The\n"
+    "           characterize stage now runs an LLM-driven trajectory\n"
+    "           analyzer that produces findings of type='trajectory_pattern'\n"
+    "           — cross-batch variance, phase boundaries, outlier batches,\n"
+    "           variable correlations. These are computed from real time-\n"
+    "           series via execute_python; their citations are valid\n"
+    "           evidence and they do NOT depend on schema specs or process\n"
+    "           priors. PREFER trajectory_pattern findings over\n"
+    "           range_violation findings when emitting failure / trend /\n"
+    "           cross_run_observation claims, especially under\n"
+    "           UNKNOWN_PROCESS. A claim like 'PAA diverges between runs,\n"
+    "           5202 vs 1506 mg/L peak' (citing F-0101) is debatable\n"
+    "           biology; 'biomass exceeded 0.5 g/L spec' (citing\n"
+    "           range_violation findings) is a schema artifact. Lead with\n"
+    "           the trajectory patterns. statistics.pattern_kind tells you\n"
+    "           the sub-kind (phase_boundary, cross_batch_variance,\n"
+    "           correlation, outlier_batch).\n"
+    "       (e) METRIC_ID AUDIT TRAIL. Some trajectory_pattern findings now\n"
+    "           carry statistics.metric_id — a stable catalog identifier\n"
+    "           like 'A8' (specific growth rate), 'A10' (phase\n"
+    "           segmentation), 'B10' (RQ + overflow flag), 'B16' (carbon\n"
+    "           balance closure). When present, the numbers came from a\n"
+    "           verified toolkit function (extracted_via='statistical',\n"
+    "           confidence up to 0.95) rather than from open-ended LLM\n"
+    "           pattern detection. Do NOT recompute these — cite the\n"
+    "           finding_id; the metric_id is part of the audit trail and\n"
+    "           lets your reader trace the math. When emitting claims,\n"
+    "           prefer to cite multiple metric_ids that triangulate the\n"
+    "           same conclusion (e.g. F-0108 with B10 RQ=1.42 + F-0112\n"
+    "           with B16 closure=0.78 jointly support an overflow-\n"
+    "           metabolism claim). Mention the metric_id in your claim\n"
+    "           description so the chain reads cleanly downstream.\n"
     "  5. Open questions: data-gap only. Each must reference a finding_id,\n"
     "     carry a why_it_matters one-liner, and be answerable in <30s.\n"
     "  6. You MUST call execute_python (or another data-fetch tool) before\n"
@@ -173,7 +226,44 @@ _BUNDLE_SYSTEM_PROMPT = (
     "  7. If you found a real anomaly via execute_python, EMIT IT as a\n"
     "     failure. An empty failures list is correct only when, after\n"
     "     looking at the data, you genuinely see no anomalies — which is\n"
-    "     rare on real industrial data and unlikely here.\n\n"
+    "     rare on real industrial data and unlikely here.\n"
+    "     STATISTICAL-FINDINGS CONTRACT: if get_findings() returns one or\n"
+    "     more findings with extracted_via='statistical' AND\n"
+    "     statistics.metric_id present (catalog-grounded toolkit math from\n"
+    "     characterize), you MUST emit at least one non-meta claim —\n"
+    "     failure, trend, or non-meta analysis — that cites them. The math\n"
+    "     came from a verified function; the audit trail is reproducible;\n"
+    "     surfacing the numbers is your job. Emitting only open_questions\n"
+    "     while statistical findings exist is a CONTRACT VIOLATION.\n"
+    "     Concrete examples of what TO emit:\n"
+    "       - 'Trend D-T-0001: μ_max ranged 0.043-0.076 1/h across 5 runs\n"
+    "         (cited F-0001..F-0005, all metric_id=A8); 3x below Verduyn\n"
+    "         1991 typical 0.20 (cited F-0010, metric_id=C2).'\n"
+    "       - 'Failure D-F-0001: B16 carbon balance closure 34.7% in\n"
+    "         RUN-0002 (cited F-0121); 65% of carbon unaccounted for by\n"
+    "         biomass alone.'\n"
+    "       - 'Analysis D-A-0001 kind=cross_run_observation: B10 RQ\n"
+    "         peaked at 52.89 in RUN-0001 vs 3.90 in RUN-0002 (cited\n"
+    "         F-0103/F-0104).'\n"
+    "     A statistical finding with a real number is ALWAYS at least a\n"
+    "     trend even when you can't decide failure-vs-normal. Surface it.\n"
+    "     META-CLAIM CONTRACT: AnalysisClaim kinds 'data_quality_caveat'\n"
+    "     and 'spec_alignment' are META observations (about the data /\n"
+    "     system configuration), not about the experiment. If your output\n"
+    "     contains ONLY meta-kind analyses (no failures, no trends, no\n"
+    "     cross_run_observation / phase_characterization analyses) WHILE\n"
+    "     narrative_observations include closure_events or interventions\n"
+    "     OR characterize emitted trajectory_pattern findings, this is a\n"
+    "     CONTRACT VIOLATION. Closure events ARE failures waiting to be\n"
+    "     written. Interventions ARE observations that belong in\n"
+    "     cross_run_observation analyses. Trajectory patterns ARE either\n"
+    "     failures (when the pattern signals deviation from expected) or\n"
+    "     cross_run_observation analyses (when the pattern is a phase\n"
+    "     characterization or a divergence between runs). Do not dodge by\n"
+    "     swapping data_quality_caveat for spec_alignment — both are\n"
+    "     equally meta and equally insufficient on their own. Ground at\n"
+    "     least one non-meta claim in narrative_observations OR\n"
+    "     trajectory_pattern findings.\n\n"
     "TOOLS (cost: H = high, L = low):\n"
     "  - execute_python(code, timeout=120) [H] — sandboxed pandas/numpy/scipy.\n"
     "    cwd is project root; `from fermdocs...` imports work. The bundle's\n"
@@ -196,19 +286,59 @@ _BUNDLE_SYSTEM_PROMPT = (
     "  - submit_diagnosis(payload) — terminator. Idempotent; second call\n"
     "    with a different payload is rejected.\n\n"
     "Tool budget: 20 calls / 7 min wall-clock. Spend them.\n\n"
+    "USER QUESTION (when AgentContext.user_question is non-null):\n"
+    "  The human arrived with a specific directive. The AgentContext blob\n"
+    "  carries it as `user_question` with fields: text, shape, affected_runs,\n"
+    "  affected_variables. Treat the question as a binding directive, not a\n"
+    "  hint. After your normal trajectory analysis, your output MUST include\n"
+    "  ≥1 claim (failure / trend / non-meta analysis) OR ≥1 open_question\n"
+    "  that bears directly on the user's question. Empty output while a\n"
+    "  user_question is present is a CONTRACT VIOLATION even if the bundle\n"
+    "  data is sparse — emit an open_question naming exactly what's missing\n"
+    "  and why it blocks the answer.\n"
+    "\n"
+    "  Shape-specific guidance (read user_question.shape):\n"
+    "    scoping     → narrow at least one claim to the run / time / variable\n"
+    "                  the question references. If shape=scoping and\n"
+    "                  affected_runs=[RUN-0034], your headline claim must\n"
+    "                  cite RUN-0034.\n"
+    "    mechanistic → test the proposed mechanism explicitly. Cite evidence\n"
+    "                  FOR and AGAINST. A mechanistic question about overflow\n"
+    "                  metabolism wants a claim that says 'overflow is\n"
+    "                  consistent with X, but inconsistent with Y'.\n"
+    "    comparative → emit a cross_run_observation analysis OR a comparison\n"
+    "                  failure that explicitly contrasts the groups the\n"
+    "                  question names.\n"
+    "    open        → general bias: at least one substantive claim should\n"
+    "                  bear on the question's text.\n"
+    "\n"
+    "  Mention the question text or the relevant run/variable name in the\n"
+    "  summary of the claim that addresses it. Downstream consumers grep\n"
+    "  for that to surface 'we did/didn't answer your question' in the UI.\n\n"
     "GROUNDING HIERARCHY (use this order for every failure claim):\n"
-    "  1. process_priors (preferred). Call get_priors(organism=...) early.\n"
-    "     If a matching prior exists for the variable, set\n"
+    "  1. statistical_toolkit (preferred when applicable). When ALL the\n"
+    "     finding_ids you cite have extracted_via='statistical' AND carry\n"
+    "     statistics.metric_id (i.e. they came from the characterize-stage\n"
+    "     verified toolkit — compute_mu, compute_rq, compute_carbon_balance_\n"
+    "     closure, mu_max_reference_vs_observed, etc.), set\n"
+    "     confidence_basis='statistical_toolkit'. The math is deterministic\n"
+    "     and reproducible; this is the strongest grounding the system can\n"
+    "     provide for a quantitative claim. Mention the metric_id(s) in your\n"
+    "     summary (e.g. 'B10 RQ=1.42 sustained 36-72h, B16 closure=0.78').\n"
+    "  2. process_priors. Call get_priors(organism=...) early. If a\n"
+    "     matching prior exists for the variable, set\n"
     "     confidence_basis='process_priors' and quote the source\n"
     "     (e.g. 'below typical 120 g/L per Verduyn 1991'). Pass the\n"
     "     organism string from get_meta() / dossier — substring matching\n"
-    "     handles messy fields.\n"
-    "  2. cross_run (secondary). With >=2 runs, compare across runs and\n"
-    "     set confidence_basis='cross_run'. Quote the magnitude delta\n"
-    "     ('RUN-A=43 g/L vs RUN-B=2 g/L').\n"
-    "  3. schema_only (last resort). Neither priors nor cohort exist:\n"
-    "     confidence_basis='schema_only', cap confidence at 0.6, and\n"
-    "     state explicitly that recipe-specific priors are unavailable.\n\n"
+    "     handles messy fields. Use this when at least some cited findings\n"
+    "     are not catalog-grounded but a prior validates the claim.\n"
+    "  3. cross_run. With >=2 runs, compare across runs and set\n"
+    "     confidence_basis='cross_run'. Quote the magnitude delta\n"
+    "     ('RUN-A=43 g/L vs RUN-B=2 g/L'). Use when the citation set\n"
+    "     mixes statistical + non-statistical findings across runs.\n"
+    "  4. schema_only (last resort). None of the above apply: cap\n"
+    "     confidence at 0.6, and state explicitly that recipe-specific\n"
+    "     priors are unavailable.\n\n"
     "  On single-run dossiers, you MUST call get_priors() before emitting\n"
     "  any failure claim. Skipping it is the leading cause of weak,\n"
     "  ungrounded diagnoses. Claims marked 'process_priors' that are NOT\n"
@@ -291,6 +421,7 @@ class DiagnosisAgent:
         diagnosis_id: uuid.UUID | None = None,
         generation_timestamp: datetime | None = None,
         bundle: BundleReader | None = None,
+        user_question: UserQuestion | None = None,
     ) -> DiagnosisOutput:
         """Run the diagnosis ReAct loop.
 
@@ -303,11 +434,14 @@ class DiagnosisAgent:
                 (execute_python + bundle fetches). Trace is persisted under
                 <bundle>/audit/. Without `bundle`, the legacy 3-tool surface
                 is used; behavior matches Wave 1.
+            user_question: PR-A user-question directive. Threads into
+                AgentContext so the prompt prefix carries the question.
+                None = legacy run (no question).
         """
         diagnosis_id = diagnosis_id or uuid.uuid4()
         generation_timestamp = generation_timestamp or datetime.utcnow()
         specs = specs_provider or DictSpecsProvider.from_dossier(dossier)
-        ctx = build_agent_context(dossier, output)
+        ctx = build_agent_context(dossier, output, user_question=user_question)
 
         if self._client is None:
             return self._error_output(
@@ -518,6 +652,15 @@ class DiagnosisAgent:
                 output,
                 error=f"emit_invalid:{exc.__class__.__name__}",
             )
+
+        # Runtime backstop: when the agent dodges its own contract by
+        # emitting only meta-kind analyses while narrative_observations
+        # describe closure events or interventions, synthesize
+        # deterministic claims from the narratives. Otherwise downstream
+        # ends up with no topics and the hypothesis stage exits empty.
+        # This is a generalisable safety net — works for any process,
+        # not just yeast / Penicillium.
+        built = _synthesize_narrative_backstop_if_needed(built, output)
 
         # Plan A Stage 3: hand the validator the priors set + organism so it
         # can downgrade process_priors claims that aren't actually grounded.
@@ -807,21 +950,30 @@ def _build_output(
             affected=affected,
             also_have_other_citation=bool(cited_findings or f_trajs),
         )
-        failures.append(
-            FailureClaim(
-                claim_id=f"D-F-{i+1:04d}",
-                summary=str(raw.get("summary", "")),
-                cited_finding_ids=cited_findings,
-                cited_trajectories=f_trajs,
-                cited_narrative_ids=cited_narratives,
-                affected_variables=affected,
-                confidence=_clamp_conf(raw.get("confidence", 0.0)),
-                confidence_basis=_basis(raw.get("confidence_basis")),
-                domain_tags=list(raw.get("domain_tags") or []),
-                severity=raw.get("severity", "minor"),
-                time_window=raw.get("time_window"),
+        try:
+            failures.append(
+                FailureClaim(
+                    claim_id=f"D-F-{i+1:04d}",
+                    summary=str(raw.get("summary", "")),
+                    cited_finding_ids=cited_findings,
+                    cited_trajectories=f_trajs,
+                    cited_narrative_ids=cited_narratives,
+                    affected_variables=affected,
+                    confidence=_clamp_conf(raw.get("confidence", 0.0)),
+                    confidence_basis=_basis(raw.get("confidence_basis")),
+                    domain_tags=list(raw.get("domain_tags") or []),
+                    severity=raw.get("severity", "minor"),
+                    time_window=raw.get("time_window"),
+                )
             )
-        )
+        except ValueError as e:
+            # One bad claim (typically uncitable after backfill) shouldn't
+            # nuke the whole emit. Drop it, keep the rest.
+            _log.warning(
+                "dropping FailureClaim %d (uncitable after backfill): %s",
+                i + 1,
+                e,
+            )
 
     trends = []
     for i, raw in enumerate(payload.get("trends") or []):
@@ -837,21 +989,28 @@ def _build_output(
             affected=t_affected,
             also_have_other_citation=bool(t_findings or trajs),
         )
-        trends.append(
-            TrendClaim(
-                claim_id=f"D-T-{i+1:04d}",
-                summary=str(raw.get("summary", "")),
-                cited_finding_ids=t_findings,
-                cited_trajectories=trajs,
-                cited_narrative_ids=t_narratives,
-                affected_variables=t_affected,
-                confidence=_clamp_conf(raw.get("confidence", 0.0)),
-                confidence_basis=_basis(raw.get("confidence_basis")),
-                domain_tags=list(raw.get("domain_tags") or []),
-                direction=raw.get("direction", "plateau"),
-                time_window=raw.get("time_window"),
+        try:
+            trends.append(
+                TrendClaim(
+                    claim_id=f"D-T-{i+1:04d}",
+                    summary=str(raw.get("summary", "")),
+                    cited_finding_ids=t_findings,
+                    cited_trajectories=trajs,
+                    cited_narrative_ids=t_narratives,
+                    affected_variables=t_affected,
+                    confidence=_clamp_conf(raw.get("confidence", 0.0)),
+                    confidence_basis=_basis(raw.get("confidence_basis")),
+                    domain_tags=list(raw.get("domain_tags") or []),
+                    direction=raw.get("direction", "plateau"),
+                    time_window=raw.get("time_window"),
+                )
             )
-        )
+        except ValueError as e:
+            _log.warning(
+                "dropping TrendClaim %d (uncitable after backfill): %s",
+                i + 1,
+                e,
+            )
 
     analysis = []
     for i, raw in enumerate(payload.get("analysis") or []):
@@ -862,33 +1021,45 @@ def _build_output(
             affected=a_affected,
             also_have_other_citation=bool(a_findings),
         )
-        analysis.append(
-            AnalysisClaim(
-                claim_id=f"D-A-{i+1:04d}",
-                summary=str(raw.get("summary", "")),
-                cited_finding_ids=a_findings,
-                cited_narrative_ids=a_narratives,
-                affected_variables=a_affected,
-                confidence=_clamp_conf(raw.get("confidence", 0.0)),
-                confidence_basis=_basis(raw.get("confidence_basis")),
-                domain_tags=list(raw.get("domain_tags") or []),
-                kind=raw.get("kind", "phase_characterization"),
+        try:
+            analysis.append(
+                AnalysisClaim(
+                    claim_id=f"D-A-{i+1:04d}",
+                    summary=str(raw.get("summary", "")),
+                    cited_finding_ids=a_findings,
+                    cited_narrative_ids=a_narratives,
+                    affected_variables=a_affected,
+                    confidence=_clamp_conf(raw.get("confidence", 0.0)),
+                    confidence_basis=_basis(raw.get("confidence_basis")),
+                    domain_tags=list(raw.get("domain_tags") or []),
+                    kind=raw.get("kind", "phase_characterization"),
+                )
             )
-        )
+        except ValueError as e:
+            _log.warning(
+                "dropping AnalysisClaim %d (uncitable after backfill): %s",
+                i + 1,
+                e,
+            )
 
     questions = []
     for i, raw in enumerate(payload.get("open_questions") or []):
-        questions.append(
-            OpenQuestion(
-                question_id=f"D-Q-{i+1:04d}",
-                question=str(raw.get("question", "")),
-                why_it_matters=str(raw.get("why_it_matters", "")),
-                cited_finding_ids=list(raw.get("cited_finding_ids") or []),
-                cited_narrative_ids=list(raw.get("cited_narrative_ids") or []),
-                answer_format_hint=raw.get("answer_format_hint", "free_text"),
-                domain_tags=list(raw.get("domain_tags") or []),
+        try:
+            questions.append(
+                OpenQuestion(
+                    question_id=f"D-Q-{i+1:04d}",
+                    question=str(raw.get("question", "")),
+                    why_it_matters=str(raw.get("why_it_matters", "")),
+                    cited_finding_ids=list(raw.get("cited_finding_ids") or []),
+                    cited_narrative_ids=list(raw.get("cited_narrative_ids") or []),
+                    answer_format_hint=raw.get("answer_format_hint", "free_text"),
+                    domain_tags=list(raw.get("domain_tags") or []),
+                )
             )
-        )
+        except ValueError as e:
+            _log.warning(
+                "dropping OpenQuestion %d (uncitable): %s", i + 1, e
+            )
 
     return DiagnosisOutput(
         meta=meta,
@@ -897,6 +1068,251 @@ def _build_output(
         analysis=analysis,
         open_questions=questions,
         narrative=payload.get("narrative"),
+    )
+
+
+_META_ANALYSIS_KINDS: frozenset[str] = frozenset(
+    {"data_quality_caveat", "spec_alignment"}
+)
+"""Mirror of seed_topic_extractor._SUPPRESSED_ANALYSIS_KINDS — both
+modules need to know which AnalysisClaim kinds are meta (about data /
+system configuration) vs hypothesizable (about the experiment). Kept
+in sync via the meta-claim contract test in test_meta_kinds_aligned.py.
+"""
+
+
+def _is_meta_only_emit(built: DiagnosisOutput) -> bool:
+    """True iff the diagnose output contains zero hypothesizable claims.
+
+    Two failure modes both qualify and both need the backstop:
+
+      (a) "Meta-dodge": agent emits only AnalysisClaims of meta kinds
+          (data_quality_caveat / spec_alignment) — i.e. claims about the
+          DATA rather than about the experiment. Earlier failure mode;
+          we suppress these in seed_topic_extractor too.
+
+      (b) "Empty-dodge": agent emits NO claims at all. Newer failure
+          mode observed on yeast/unknown_process bundles where the agent
+          interprets `unknown_process + sparse_data + specs_mostly_missing`
+          as "I have nothing to claim" and emits failures=[], trends=[],
+          analysis=[]. Equally bad downstream: hypothesis stage exits
+          no_topics_left.
+
+    The decision of whether to actually inject claims is made by the
+    caller — it checks whether narrative_observations contain
+    closure_events or interventions to ground the synthesized claims.
+    If neither exists, the empty emit is allowed to stand.
+    """
+    if built.failures or built.trends:
+        return False
+    if not built.analysis:
+        # Empty-dodge: no claims at all. Caller decides if narratives
+        # exist to ground deterministic claims on; if not, the empty
+        # emit passes through unchanged.
+        return True
+    return all(a.kind in _META_ANALYSIS_KINDS for a in built.analysis)
+
+
+def _synthesize_narrative_backstop_if_needed(
+    built: DiagnosisOutput, output: CharacterizationOutput
+) -> DiagnosisOutput:
+    """When the diagnose agent emits zero hypothesizable claims (either
+    only meta-kind analyses, or fully empty) while the bundle has
+    narrative_observations describing closure events or interventions,
+    synthesize deterministic claims from those narratives so the
+    diagnosis isn't empty.
+
+    Each closure_event becomes a FailureClaim (severity=major, basis=
+    schema_only, provenance_downgraded=true) citing the source
+    narrative_id. Each intervention becomes an AnalysisClaim with
+    kind=cross_run_observation citing the source narrative_id.
+
+    Generalisable: works for any process / organism / document where
+    the narrative extractor surfaced typed events. No registry or
+    priors required.
+
+    Idempotent on re-call: if the agent already emitted any failures,
+    trends, or non-meta analyses, this is a no-op.
+    """
+    if not _is_meta_only_emit(built):
+        return built
+
+    closure_events = [
+        n
+        for n in output.narrative_observations
+        if n.tag == NarrativeTag.CLOSURE_EVENT
+    ]
+    interventions = [
+        n
+        for n in output.narrative_observations
+        if n.tag == NarrativeTag.INTERVENTION
+    ]
+    # Statistical findings the agent failed to surface even though they
+    # carry verified toolkit math. We treat metric_id-tagged
+    # extracted_via=statistical findings as backstop-able evidence: the
+    # numbers came from a deterministic function, the audit trail is
+    # reproducible, the agent has no excuse not to mention them.
+    catalog_findings = [
+        f
+        for f in output.findings
+        if (
+            f.extracted_via == ExtractedVia.STATISTICAL
+            and isinstance(f.statistics, dict)
+            and f.statistics.get("metric_id")
+            # Skip data-gap entries — they're informational, not anomalies.
+            and f.statistics.get("pattern_kind") != "data_gap"
+        )
+    ]
+    if not closure_events and not interventions and not catalog_findings:
+        # Agent's meta-only output is appropriate — there's no narrative
+        # OR statistical signal to ground a non-meta claim on. Pass
+        # through unchanged.
+        return built
+
+    synth_failures: list[FailureClaim] = list(built.failures)
+    synth_analyses: list[AnalysisClaim] = list(built.analysis)
+    synth_trends: list[TrendClaim] = list(built.trends)
+
+    next_failure_idx = len(synth_failures) + 1
+    for n in closure_events:
+        run_tag = f" in {n.run_id}" if n.run_id else ""
+        time_tag = f" at {n.time_h:.0f}h" if n.time_h is not None else ""
+        summary = (
+            f"Closure event{run_tag}{time_tag} per operator narrative: "
+            f"{n.text[:240]}"
+        )
+        try:
+            synth_failures.append(
+                FailureClaim(
+                    claim_id=f"D-F-{next_failure_idx:04d}",
+                    summary=summary[:500],
+                    cited_finding_ids=[],
+                    cited_trajectories=[],
+                    cited_narrative_ids=[n.narrative_id],
+                    affected_variables=list(n.affected_variables),
+                    confidence=0.7,
+                    confidence_basis=ConfidenceBasis.SCHEMA_ONLY,
+                    domain_tags=["data_quality"]
+                    if not n.affected_variables
+                    else [],
+                    severity=Severity.MAJOR,
+                    provenance_downgraded=True,
+                    time_window=None,
+                )
+            )
+            next_failure_idx += 1
+        except ValueError as e:
+            _log.warning(
+                "backstop: dropping synthesized closure FailureClaim: %s", e
+            )
+
+    next_analysis_idx = len(synth_analyses) + 1
+    for n in interventions:
+        run_tag = f" in {n.run_id}" if n.run_id else ""
+        time_tag = f" at {n.time_h:.0f}h" if n.time_h is not None else ""
+        summary = (
+            f"Operator intervention{run_tag}{time_tag} per narrative: "
+            f"{n.text[:240]}"
+        )
+        try:
+            synth_analyses.append(
+                AnalysisClaim(
+                    claim_id=f"D-A-{next_analysis_idx:04d}",
+                    summary=summary[:500],
+                    cited_finding_ids=[],
+                    cited_narrative_ids=[n.narrative_id],
+                    affected_variables=list(n.affected_variables),
+                    confidence=0.7,
+                    confidence_basis=ConfidenceBasis.SCHEMA_ONLY,
+                    domain_tags=["process_control"],
+                    kind="cross_run_observation",
+                    provenance_downgraded=True,
+                )
+            )
+            next_analysis_idx += 1
+        except ValueError as e:
+            _log.warning(
+                "backstop: dropping synthesized intervention AnalysisClaim: %s", e
+            )
+
+    # Statistical-findings backstop: one TrendClaim per metric_id, citing
+    # all findings of that metric_id from this bundle. Keeps the claim
+    # count proportional to the catalog dimensions actually exercised
+    # (not one trend per run × variable, which would explode).
+    findings_by_metric: dict[str, list] = {}
+    for f in catalog_findings:
+        mid = str(f.statistics.get("metric_id"))
+        findings_by_metric.setdefault(mid, []).append(f)
+
+    next_trend_idx = len(synth_trends) + 1
+    for metric_id, group in sorted(findings_by_metric.items()):
+        cited_ids = [f.finding_id for f in group]
+        # Concatenate the first ~3 finding summaries so the trend has a
+        # meaningful body. Cap to avoid ballooning the summary.
+        joined = "; ".join(g.summary[:120] for g in group[:3])
+        if len(group) > 3:
+            joined += f" (and {len(group) - 3} more)"
+        # Direction is descriptive when ambiguous — agent can override on
+        # re-run. "stable" reads as "we surfaced this; downstream judges
+        # whether it's normal or anomalous".
+        try:
+            synth_trends.append(
+                TrendClaim(
+                    claim_id=f"D-T-{next_trend_idx:04d}",
+                    summary=(
+                        f"Catalog metric {metric_id}: {joined}"[:500]
+                    ),
+                    cited_finding_ids=cited_ids,
+                    cited_narrative_ids=[],
+                    cited_trajectories=[],
+                    affected_variables=sorted({
+                        v
+                        for g in group
+                        for v in (g.variables_involved or [])
+                    }),
+                    confidence=0.8,
+                    confidence_basis=ConfidenceBasis.STATISTICAL_TOOLKIT,
+                    domain_tags=[],
+                    direction="plateau",
+                    provenance_downgraded=False,
+                    time_window=None,
+                )
+            )
+            next_trend_idx += 1
+        except ValueError as e:
+            _log.warning(
+                "backstop: dropping synthesized statistical TrendClaim for %s: %s",
+                metric_id,
+                e,
+            )
+
+    n_added_failures = len(synth_failures) - len(built.failures)
+    n_added_analyses = len(synth_analyses) - len(built.analysis)
+    n_added_trends = len(synth_trends) - len(built.trends)
+    if not (n_added_failures or n_added_analyses or n_added_trends):
+        return built
+
+    dodge_kind = "empty" if not built.analysis else "meta-only"
+    _log.warning(
+        "backstop: agent emit was %s with %d closure_events / %d "
+        "interventions / %d catalog metric_id groups in upstream; "
+        "synthesized %d failure + %d analysis + %d trend claim(s) "
+        "deterministically",
+        dodge_kind,
+        len(closure_events),
+        len(interventions),
+        len(findings_by_metric),
+        n_added_failures,
+        n_added_analyses,
+        n_added_trends,
+    )
+
+    return built.model_copy(
+        update={
+            "failures": synth_failures,
+            "analysis": synth_analyses,
+            "trends": synth_trends,
+        }
     )
 
 

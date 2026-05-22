@@ -46,6 +46,33 @@ class AnthropicIdentityClient:
         raise ValueError("anthropic identity response missing tool_use block")
 
 
+def _process_family_enum_anthropic() -> list[str]:
+    """Closed-vocab process family names from process_families.yaml.
+
+    Built lazily so the schema stays in sync with the YAML. `unknown` is
+    last as the explicit escape hatch. Hardcoded fallback in case the
+    YAML is missing or corrupt — prevents the LLM contract from breaking
+    on a config issue.
+    """
+    try:
+        from fermdocs.domain.process_families import (
+            UNKNOWN_FAMILY_NAME,
+            load_process_families,
+        )
+        names = sorted(load_process_families().keys())
+        names = [n for n in names if n != UNKNOWN_FAMILY_NAME]
+        names.append(UNKNOWN_FAMILY_NAME)
+        return names
+    except Exception:
+        return [
+            "penicillin_fedbatch",
+            "yeast_intracellular_product_fedbatch",
+            "yeast_aerobic_fedbatch",
+            "ecoli_recombinant_protein",
+            "unknown",
+        ]
+
+
 _ANTHROPIC_IDENTITY_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -77,6 +104,13 @@ _ANTHROPIC_IDENTITY_SCHEMA: dict[str, Any] = {
             "type": "object",
             "properties": {
                 "process_id": {"type": ["string", "null"]},
+                # Closed-vocab process family. The LLM picks from the enum
+                # (sourced from process_families.yaml) or "unknown". This is
+                # the canonical key downstream agents use for routing.
+                "process_family": {
+                    "type": ["string", "null"],
+                    "enum": _process_family_enum_anthropic(),
+                },
                 "confidence": {"type": "number"},
                 "rationale": {"type": ["string", "null"]},
             },

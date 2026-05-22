@@ -1,0 +1,230 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Editorial Scientific palette (Phase 1 of frontend-redesign).
+ * Plan ref: plans/2026-05-11-frontend-redesign-editorial.md
+ *
+ * Paper-and-ink foundation, single forest accent. Light-only — dark mode
+ * was dropped for v1 because editorial designs are intrinsically light-
+ * first and a half-implemented dark mode is worse than no dark mode.
+ *
+ * Token shape: every color is exposed as a CSS variable so the Tailwind
+ * config can read it, and so a future switch to paid Söhne/Tiempos is
+ * a one-line change in --font-display / --font-body / --font-ui.
+ */
+
+@layer base {
+  :root {
+    /* Type — the variables tailwind config + components read. The
+     * --font-display / --font-ui variables themselves come from
+     * next/font in layout.tsx; we expose --font-body as Fraunces too
+     * because the optical-size axis lets one family handle both. */
+    --font-body: var(--font-display);
+
+    /* Paper and ink — the foundation. Everything chrome inherits from
+     * here. RGB tuples (not hsl) because Tailwind's `theme.extend.colors`
+     * uses them more straightforwardly with `var(--token)`. */
+    --color-paper: #FBFAF7;             /* off-white warm; page bg */
+    --color-paper-elevated: #FFFFFF;    /* card surfaces */
+    --color-ink: #0F1B2D;               /* deep navy; body text */
+    --color-ink-secondary: #3D4A5C;     /* metadata, captions */
+    --color-ink-muted: #6B7280;         /* footnotes, byline meta */
+    --color-rule: #E5E2DA;              /* hairline dividers */
+    --color-rule-strong: #BFB9AB;       /* heavier section rules */
+
+    /* The accent — forest. Used at most 3× per screen. */
+    --color-accent: #1B4D3E;            /* forest, the editorial accent */
+    --color-accent-soft: #E8EFE8;       /* 5% forest tint for pull-quotes */
+    --color-accent-ink: #FBFAF7;        /* text ON accent surface */
+
+    /* Functional — semantic only. NOT decorative.
+     * Warn: amber, used only for [memory-axis], [robustness-axis] flags.
+     * Error: burgundy, used only for failed runs / rejected hypotheses. */
+    --color-warn: #B45309;
+    --color-error: #991B1B;
+
+    /* Shadcn-compatibility aliases so existing components that read
+     * --background, --foreground, --border etc. keep working without a
+     * mass rewrite. They map to editorial tokens. We'll prune these as
+     * components are individually re-treated in Phase 2. */
+    --background: 38 27% 97%;           /* paper */
+    --foreground: 215 51% 12%;          /* ink */
+    --card: 0 0% 100%;
+    --card-foreground: 215 51% 12%;
+    --primary: 156 48% 21%;             /* accent (forest) */
+    --primary-foreground: 38 27% 97%;
+    --secondary: 47 24% 89%;            /* a paper-tinted secondary */
+    --secondary-foreground: 215 51% 12%;
+    --muted: 47 24% 89%;
+    --muted-foreground: 217 19% 36%;
+    --accent: 156 48% 21%;
+    --accent-foreground: 38 27% 97%;
+    --destructive: 0 65% 35%;
+    --destructive-foreground: 38 27% 97%;
+    --border: 41 24% 86%;
+    --input: 41 24% 86%;
+    --ring: 156 48% 21%;
+    --radius: 0.25rem;                  /* tighter corners; editorial */
+  }
+
+  /* Reset: every element gets the editorial hairline as its default
+   * border color, body inherits paper + ink. */
+  * {
+    border-color: hsl(var(--border));
+  }
+
+  body {
+    background-color: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-body), Georgia, "Times New Roman", serif;
+    font-feature-settings: "kern", "liga", "calt", "onum";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Display headings use Fraunces with optical-size axis tuned UP.
+   * The opsz axis is 9-144; we pin specific values per heading scale. */
+  h1, .font-display {
+    font-family: var(--font-display), Georgia, serif;
+    font-variation-settings: "opsz" 96, "wght" 600, "SOFT" 30;
+    letter-spacing: -0.015em;
+    line-height: 1.05;
+  }
+
+  h2 {
+    font-family: var(--font-display), Georgia, serif;
+    font-variation-settings: "opsz" 48, "wght" 600, "SOFT" 30;
+    letter-spacing: -0.01em;
+    line-height: 1.15;
+  }
+
+  h3 {
+    font-family: var(--font-display), Georgia, serif;
+    font-variation-settings: "opsz" 28, "wght" 600, "SOFT" 30;
+    letter-spacing: -0.005em;
+    line-height: 1.25;
+  }
+
+  /* Body paragraphs use a smaller opsz value for tighter strokes at
+   * reading sizes. This is what Fraunces was designed for. */
+  p, li {
+    font-variation-settings: "opsz" 14, "wght" 400, "SOFT" 30;
+    line-height: 1.65;
+  }
+
+  /* UI chrome — buttons, labels, badges, form controls — uses Hanken
+   * grotesk. The .font-ui class is the explicit opt-in; components that
+   * should look like UI rather than prose apply it. */
+  .font-ui, button, label, input, select, textarea, .badge {
+    font-family: var(--font-ui), -apple-system, BlinkMacSystemFont, sans-serif;
+    font-feature-settings: "kern", "tnum";  /* tnum: tabular numerals for metadata */
+  }
+}
+
+/* ---------- Editorial utilities ----------
+ * Bridge classes that components can apply to get magazine-style
+ * treatments without re-implementing them per component.
+ */
+
+@layer components {
+  /* Kicker: small, tracked, all-caps label that sits above a display
+   * headline. Hanken Grotesk for clear UI feel against the serif. */
+  .kicker {
+    font-family: var(--font-ui), sans-serif;
+    font-size: 0.6875rem;          /* 11px */
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--color-ink-secondary);
+  }
+
+  .kicker-accent {
+    color: var(--color-accent);
+  }
+
+  /* Hairline rule — the typographic full-stop between sections. */
+  .rule {
+    border-top: 1px solid var(--color-rule);
+  }
+
+  .rule-strong {
+    border-top: 1px solid var(--color-rule-strong);
+  }
+
+  /* Drop cap — applied to the first paragraph of an accepted
+   * hypothesis. The first-letter pseudo handles the rest. */
+  .drop-cap::first-letter {
+    font-family: var(--font-display), serif;
+    font-variation-settings: "opsz" 144, "wght" 500, "SOFT" 60;
+    font-style: italic;
+    font-size: 4rem;               /* 64px */
+    line-height: 1;
+    float: left;
+    margin: 0.25rem 0.5rem 0 0;
+    color: var(--color-accent);
+  }
+
+  /* Pull-quote — the recommendation treatment. Indented from body,
+   * forest left rule, italic Fraunces. */
+  .pull-quote {
+    margin: 3rem 0;
+    padding: 1.5rem 0 1.5rem 1.5rem;
+    border-left: 3px solid var(--color-accent);
+    background-color: var(--color-accent-soft);
+    font-family: var(--font-display), serif;
+    font-variation-settings: "opsz" 24, "wght" 400, "SOFT" 60;
+    font-style: italic;
+    font-size: 1.375rem;           /* 22px */
+    line-height: 1.45;
+    color: var(--color-ink);
+  }
+
+  .pull-quote-attribution {
+    display: block;
+    margin-top: 1rem;
+    font-family: var(--font-ui), sans-serif;
+    font-style: normal;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--color-accent);
+  }
+}
+
+/* ---------- Print styles ----------
+ * Editorial designs print well by default; the rules below are minimal
+ * cleanups. Phase 3 will revisit this when chart styling lands.
+ */
+
+@media print {
+  @page {
+    margin: 2cm;
+    size: A4;
+  }
+  body {
+    background: white !important;
+    color: black !important;
+  }
+  nav, footer, .print\:hidden {
+    display: none !important;
+  }
+  main {
+    max-width: 100% !important;
+    padding: 0 !important;
+  }
+  .pull-quote {
+    background-color: transparent !important;
+    border-left-color: #000 !important;
+  }
+  .js-plotly-plot {
+    page-break-inside: avoid;
+    break-inside: avoid;
+    max-width: 100% !important;
+  }
+  *:hover {
+    background-color: inherit !important;
+  }
+}

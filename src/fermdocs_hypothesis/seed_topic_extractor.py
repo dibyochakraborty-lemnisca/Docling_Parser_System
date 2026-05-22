@@ -1,0 +1,459 @@
+"""DiagnosisOutput → list[SeedTopic].
+
+Plan ref: plans/2026-05-03-hypothesis-debate-v0.md §9.
+
+Each failure / analysis / trend / open_question becomes a SeedTopic. The
+ranker (§8) further scores them; this module just produces the
+candidate set with a reasonable initial priority.
+
+Priority heuristic (0.0-1.0):
+  - failures: 0.5 + 0.4 * severity_weight + 0.1 * citation_count_norm
+  - analyses: 0.4 + 0.1 * citation_count_norm
+  - trends:   0.5 + 0.1 * citation_count_norm
+  - open_qs:  0.4 (constant; ranker boosts via overlap)
+
+Severity weight: critical=1.0, major=0.7, minor=0.4, info=0.2.
+"""
+
+from __future__ import annotations
+
+import re
+
+from fermdocs.domain.user_question import UserQuestion, question_relevance
+from fermdocs_characterize.schema import Severity
+from fermdocs_diagnose.schema import (
+    AnalysisClaim,
+    ConfidenceBasis,
+    DiagnosisOutput,
+    FailureClaim,
+    OpenQuestion,
+    TrendClaim,
+)
+from fermdocs_hypothesis.schema import (
+    SeedTopic,
+    TopicSourceType,
+)
+
+# Multiplier applied to a SeedTopic's priority when it overlaps the
+# user's question (variable / run / text-substring overlap detected by
+# question_relevance). Non-starvation: cap is 1.0 so a question-relevant
+# trivial topic never outranks a critical-severity unrelated topic
+# (whose priority floor is already 0.5 + 0.4 * 1.0 + ... ≈ 0.9-1.0).
+# A 1.3x bump on a 0.5-priority topic moves it to 0.65 — still below a
+# critical failure's 0.9, so we don't starve real anomalies. See PR-A
+# Step 0 / S2 in plans/2026-05-04-user-question-and-hitl.md.
+USER_QUESTION_PRIORITY_MULTIPLIER = 1.3
+
+_SEV_WEIGHT = {
+    Severity.CRITICAL: 1.0,
+    Severity.MAJOR: 0.7,
+    Severity.MINOR: 0.4,
+    Severity.INFO: 0.2,
+}
+
+
+_SUPPRESSED_ANALYSIS_KINDS: frozenset[str] = frozenset(
+    {"data_quality_caveat", "spec_alignment"}
+)
+"""Analysis kinds that describe meta-properties of the data / system
+configuration rather than hypothesizable claims about the experiment.
+
+  - data_quality_caveat: "the data is sparse / has gaps / is malformed"
+  - spec_alignment: "process specs are missing / nominal != measured"
+
+Both bias specialists toward arguing about data plumbing instead of
+biology. Observed regression: when only data_quality_caveat was
+suppressed, the diagnose agent learned to dodge by emitting the same
+meta-claim under spec_alignment instead. The fix is to suppress the
+whole "meta" kind family.
+
+`cross_run_observation` and `phase_characterization` are still
+hypothesizable — cross-run variation and phase boundaries are real
+engineering questions — so they pass through.
+"""
+
+
+_SPEC_LANGUAGE_RE = re.compile(
+    r"\b("
+    r"sigma|"
+    r"nominal|"
+    r"specification|"
+    r"spec|"
+    r"setpoint|"
+    r"set\s*point|"
+    r"schema"
+    r")\b",
+    re.IGNORECASE,
+)
+"""Vocabulary fingerprint for 'this isn't a biological anomaly, it's a
+schema/spec interpretation issue'. Used by `_is_spec_only_failure` to
+detect when a FailureClaim's evidence is purely a measured-vs-nominal
+delta.
+
+Conservative on purpose: matches whole words only so 'biospecification'
+or 'schemata' don't false-positive. The IndPenSim regression's three
+failures all use 'nominal specification' or 'sigma' verbatim.
+"""
+
+
+def _is_spec_only_failure(f: FailureClaim) -> bool:
+    """True when a FailureClaim is grounded ONLY in spec-mismatch logic,
+    not in real biological/operational evidence.
+
+    The IndPenSim case (May 2026): when `unknown_process` is set and
+    recipe-specific priors are unavailable, the diagnose agent computes
+    `(measured - nominal) / std_dev` against generic schema specs and
+    reports the result as a FailureClaim. For unknown_process bundles
+    these specs are usually wrong (e.g. biomass nominal = inoculum
+    density, not steady-state) — so the 'failure' is a schema artifact,
+    not a real anomaly. The synthesizer + critic correctly reject
+    debating it; the seed topic just wastes turns.
+
+    Predicate (all three must hold):
+      1. confidence_basis == 'schema_only' (not grounded in process priors
+         or cross-run data)
+      2. No narrative or trajectory citations (no operator-witnessed event,
+         no time-series anomaly to anchor on)
+      3. Summary contains spec-vocabulary words (nominal/spec/sigma/etc.)
+
+    A failure that has narrative or trajectory citations is kept even
+    when its summary mentions specs — the real evidence is what makes it
+    debatable. We only filter when spec-talk is the sole grounding.
+    """
+    if f.confidence_basis != ConfidenceBasis.SCHEMA_ONLY:
+        return False
+    if f.cited_narrative_ids or f.cited_trajectories:
+        return False
+    if not _SPEC_LANGUAGE_RE.search(f.summary):
+        return False
+    return True
+
+
+def _is_spec_only_open_question(q: OpenQuestion) -> bool:
+    """Open questions framed as 'what is the correct spec for X?' suffer
+    the same problem — they seed topics that route specialists into
+    arguing about data plumbing instead of biology.
+
+    Detection mirrors `_is_spec_only_failure` but on the question text:
+    spec-vocabulary present and only finding citations (no narratives).
+    """
+    if q.cited_narrative_ids:
+        return False
+    text = f"{q.question} {q.why_it_matters or ''}"
+    return bool(_SPEC_LANGUAGE_RE.search(text))
+
+
+def extract_seed_topics(
+    diag: DiagnosisOutput,
+    *,
+    user_question: UserQuestion | None = None,
+) -> list[SeedTopic]:
+    """Project every claim/question into a SeedTopic. Topic IDs are
+    assigned in deterministic order: failures, then analyses, then trends,
+    then open questions.
+
+    Two filters applied:
+
+      1. Analysis claims whose kind is in _SUPPRESSED_ANALYSIS_KINDS
+         (data_quality_caveat / spec_alignment) — meta-observations
+         about the data itself, not candidates for hypothesis-debate.
+
+      2. Failures and open questions that are SPEC-ONLY: their evidence
+         is purely 'measured value differs from nominal spec' with no
+         narrative or trajectory anchoring. These derail debate when
+         specs are misaligned (the common case for unknown_process
+         bundles like IndPenSim) — the synthesizer correctly rejects
+         debating spec-vs-measurement deltas, so the seed topic just
+         wastes turns. See `_is_spec_only_failure`.
+
+    Failures that mix spec language WITH narrative/trajectory citations
+    are kept — the real evidence makes them debatable.
+
+    User-question priority bump (PR-A): when `user_question` is provided,
+    every SeedTopic that overlaps the question's affected_variables /
+    affected_runs / text gets its priority multiplied by
+    USER_QUESTION_PRIORITY_MULTIPLIER. Capped at 1.0 by the per-builder
+    `min(priority, 1.0)` so the bump never pushes past the global
+    ceiling. Non-starvation: a 1.3x multiplier on a low-priority
+    topic still lands below a critical-severity unrelated topic.
+    """
+    topics: list[SeedTopic] = []
+    counter = 0
+
+    for f in diag.failures:
+        if _is_spec_only_failure(f):
+            continue
+        counter += 1
+        topics.append(_from_failure(f, counter))
+    for a in diag.analysis:
+        if a.kind in _SUPPRESSED_ANALYSIS_KINDS:
+            continue
+        counter += 1
+        topics.append(_from_analysis(a, counter))
+    for t in diag.trends:
+        counter += 1
+        topics.append(_from_trend(t, counter))
+    for q in diag.open_questions:
+        if _is_spec_only_open_question(q):
+            continue
+        counter += 1
+        topics.append(_from_open_question(q, counter))
+
+    if user_question is not None:
+        topics = [_apply_user_question_bump(t, user_question) for t in topics]
+
+    return topics
+
+
+def extract_seed_topics_for_followup(
+    diag: DiagnosisOutput,
+    *,
+    question: UserQuestion,
+    prior_accepted_hyp_ids: list[str] | None = None,
+) -> list[SeedTopic]:
+    """Drive-posture topic extraction (PR-A2).
+
+    Branches on `question.shape`:
+
+      - `mechanistic`: ignore diag entirely. Emit ONE synthetic SeedTopic
+        whose summary IS the user's mechanism. Specialists try to support
+        OR refute it. Source type = USER_MECHANISM.
+
+      - `comparative`: same shape — one synthetic topic, source type
+        USER_COMPARISON. Specialists structure their facets as
+        side-by-side group contrasts.
+
+      - `scoping`: filter the bias-posture seed topics to those overlapping
+        question.affected_runs / affected_variables. If at least one
+        survives, return the filtered list (with the user-question priority
+        bump applied so they sort to the top). If NONE survive, return a
+        single placeholder topic with source_type=USER_SCOPE that
+        signals the synthesizer to emit a single FinalHypothesis with
+        question_answered='insufficient_data' (D3 in the plan).
+
+      - `open` (or shape=None): fall back to the bias-posture path —
+        full extract_seed_topics with the priority bump. Drive-posture
+        wraps bias here.
+
+    On `mechanistic` and `comparative`, the diag-derived topics are
+    intentionally dropped: the user's question becomes the entire topic
+    set so the debate stays focused. If the user wants to see other
+    angles, they ask a separate follow-up.
+
+    `prior_accepted_hyp_ids` is reserved for the synthesizer prompt's
+    'don't redo work' rule (commit 4); the seed-topic layer doesn't
+    consume it directly today, but the parameter is here so the
+    upstream call site doesn't have to special-case shapes.
+    """
+    shape = question.shape
+
+    if shape == "mechanistic":
+        return [_synthetic_user_topic(question, TopicSourceType.USER_MECHANISM, idx=1)]
+
+    if shape == "comparative":
+        return [_synthetic_user_topic(question, TopicSourceType.USER_COMPARISON, idx=1)]
+
+    if shape == "scoping":
+        bias_topics = extract_seed_topics(diag, user_question=question)
+        in_scope = [t for t in bias_topics if _topic_in_scope(t, question)]
+        if in_scope:
+            return in_scope
+        # D3 empty-filter case: synthesize a placeholder so the debate
+        # cycle still completes with one FinalHypothesis whose
+        # question_answered='insufficient_data'.
+        return [_empty_scope_placeholder(question)]
+
+    # `open` (or shape=None): bias path is exactly what we want.
+    return extract_seed_topics(diag, user_question=question)
+
+
+def _synthetic_user_topic(
+    q: UserQuestion, source_type: TopicSourceType, *, idx: int
+) -> SeedTopic:
+    """Build a single SeedTopic whose summary IS the user's question text.
+
+    Priority is set to 1.0 so the orchestrator picks it first; severity
+    is MAJOR so the ranker doesn't downweight it. cited_finding_ids and
+    cited_narrative_ids are intentionally empty — specialists pull
+    citations from the bundle on their own pass.
+    """
+    return SeedTopic(
+        topic_id=_topic_id(idx),
+        summary=q.text[:200],
+        source_type=source_type,
+        source_id=f"user-q-{source_type.value}",
+        cited_finding_ids=[],
+        cited_narrative_ids=[],
+        cited_trajectories=[],
+        affected_variables=list(q.affected_variables),
+        severity=Severity.MAJOR,
+        priority=1.0,
+    )
+
+
+def _empty_scope_placeholder(q: UserQuestion) -> SeedTopic:
+    """D3 case: user's scope didn't match any bundle data.
+
+    Synthesizer recognizes USER_SCOPE source_type and emits exactly one
+    FinalHypothesis with question_answered='insufficient_data', listing
+    available runs/variables so the user knows their scope was off.
+    """
+    return SeedTopic(
+        topic_id=_topic_id(1),
+        summary=f"User scope did not match bundle data: {q.text[:160]}",
+        source_type=TopicSourceType.USER_SCOPE,
+        source_id="user-q-empty-scope",
+        cited_finding_ids=[],
+        cited_narrative_ids=[],
+        cited_trajectories=[],
+        affected_variables=list(q.affected_variables),
+        severity=Severity.INFO,
+        priority=1.0,
+    )
+
+
+def _topic_in_scope(topic: SeedTopic, q: UserQuestion) -> bool:
+    """A topic is 'in scope' for a scoping question if it overlaps either
+    the question's affected_variables OR affected_runs (via cited
+    trajectory run_ids). Empty question scope = no filter (everything
+    in scope) but the caller short-circuits that case before us.
+    """
+    if q.affected_variables:
+        var_overlap = bool(set(topic.affected_variables) & set(q.affected_variables))
+        if var_overlap:
+            return True
+    if q.affected_runs:
+        topic_runs = {
+            ref.run_id for ref in topic.cited_trajectories
+            if hasattr(ref, "run_id") and ref.run_id
+        }
+        if topic_runs & set(q.affected_runs):
+            return True
+    # No question scope at all → vacuously in-scope. Edge case the caller
+    # generally avoids but worth being explicit.
+    if not q.affected_variables and not q.affected_runs:
+        return True
+    return False
+
+
+def _apply_user_question_bump(
+    topic: SeedTopic, q: UserQuestion
+) -> SeedTopic:
+    """Scale a SeedTopic's priority by USER_QUESTION_PRIORITY_MULTIPLIER
+    when it overlaps the user question's variables / runs / text.
+
+    Returns a new SeedTopic when the bump fires, or the original topic
+    when relevance is 0 — keeps test diffs tight on no-question runs.
+    """
+    cited_runs: list[str] = []
+    for ref in topic.cited_trajectories:
+        # cited_trajectories are TrajectoryRef(run_id, variable); the
+        # SeedTopic doesn't carry run_ids directly, so we reconstruct.
+        if hasattr(ref, "run_id") and ref.run_id:
+            cited_runs.append(ref.run_id)
+    relevance = question_relevance(
+        affected_variables=list(topic.affected_variables),
+        affected_runs=cited_runs,
+        text=topic.summary,
+        question=q,
+    )
+    if relevance <= 0:
+        return topic
+    new_priority = min(topic.priority * USER_QUESTION_PRIORITY_MULTIPLIER, 1.0)
+    return topic.model_copy(update={"priority": new_priority})
+
+
+def _topic_id(n: int) -> str:
+    return f"T-{n:04d}"
+
+
+def _norm_citations(*lists) -> float:
+    n = sum(len(lst or []) for lst in lists)
+    return min(n / 5.0, 1.0)
+
+
+def _from_failure(f: FailureClaim, idx: int) -> SeedTopic:
+    sev = _normalize_severity(f.severity)
+    priority = 0.5 + 0.4 * _SEV_WEIGHT.get(sev, 0.4) + 0.1 * _norm_citations(
+        f.cited_finding_ids, f.cited_narrative_ids, f.cited_trajectories
+    )
+    return SeedTopic(
+        topic_id=_topic_id(idx),
+        summary=f.summary[:200],
+        source_type=TopicSourceType.FAILURE,
+        source_id=f.claim_id,
+        cited_finding_ids=list(f.cited_finding_ids),
+        cited_narrative_ids=list(f.cited_narrative_ids),
+        cited_trajectories=list(f.cited_trajectories),
+        affected_variables=list(f.affected_variables),
+        severity=sev,
+        priority=min(priority, 1.0),
+    )
+
+
+def _from_analysis(a: AnalysisClaim, idx: int) -> SeedTopic:
+    priority = 0.4 + 0.1 * _norm_citations(a.cited_finding_ids, a.cited_narrative_ids)
+    # Analyses don't carry severity; map the kind heuristically.
+    sev = _severity_from_analysis_kind(a.kind)
+    return SeedTopic(
+        topic_id=_topic_id(idx),
+        summary=a.summary[:200],
+        source_type=TopicSourceType.ANALYSIS,
+        source_id=a.claim_id,
+        cited_finding_ids=list(a.cited_finding_ids),
+        cited_narrative_ids=list(a.cited_narrative_ids),
+        cited_trajectories=[],
+        affected_variables=list(a.affected_variables),
+        severity=sev,
+        priority=min(priority, 1.0),
+    )
+
+
+def _from_trend(t: TrendClaim, idx: int) -> SeedTopic:
+    priority = 0.5 + 0.1 * _norm_citations(
+        t.cited_finding_ids, t.cited_narrative_ids, t.cited_trajectories
+    )
+    return SeedTopic(
+        topic_id=_topic_id(idx),
+        summary=t.summary[:200],
+        source_type=TopicSourceType.TREND,
+        source_id=t.claim_id,
+        cited_finding_ids=list(t.cited_finding_ids),
+        cited_narrative_ids=list(t.cited_narrative_ids),
+        cited_trajectories=list(t.cited_trajectories),
+        affected_variables=list(t.affected_variables),
+        severity=Severity.MINOR,
+        priority=min(priority, 1.0),
+    )
+
+
+def _from_open_question(q: OpenQuestion, idx: int) -> SeedTopic:
+    return SeedTopic(
+        topic_id=_topic_id(idx),
+        summary=q.question[:200],
+        source_type=TopicSourceType.OPEN_QUESTION,
+        source_id=q.question_id,
+        cited_finding_ids=list(q.cited_finding_ids),
+        cited_narrative_ids=list(q.cited_narrative_ids),
+        cited_trajectories=[],
+        affected_variables=[],
+        severity=Severity.MINOR,
+        priority=0.4,
+    )
+
+
+def _normalize_severity(sev) -> Severity:
+    """Diagnose schema permits CRITICAL but the hypothesis ranker only
+    knows MAJOR/MINOR/INFO. Map CRITICAL → MAJOR for ranker scoring (the
+    weight table here keeps CRITICAL distinct internally for priority
+    tilt; ranker will see whatever Severity is on SeedTopic).
+    """
+    return sev
+
+
+def _severity_from_analysis_kind(kind: str) -> Severity:
+    if kind == "data_quality_caveat":
+        return Severity.MINOR
+    if kind == "cross_run_observation":
+        return Severity.MAJOR
+    return Severity.MINOR

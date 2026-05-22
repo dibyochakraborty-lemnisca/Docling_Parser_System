@@ -92,6 +92,15 @@ def validate_diagnosis(
     finding_ids = {f.finding_id for f in upstream.findings}
     trajectory_keys = {(t.run_id, t.variable) for t in upstream.trajectories}
     narrative_ids = {n.narrative_id for n in upstream.narrative_observations}
+    # The set of finding_ids whose math came from a verified catalog
+    # toolkit_fn. A claim that sets confidence_basis='statistical_toolkit'
+    # without citing at least one of these gets downgraded — same shape
+    # as the existing process_priors honesty check.
+    statistical_finding_ids = {
+        f.finding_id
+        for f in upstream.findings
+        if isinstance(f.statistics, dict) and f.statistics.get("metric_id")
+    }
     flags = frozenset(flags)
 
     # Build the set of variables that have priors loaded for this organism.
@@ -135,9 +144,18 @@ def validate_diagnosis(
         drop=drop_unknown_citations,
     ))
 
-    failures = [_apply_soft_enforcement(c, flags, priors_variables) for c in failures]
-    trends = [_apply_soft_enforcement(c, flags, priors_variables) for c in trends]
-    analysis = [_apply_soft_enforcement(c, flags, priors_variables) for c in analysis]
+    failures = [
+        _apply_soft_enforcement(c, flags, priors_variables, statistical_finding_ids)
+        for c in failures
+    ]
+    trends = [
+        _apply_soft_enforcement(c, flags, priors_variables, statistical_finding_ids)
+        for c in trends
+    ]
+    analysis = [
+        _apply_soft_enforcement(c, flags, priors_variables, statistical_finding_ids)
+        for c in analysis
+    ]
 
     return output.model_copy(
         update={
@@ -233,6 +251,7 @@ def _apply_soft_enforcement(
     claim,
     flags: frozenset[ProcessFlag],
     priors_variables: set[str] | None = None,
+    statistical_finding_ids: set[str] | None = None,
 ):
     """Apply soft rules to a single claim. Returns a copy with mutations applied.
 
@@ -240,10 +259,20 @@ def _apply_soft_enforcement(
       - provenance downgrade under UNKNOWN_PROCESS / UNKNOWN_ORGANISM flags
       - provenance downgrade when claim cites process_priors but no matching
         prior is loaded for any of its affected_variables (Plan A Stage 3)
+      - provenance downgrade when claim cites statistical_toolkit but none
+        of its cited findings actually carry a metric_id (PR 4)
+      - PROVENANCE UPGRADE: schema_only → statistical_toolkit when every
+        cited finding came from a verified catalog toolkit_fn. The diagnose
+        prompt asks the LLM to do this itself; production runs show models
+        often default to schema_only out of caution. Server-side upgrade
+        keeps the audit trail honest without trusting the model to follow
+        the rule.
       - forbidden-phrase warn
     """
     updates: dict = {}
     downgrade_reason: str | None = None
+    upgrade_reason: str | None = None
+    target_basis = ConfidenceBasis.SCHEMA_ONLY
 
     if (
         claim.confidence_basis == ConfidenceBasis.PROCESS_PRIORS
@@ -262,14 +291,50 @@ def _apply_soft_enforcement(
             f"no matching prior loaded for variables {claim.affected_variables}"
         )
 
+    elif (
+        claim.confidence_basis == ConfidenceBasis.STATISTICAL_TOOLKIT
+        and statistical_finding_ids is not None
+        and not (set(claim.cited_finding_ids) & statistical_finding_ids)
+    ):
+        downgrade_reason = (
+            "no cited finding carries a catalog metric_id"
+        )
+
+    elif (
+        claim.confidence_basis == ConfidenceBasis.SCHEMA_ONLY
+        and statistical_finding_ids is not None
+        and claim.cited_finding_ids
+        and set(claim.cited_finding_ids).issubset(statistical_finding_ids)
+    ):
+        # Every cited finding came from a verified toolkit function.
+        # Upgrade so downstream consumers know the math is reproducible.
+        upgrade_reason = (
+            f"all {len(claim.cited_finding_ids)} cited findings are "
+            "catalog-grounded (extracted_via=statistical, metric_id present)"
+        )
+        target_basis = ConfidenceBasis.STATISTICAL_TOOLKIT
+
     if downgrade_reason is not None:
         _log.warning(
-            "claim %s used process_priors but %s — downgrading to schema_only",
+            "claim %s used %s but %s — downgrading to %s",
             claim.claim_id,
+            claim.confidence_basis.value,
             downgrade_reason,
+            target_basis.value,
         )
-        updates["confidence_basis"] = ConfidenceBasis.SCHEMA_ONLY
+        updates["confidence_basis"] = target_basis
         updates["provenance_downgraded"] = True
+    elif upgrade_reason is not None:
+        _log.info(
+            "claim %s upgrading %s → %s: %s",
+            claim.claim_id,
+            claim.confidence_basis.value,
+            target_basis.value,
+            upgrade_reason,
+        )
+        updates["confidence_basis"] = target_basis
+        # provenance_downgraded stays False — this is an upgrade, not a
+        # safety downgrade.
 
     forbidden = _scan_forbidden_phrases(claim.summary)
     if forbidden:

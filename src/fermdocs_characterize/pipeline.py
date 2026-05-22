@@ -27,6 +27,18 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from fermdocs_characterize import CHARACTERIZATION_VERSION, SCHEMA_VERSION
+from fermdocs_characterize.agents.catalog_runner import (
+    MetricCatalogRunner,
+    _BundleView,
+)
+from fermdocs_characterize.agents.finding_validator import validate_finding
+from fermdocs_characterize.agents.metadata_anomaly_check import (
+    check_metadata_anomalies,
+)
+from fermdocs_characterize.agents.symmetry_check import check_symmetry
+from fermdocs_characterize.agents.trajectory_analyzer import (
+    TrajectoryAnalyzerAgent,
+)
 from fermdocs_characterize.builders.expected_vs_observed import build_deviations
 from fermdocs_characterize.builders.facts_graph import build_facts_graph
 from fermdocs_characterize.builders.open_questions import build_open_questions
@@ -65,11 +77,18 @@ class CharacterizationPipeline:
         validate: bool = True,
         current_schema_version: str = SCHEMA_VERSION,
         current_process_priors_version: str | None = None,
+        trajectory_analyzer: TrajectoryAnalyzerAgent | None = None,
     ) -> None:
+        # `trajectory_analyzer` is the LLM-driven pattern discovery stage
+        # (May 2026). When None, the pipeline runs purely deterministic
+        # — preserves backward compat for tests + fixture-based runs.
+        # When provided, the analyzer runs after spec checks and appends
+        # FindingType.TRAJECTORY_PATTERN findings to the output.
         self._specs_provider = specs_provider
         self._validate = validate
         self._current_schema_version = current_schema_version
         self._current_process_priors_version = current_process_priors_version
+        self._trajectory_analyzer = trajectory_analyzer
 
     def run(
         self,
@@ -136,6 +155,142 @@ class CharacterizationPipeline:
                     statistics=c.statistics,
                 )
             )
+
+        # 4b. LLM-driven trajectory pattern analysis (May 2026 architecture
+        # shift). Optional — when no analyzer is wired, pipeline stays
+        # purely deterministic. When wired, the analyzer reads the same
+        # trajectories + spec findings, runs execute_python over a tmp
+        # observations.csv, and emits FindingType.TRAJECTORY_PATTERN
+        # findings that get IDs after the spec findings.
+        # Pre-step: deterministic catalog runner. Iterates every
+        # (metric, run) pair and emits Findings deterministically. This
+        # fixes the IndPenSim multi-run asymmetry bug where the LLM
+        # analyzer would compute B10/A8/etc on RUN-1 only and skip
+        # RUN-2 silently. Plan ref:
+        # plans/2026-05-07-characterize-determinism.md commit 1.
+        observed = (
+            (dossier.get("experiment") or {})
+            .get("process", {})
+            .get("observed", {})
+        )
+        organism = (observed.get("organism") or "").strip() or None
+        process_family = (
+            observed.get("process_family_hint") or ""
+        ).strip() or None
+
+        # `catalog_findings` is visible to the LLM analyzer below so it
+        # can render an [ALREADY COMPUTED] block (A1 fix). Empty list on
+        # back-compat / no-trajectories runs.
+        catalog_findings: list[Finding] = []
+        if trajectories:
+            try:
+                catalog_bundle = _BundleView(
+                    characterization_id=str(char_id),
+                    run_ids=sorted({t.run_id for t in trajectories}),
+                    trajectories=trajectories,
+                    organism=organism,
+                    process_family=process_family,
+                )
+                catalog_runner = MetricCatalogRunner()
+                raw_catalog_findings = catalog_runner.compute_all(catalog_bundle)
+                # Re-namespace IDs to follow the bundle convention; keep
+                # the renamed list as `catalog_findings` so the analyzer
+                # gets the same-id view downstream agents will see.
+                for i, cf in enumerate(
+                    raw_catalog_findings, start=len(findings) + 1
+                ):
+                    renamed = cf.model_copy(
+                        update={"finding_id": f"{char_id}:F-{i:04d}"}
+                    )
+                    findings.append(renamed)
+                    catalog_findings.append(renamed)
+            except RuntimeError as exc:
+                # Pre-flight import failure (A2) is fatal: don't fall back
+                # silently. Re-raise so characterize aborts loud.
+                raise
+            except Exception as exc:
+                # Other failures (e.g. trajectory edge-cases) are
+                # advisory; log and continue to the LLM analyzer.
+                _log.warning(
+                    "catalog runner raised %s; falling through to LLM analyzer",
+                    exc.__class__.__name__,
+                )
+
+        if self._trajectory_analyzer is not None and trajectories:
+            try:
+                # Surface the dossier's identity layer to the analyzer so
+                # Tier C metric calls (mu_max_reference_vs_observed,
+                # qs_from_verduyn_yields, overflow_threshold) can pass the
+                # organism string to process_priors lookup. Without this the
+                # analyzer hardcodes organism=None and every Tier C metric
+                # data-gaps even when priors registry has the entry.
+                analyzer_result = self._trajectory_analyzer.analyze(
+                    char_id=char_id,
+                    trajectories=trajectories,
+                    spec_findings=findings,
+                    starting_index=len(findings) + 1,
+                    organism=organism,
+                    process_family=process_family,
+                    catalog_findings=catalog_findings,
+                )
+                findings.extend(analyzer_result.findings)
+            except Exception as exc:
+                # Analyzer is advisory; never block the deterministic
+                # spec-finding pipeline on a Gemini outage or sandbox error.
+                _log.warning(
+                    "trajectory_analyzer raised %s; skipping pattern findings",
+                    exc.__class__.__name__,
+                )
+
+        # 4c. Validator pass: every finding from catalog_runner +
+        # trajectory_analyzer is checked against physicality bounds.
+        # Out-of-bound values (yields > 1, percentages > 100, NaN, etc)
+        # are converted to data_gap with reason naming the violation.
+        # Plan ref: commit 3 of
+        # plans/2026-05-07-characterize-determinism.md (the
+        # 'PAA yield 204.5 g/g passed everything' bug class).
+        findings = [validate_finding(f) for f in findings]
+
+        # 4d. Symmetry post-condition. Detects (metric, run) pairs the
+        # catalog runner SHOULD have hit but didn't, and emits explicit
+        # [SYMMETRY] data_gap findings so the synthesizer can
+        # distinguish TOOL gaps from DATA gaps. Plan ref: commit 5.
+        if trajectories:
+            symmetry_bundle = _BundleView(
+                characterization_id=str(char_id),
+                run_ids=sorted({t.run_id for t in trajectories}),
+                trajectories=trajectories,
+                organism=organism,
+                process_family=process_family,
+            )
+            symmetry_findings = check_symmetry(
+                symmetry_bundle, findings, starting_index=len(findings),
+            )
+            findings.extend(symmetry_findings)
+
+        # 4e. Metadata anomaly pre-pass (reviewer A1). Deterministic
+        # findings before any LLM agent sees the data: instrument
+        # changes (Hitachi→LABMAN), header inconsistencies (WCW unit
+        # notation drift), h0 outliers (8× cohort initial value).
+        # Surface as METADATA-ANOMALY findings so synthesizer + critic
+        # treat them as cross-batch confounds.
+        if trajectories:
+            anomaly_bundle = _BundleView(
+                characterization_id=str(char_id),
+                run_ids=sorted({t.run_id for t in trajectories}),
+                trajectories=trajectories,
+                organism=organism,
+                process_family=process_family,
+            )
+            anomaly_findings = check_metadata_anomalies(
+                char_id=char_id,
+                bundle=anomaly_bundle,
+                dossier=dossier,
+                narrative_observations=dossier.get("narrative_observations")
+                or [],
+                starting_index=len(findings),
+            )
+            findings.extend(anomaly_findings)
 
         # 5. Other artifacts
         deviations = build_deviations(summary)

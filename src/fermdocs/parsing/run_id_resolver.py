@@ -260,6 +260,26 @@ class ColumnStrategy:
                     f"column {header!r} has no run-id header hint and weak"
                     f" block structure (ratio {ratio:.2f}); likely a measurement"
                 )
+            # Per-row-identifier guard: a column where (almost) every row is a
+            # different value is not a run-id, it's a per-row id (timestamp,
+            # sequence, sample_id). Real run-ids repeat — N runs across M rows
+            # with M >> N. Without a header hint to vouch for it, reject any
+            # column whose distinct-value count is ≥ 80% of the row count.
+            # The monotonic-and-all-distinct check catches the time-column
+            # case specifically (timestamps are sorted ascending in practice).
+            if len(distinct) >= 0.8 * len(non_null):
+                return 0.0, (
+                    f"column {header!r} has {len(distinct)} distinct values"
+                    f" across {len(non_null)} rows ({len(distinct) / len(non_null):.0%});"
+                    f" looks like a per-row identifier (timestamp / sample id),"
+                    f" not a run-id"
+                )
+            if _is_monotonic_increasing(non_null) and len(distinct) == len(non_null):
+                return 0.0, (
+                    f"column {header!r} is monotonically increasing with all"
+                    f" distinct values; looks like a time / sequence column,"
+                    f" not a run-id"
+                )
 
         if header_hints:
             score += 3.0
@@ -470,6 +490,25 @@ def _looks_like_id_column(non_null_values: list[str]) -> bool:
             return True
 
     return False
+
+
+def _is_monotonic_increasing(values: list[str]) -> bool:
+    """True iff every value parses as a number AND values are non-decreasing.
+
+    Used to detect time / sequence columns that masquerade as run-ids
+    (e.g., the TIME column in a wide single-fermentation timecourse table).
+    Real run-ids are not sorted by row order — they group by experiment.
+    """
+    nums: list[float] = []
+    for v in values:
+        # Values come pre-normalized through _coerce_run_id_value, so integer
+        # ids look like "RUN-0006". Strip the prefix back off if present.
+        s = v[4:] if v.startswith("RUN-") else v
+        try:
+            nums.append(float(s))
+        except (TypeError, ValueError):
+            return False
+    return all(a <= b for a, b in zip(nums, nums[1:]))
 
 
 def _coerce_run_id_value(value: Any) -> str | None:

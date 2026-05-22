@@ -1,0 +1,91 @@
+# Process-family routing for catalog-runner Tier P (product) metrics.
+#
+# Plan ref: plans/2026-05-07-characterize-determinism.md commit 2 (D2).
+#
+# Each entry tells the catalog runner:
+#   - product_variable: which trajectory column is THE product (drives
+#     P1 final titer, P2 peak titer, P3 titer decline, P4 productivity)
+#   - precursor_variables: variables that are CONSUMED into the product
+#     (drives P5 precursor utilization). NOT byproducts — polarity is
+#     opposite (lower residual = better, higher residual = waste).
+#   - overflow_byproducts: actual byproducts that signal overflow
+#     metabolism (drives B6 byproduct yield).
+#
+# To add a new process family:
+#   1. Add a new top-level entry under `process_families:`.
+#   2. The variable names must match canonical golden-schema names
+#      (lowercase, snake_case, with units in the suffix when applicable).
+#   3. If you use a name that doesn't exist in any bundle the runner
+#      sees, the runner emits a single [CONFIG_MISMATCH] data_gap so the
+#      operator notices the typo (A3 fix from plan-eng-review).
+#
+# `unknown` is implicit — the loader injects it even if absent here —
+# but listing it explicitly documents the catch-all behavior for
+# bundles whose process_family_hint we don't recognize.
+
+process_families:
+  penicillin_fedbatch:
+    description: >
+      Penicillium chrysogenum / P. rubens fed-batch fermentation.
+      Penicillin ("P" or "penicillin_g_l") is the product. PAA
+      (phenylacetic acid) is the side-chain precursor: feeding it
+      provides the acyl group that's incorporated into penicillin.
+      Residual unconsumed PAA is waste, NOT a byproduct.
+    product_variable: penicillin_g_l
+    precursor_variables:
+      - paa_mg_l
+    overflow_byproducts: []
+
+  ecoli_recombinant_protein:
+    description: >
+      E. coli expressing recombinant protein. Acetate is the classic
+      overflow byproduct (Crabtree-like overflow above critical qs).
+      No standard precursor variable.
+    product_variable: recombinant_protein_g_l
+    precursor_variables: []
+    overflow_byproducts:
+      - acetate_g_l
+
+  yeast_aerobic_fedbatch:
+    description: >
+      S. cerevisiae aerobic fed-batch (single-cell protein, brewing,
+      or biomass production). Ethanol is the overflow byproduct above
+      the critical qs (Sonnleitner 1986).
+    product_variable: biomass_g_l
+    precursor_variables: []
+    overflow_byproducts:
+      - ethanol_g_l
+
+  yeast_intracellular_product_fedbatch:
+    description: >
+      Generic intracellular-product yeast fed-batch — product
+      accumulates inside cells rather than being secreted. Covers
+      carotenoids (astaxanthin, beta-carotene), lipids / TAG, terpenoids,
+      intracellular recombinant proteins, vitamin K2 (menaquinone-7).
+      Uploads must include a column quantifying specific yield in
+      mg-product-per-gram-DCW; the column name is operator-chosen
+      and routed via intracellular_product_variable below.
+      Substitute the placeholder for your actual measurement column.
+    product_variable: null
+    intracellular_product_variable: product_mg_per_g_dcw
+    precursor_variables: []
+    overflow_byproducts:
+      - ethanol_g_l
+
+  melanin_batch:
+    description: >
+      Melanin biosynthesis (e.g. tyrosinase pathway). Tyrosine is
+      consumed into melanin, not excreted as byproduct.
+    product_variable: melanin_g_l
+    precursor_variables:
+      - tyrosine_mg_l
+    overflow_byproducts: []
+
+  unknown:
+    description: >
+      Catch-all for bundles whose process_family_hint we don't
+      recognize. No product-KPI metrics computed; characterize
+      proceeds with kinetics + operational metrics only.
+    product_variable: null
+    precursor_variables: []
+    overflow_byproducts: []

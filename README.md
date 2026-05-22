@@ -1,451 +1,598 @@
 # fermdocs
 
-Fermentation experiment document parser. Ingests PDF/Excel/CSV reports, maps headers to a canonical golden-column schema via LLM, stores observations with full provenance in Postgres, and produces a versioned dossier JSON for downstream agents.
+`fermdocs` is a fermentation document intelligence pipeline. It ingests
+CSV, Excel, PDF, or pre-built bundle uploads; preserves raw observations
+with provenance; characterizes trajectories deterministically; runs an
+observational diagnosis agent; runs a multi-agent hypothesis stage with
+citations, charts, and recommendations; and now persists distilled
+lessons to a managed memory layer so successive runs on the same
+process family compound rather than re-debate from scratch.
 
-This README is a tour for someone who just cloned the repo. If you want the design rationale, read [`docs/architecture.md`](docs/architecture.md) after this.
+The current system is no longer just a parser. The live flow is:
 
----
+```text
+raw files or bundle zip
+  -> ingest
+  -> characterize
+  -> diagnose
+  -> hypothesize  <-- reads/writes cross-run memory
+  -> FastAPI + Next.js UI
+```
 
-## What it does, in one paragraph
+For first-time setup, read [`SETUP.md`](SETUP.md). For the deeper
+design, read [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
-You hand `fermdocs` an experiment ID and a bunch of files. It parses each file into tables, asks an LLM (Anthropic or Gemini) to map raw headers like `"Biomass (X)"` to canonical golden columns like `biomass_g_l`, normalizes units via pint, stores every value with full provenance back to the source cell, and produces a JSON dossier for the next agent in your pipeline. Anything that doesn't map cleanly lands in a JSONB residual blob, never lost. Re-ingesting the same file is a no-op (sha256 dedup). The LLM never invents numeric values; it only emits mappings and unit-normalization hints.
+## Current Capabilities
 
----
+- Ingest `.csv`, `.xlsx`, `.pdf`, or a zipped existing bundle.
+- Map raw headers to a canonical fermentation schema with Gemini,
+  Anthropic, or a deterministic fake mapper for offline runs.
+- Normalize units with pint plus optional LLM fallback for difficult unit
+  strings.
+- Preserve provenance back to source files, sheets, cells, pages, and
+  narrative blocks.
+- Segment multi-run PDFs and support operator-supplied process identity
+  manifests.
+- Extract narrative evidence from PDF prose, including closure events,
+  deviations, interventions, observations, conclusions, and protocol notes.
+- Operator-supplied **process family** dropdown at upload time. Closed
+  enum from `process_families.yaml` — required for CSV-only bundles
+  where the LLM identity extractor has no narrative to read from.
+- Produce a versioned bundle that downstream stages treat as the artifact
+  boundary.
+- Characterize observations into trajectories, findings, metadata anomalies,
+  product/process KPIs, open questions, and narrative observations.
+- Run an observational diagnosis agent with hard tool-use enforcement.
+- Run a hypothesis debate with orchestrator, three specialists, synthesizer,
+  critic, judge, lessons summarizer, HITL resume, and follow-up questions.
+- **Cross-run memory layer (Phase 1).** At clean-exit, the runner persists
+  distilled lessons to a managed memory backend keyed by `process_family`.
+  On the next run on the same family, those priors are retrieved and
+  injected into the synthesizer/critic prompts as `[CROSS-RUN LESSONS]`.
+  Memory is opt-in via `FERMDOCS_MEMORY=synap`; default is a noop.
+- Render deterministic Plotly charts from hypothesis `chart_specs`.
+- **Editorial Scientific frontend** — Phase 1 type + color foundations are
+  live (Fraunces + Hanken Grotesk, paper/ink/forest palette, light-only).
+  Phase 2 layouts + Phase 3 chart styling are scheduled.
+- Use a local FastAPI backend and Next.js frontend for upload, live events,
+  hypotheses, charts, follow-up, and browser print-to-PDF.
 
-## Get it running locally
+## Repository Layout
 
-### Prerequisites
+```text
+.
+|-- src/fermdocs/                 ingest, parsing, mapping, storage, dossier, bundle
+|-- src/fermdocs_characterize/    deterministic characterization + optional analyzer
+|-- src/fermdocs_diagnose/        observational ReAct diagnosis agent
+|-- src/fermdocs_hypothesis/      multi-agent causal hypothesis stage
+|-- src/fermdocs_memory/          MemoryBackend Protocol + Noop/Stub/Synap adapters
+|-- apps/api/                     FastAPI local backend
+|-- apps/web/                     Next.js local frontend
+|-- tests/                        unit, integration, eval-oriented tests
+|-- evals/                        scripted evaluation fixtures/runners
+|-- scripts/                      invariant and reliability checks
+|-- plans/                        historical planning notes, useful but not canonical
+|-- migrations/                   Postgres schema migrations
+|-- ARCHITECTURE.md               current architecture and design decisions
+|-- SETUP.md                      clone-and-run guide
+```
+
+## Prerequisites
 
 - Python 3.11+
-- Postgres 15+ (Docker or native)
-- An Anthropic API key, a Gemini API key, or both
+- Node.js 18+ (or Bun) for the web app
+- Postgres 15+ for raw CSV/PDF/XLSX ingest
+- Gemini API key for the current full live pipeline
+- Optional: Anthropic API key for supported mapper/diagnosis paths
+- Optional: **Synap API key** for the memory layer (sign up at
+  https://synap.maximem.ai — free tier available)
 
-### Setup
+The hypothesis stage currently uses the Gemini client. Anthropic support
+exists for some earlier stages but is not the live hypothesis path.
+
+## Quick Start
+
+For full setup with screenshots and troubleshooting, see [`SETUP.md`](SETUP.md).
+
+The short version:
 
 ```bash
-# Clone
-git clone https://github.com/dibyochakraborty-lemnisca/Docling_Parser_System.git
-cd Docling_Parser_System
+git clone https://github.com/Lemniscabio/fermdocs.git
+cd fermdocs
 
-# Virtualenv
+# Python
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev,gemini,pdf]"
+pip install -e "apps/api[dev]"
+
+# Database
+docker run -d --name fermdocs-pg \
+  -e POSTGRES_USER=fermdocs -e POSTGRES_PASSWORD=fermdocs \
+  -e POSTGRES_DB=fermdocs -p 5432:5432 postgres:16
+alembic upgrade head
+
+# Config
+cp .env.example .env
+# Edit .env: set GEMINI_API_KEY, optionally SYNAP_API_KEY + FERMDOCS_MEMORY=synap
+
+# Frontend
+cd apps/web && npm install && cd ../..
+
+# Run
+set -a; source .env; set +a
+fermdocs-api &
+cd apps/web && npm run dev
+# Open http://localhost:3000
+```
+
+## Memory Layer
+
+The hypothesis stage can read and write across-run memory. The design
+is a frozen `MemoryBackend` Protocol with multiple adapters:
+
+```text
+src/fermdocs_memory/
+|-- base.py       MemoryRecord, MemoryQuery, MemoryBackend Protocol
+|-- noop.py       NoopBackend (default; off)
+|-- stub.py       StubBackend (in-memory dict; for tests)
+`-- synap.py      SynapBackend (production; wraps maximem-synap SDK)
+```
+
+**What gets persisted (Phase 1):** Distilled lessons from the
+`lessons_summarizer` agent, written only when the run reaches a clean
+`exit_reason` (`consensus_reached` or `no_topics_left`). Failed runs
+and budget-exhausted runs do not pollute the store.
+
+**Retrieval primary key:** `process_family` (closed vocab from
+`process_families.yaml`). Maps to Synap's `user_id` scope. This is why
+the upload UI requires a process family pick — CSV-only bundles have
+no narrative for the LLM identity extractor to classify from.
+
+**How to turn it on:**
+
+```bash
+# In your .env
+FERMDOCS_MEMORY=synap
+SYNAP_API_KEY=synap_...
+FERMDOCS_TENANT_ID=lemnisca-internal   # optional; default "default"
+```
+
+**Without those env vars,** the system uses `NoopBackend` and behaves
+exactly as it did before Phase 1 landed. Memory is fully opt-in.
+
+**Deferred to later phases (with explicit triggers in the plan):**
+
+- Tier 2: ratified-hypothesis store
+- Tier 3: rejected-hypothesis store (negative examples)
+- Tier 4: strain-conditional KPI prior table for the finding_validator
+- Tier 5: human-correction memory (HITL responses become durable priors)
+
+See `plans/2026-05-10-memory-layer.md` for the full roadmap and the
+[Synap onboarding markdown](plans/synap_setup/fermdocs-dev-usecase.md).
+
+## Setup at a Glance
+
+```bash
+git clone https://github.com/Lemniscabio/fermdocs.git
+cd fermdocs
+
 python3.11 -m venv .venv
 source .venv/bin/activate
 
-# Core install
-pip install -e ".[dev]"
+pip install -e ".[dev,gemini]"
 
-# Optional extras
-pip install -e ".[pdf]"      # Docling for PDF table extraction (~1-2GB ML deps)
-pip install -e ".[gemini]"   # google-genai SDK
+# Optional, needed for PDF table extraction.
+pip install -e ".[pdf]"
+
+# Optional API package.
+pip install -e "apps/api[dev]"
+
+cp .env.example .env
 ```
 
-### Database
+Edit `.env`. For a normal live local run, the high-leverage values are:
 
 ```bash
-# Either: Docker
+DATABASE_URL=postgresql+psycopg://fermdocs:fermdocs@localhost:5432/fermdocs
+FERMDOCS_MAPPER_PROVIDER=gemini
+GEMINI_API_KEY=...
+FERMDOCS_DATA_DIR=./data
+FERMDOCS_API_ROOT=out/api
+
+# Optional memory layer:
+FERMDOCS_MEMORY=synap
+SYNAP_API_KEY=...
+FERMDOCS_TENANT_ID=lemnisca-internal
+```
+
+The Python CLIs do not all load `.env` in the same way. For shell use, the
+least surprising approach is:
+
+```bash
+set -a
+source .env
+set +a
+```
+
+## Database
+
+Raw ingest writes to Postgres. Bundle-only hypothesis runs do not need a
+database, but full CSV/PDF/XLSX runs do.
+
+```bash
 docker run -d --name fermdocs-pg \
-  -e POSTGRES_USER=fermdocs -e POSTGRES_PASSWORD=fermdocs -e POSTGRES_DB=fermdocs \
+  -e POSTGRES_USER=fermdocs \
+  -e POSTGRES_PASSWORD=fermdocs \
+  -e POSTGRES_DB=fermdocs \
   -p 5432:5432 postgres:16
 
-# Or: local Postgres
-createuser -s fermdocs && createdb -O fermdocs fermdocs
-psql -d fermdocs -c "ALTER USER fermdocs WITH PASSWORD 'fermdocs';"
-```
-
-### Configure
-
-```bash
-cp .env.example .env
-# Edit .env. At minimum:
-#   - DATABASE_URL   (Postgres connection string)
-#   - GEMINI_API_KEY (default provider; get one at https://aistudio.google.com/apikey)
-# Or switch to Anthropic:
-#   - FERMDOCS_MAPPER_PROVIDER=anthropic
-#   - ANTHROPIC_API_KEY=sk-ant-...
-set -a; source .env; set +a
-```
-
-### Migrate and verify
-
-```bash
 alembic upgrade head
-pytest tests/unit -v   # 47 tests, no DB or LLM needed
 ```
 
-If `pytest` is green, you're set up.
+If you already run Postgres locally:
 
----
+```bash
+createuser -s fermdocs
+createdb -O fermdocs fermdocs
+psql -d fermdocs -c "ALTER USER fermdocs WITH PASSWORD 'fermdocs';"
+alembic upgrade head
+```
 
-## First ingest, end to end
+## Run the Full Local App
 
-Try it offline first (no LLM cost, deterministic):
+Start the backend:
+
+```bash
+source .venv/bin/activate
+set -a; source .env; set +a
+fermdocs-api
+```
+
+Start the frontend:
+
+```bash
+cd apps/web
+npm install
+npm run dev
+```
+
+Open:
+
+```text
+http://localhost:3000
+```
+
+The UI accepts one or more raw `.csv`, `.xlsx`, or `.pdf` files. It also
+accepts a single `.zip` containing an existing bundle. Zip uploads bypass
+ingest/characterize/diagnose and run the hypothesis stage directly.
+
+**Pick a process family on the upload page.** The dropdown is the
+operator's way of telling the system what biology this is, especially
+critical for CSV uploads where the LLM has no prose to classify from.
+Options come from `src/fermdocs/schema/process_families.yaml`. Picking
+"Auto-detect" runs the LLM identity extractor as before (works on PDFs).
+
+## Run the Pipeline from the CLI
+
+### 1. Ingest Raw Files
+
+Offline deterministic smoke test:
 
 ```bash
 fermdocs ingest \
   --experiment-id EXP-001 \
   --files tests/fixtures/sample_run.csv \
   --fake-mapper \
-  --out /tmp/EXP-001.dossier.json
-
-cat /tmp/EXP-001.dossier.json | head -50
+  --out out/EXP-001.dossier.json
 ```
 
-The `--fake-mapper` flag forces all LLM tiers off (mapper, unit normalizer, narrative extractor). Drop it for real LLM-backed ingest -- Gemini is the default provider.
-
-What happened:
-
-1. The CSV got parsed into one `ParsedTable`.
-2. `FakeHeaderMapper` matched headers like `"Strain"` -> `strain_id` by exact synonym lookup.
-3. `UnitConverter` ran each numeric value through pint.
-4. `Repository` wrote 16 observations into Postgres.
-5. `build_dossier` projected those rows into a versioned JSON envelope.
-
-Now with a real LLM (Gemini is the default; drop `--provider` to use the env var):
-
-```bash
-fermdocs ingest \
-  --experiment-id EXP-002 \
-  --files tests/fixtures/sample_run.csv \
-  --out /tmp/EXP-002.dossier.json
-```
-
-Compare the dossiers. Confidence scores will differ; the mappings should mostly agree.
-
-If you ingest a PDF with prose, three things happen by default:
-1. The header mapper (`gemini-3-flash`) maps table columns.
-2. The LLM unit normalizer fires for any unit pint can't parse.
-3. The narrative extractor (`gemini-3-pro`) reads paragraphs and pulls values for golden columns, with mandatory evidence verification and dedup against table observations.
-
-Disable any of the three: `--no-llm-normalizer`, `--no-extract-narrative`, or `--fake-mapper` (forces all LLM tiers off).
-
----
-
-## How to read the codebase
-
-Start in this order:
-
-```
-1. src/fermdocs/domain/models.py     -- the data shapes
-2. src/fermdocs/pipeline.py          -- the full sequence in one file
-3. src/fermdocs/dossier.py           -- the read path
-4. src/fermdocs/cli.py               -- how it all wires up
-5. docs/architecture.md              -- everything else
-```
-
-The one-paragraph layering rule: **`domain/` imports nothing from the project. Everything else imports from `domain/`. `storage/` is the only module that imports SQLAlchemy. `mapping/client.py` and `mapping/gemini_client.py` are the only ones that talk to LLMs.** This is enforced by code review and (eventually) a CI grep check.
-
----
-
-## Project layout, annotated
-
-```
-Docling_Parse/
-|
-+- pyproject.toml         hatchling, deps split: core / dev / pdf / gemini
-+- alembic.ini            points at migrations/
-+- .env.example           every env var you might need
-|
-+- src/fermdocs/
-|  |
-|  +- domain/             the only module that has zero internal deps
-|  |  +- models.py        Pydantic. ParsedTable, Observation, Dossier shapes.
-|  |  +- golden_schema.py loads golden_schema.yaml; --schema CLI override hooks here
-|  |
-|  +- parsing/            file -> list[ParsedTable]
-|  |  +- base.py          FileParser ABC. supports() + parse().
-|  |  +- csv_parser.py    pandas. dtype=str, no NA inference.
-|  |  +- excel_parser.py  pandas. one ParsedTable per sheet.
-|  |  +- pdf_parser.py    Docling. Lazy-imports docling so the [pdf] extra is optional.
-|  |  +- router.py        FormatRouter dispatches by extension.
-|  |
-|  +- mapping/            ParsedTable -> MappingResult
-|  |  +- mapper.py        HeaderMapper Protocol; FakeHeaderMapper for offline tests.
-|  |  +- prompt.py        the system + user prompts (provider-agnostic).
-|  |  +- client.py        LLMHeaderMapper -- Anthropic Claude.
-|  |  +- gemini_client.py GeminiHeaderMapper -- Google Gemini.
-|  |  +- factory.py       build_mapper(provider) -- single seam for picking impl.
-|  |  +- confidence.py    auto / needs_review / residual band thresholds.
-|  |
-|  +- units/              value + raw_unit -> canonical value
-|  |  +- converter.py     UnitConverter. ConversionResult carries 'via' field.
-|  |  +- registry.txt     pint custom unit defs (pH, OD600, fold_change, log_cfu_per_ml).
-|  |  +- normalizer.py    Rule-based + LLM normalizers. Hints, not values.
-|  |
-|  +- storage/            Postgres I/O
-|  |  +- models.py        SQLAlchemy 2.0. JSONB for value_raw / value_canonical / source_locator.
-|  |  +- repository.py    Repository class. The only place that calls SQLAlchemy.
-|  |
-|  +- file_store/         original-file persistence
-|  |  +- base.py          FileStore Protocol; sha256_of helper.
-|  |  +- local.py         LocalFileStore: <root>/files/<sha256>.<ext>.
-|  |
-|  +- pipeline.py         IngestionPipeline. The ONLY file that knows the full flow.
-|  +- dossier.py          build_dossier(experiment_id, repo) -> dict.
-|  +- cli.py              Click. Wires real impls; tests wire fakes.
-|  +- __init__.py         exports: ingest, build_dossier, IngestionResult.
-|  +- __main__.py         python -m fermdocs entry.
-|  +- schema/
-|     +- golden_schema.yaml  the canonical golden-column definitions. Edit me.
-|
-+- migrations/
-|  +- env.py
-|  +- versions/
-|     +- 0001_initial.py            DDL for all tables
-|     +- 0002_backfill_via_field.py adds via='pint' to pre-normalizer rows
-|
-+- tests/
-|  +- fixtures/                     test data, no real PDFs committed
-|  +- conftest.py                   fixes sys.path so 'fermdocs' resolves
-|  +- unit/                         no DB, no LLM, runs in <1s
-|  +- integration/                  pipeline tests using fakes for repo + store
-|
-+- docs/
-   +- architecture.md               full design doc -- read after this
-```
-
----
-
-## The five most common things you'll do
-
-### 1. Add a new golden column
-
-Edit `src/fermdocs/schema/golden_schema.yaml`:
-
-```yaml
-  - name: my_new_metric_g_l
-    description: One-line description for the LLM.
-    data_type: float
-    canonical_unit: g/L
-    synonyms: [my_metric, mm, MM]
-    examples:
-      - {raw_header: "My Metric (g/L)"}
-      - {raw_header: "MM [g/L]"}
-```
-
-That's it. No code change. Re-run `fermdocs ingest`; the LLM mapper will pick up the new column on the next call.
-
-**The single highest-leverage thing in the system is the schema YAML. Examples are worth more than long descriptions.** Add 2-3 real `raw_header` strings you've seen in the wild.
-
-### 2. Add a new file format
-
-Write a new parser in `src/fermdocs/parsing/`:
-
-```python
-from pathlib import Path
-from fermdocs.domain.models import ParsedTable
-from fermdocs.parsing.base import FileParser
-
-class MyParser(FileParser):
-    def supports(self, path: Path) -> bool:
-        return path.suffix.lower() == ".myext"
-
-    def parse(self, path: Path) -> list[ParsedTable]:
-        ...  # produce ParsedTable list with format-specific locator
-```
-
-Register it in `cli.py:_build_pipeline`:
-
-```python
-router = FormatRouter([CsvParser(), ExcelParser(), DoclingPdfParser(), MyParser()])
-```
-
-Write a test in `tests/unit/test_my_parser.py` mirroring `test_csv_parser.py`. Done.
-
-### 3. Add a new LLM provider (e.g., OpenAI)
-
-Copy `src/fermdocs/mapping/gemini_client.py` to `openai_client.py`. Replace the SDK calls with OpenAI's structured-output API. The response shape and Pydantic validation stay identical.
-
-Register in `src/fermdocs/mapping/factory.py`:
-
-```python
-if name == "openai":
-    from fermdocs.mapping.openai_client import OpenAIHeaderMapper
-    return OpenAIHeaderMapper()
-```
-
-Add `"openai"` to the `click.Choice` in `cli.py` and document the env vars in `.env.example`. Done.
-
-### 4. Add a new unit alias
-
-If pint can't parse a unit you keep seeing, edit `src/fermdocs/units/registry.txt`:
-
-```
-@alias gram_per_liter_per_hour = g/(L*h) = g_per_liter_per_hour
-my_new_dimensionless = []
-```
-
-Reload (re-run the CLI) and pint will accept the new strings.
-
-If the unit is **structurally weird** (Unicode superscripts, embedded annotations), look at `src/fermdocs/units/normalizer.py:RuleBasedNormalizer` instead. The rule-based normalizer transforms unit strings into pint-parseable form before pint sees them.
-
-### 5. Debug what happened on a specific ingest
-
-Everything is queryable. Open a psql shell:
-
-```sql
--- Which observations exist for an experiment?
-SELECT column_name, raw_header,
-       value_canonical->>'value' AS canonical,
-       value_canonical->>'via' AS via,
-       conversion_status,
-       mapping_confidence
-FROM golden_observations
-WHERE experiment_id = 'EXP-001'
-  AND superseded_by IS NULL
-ORDER BY column_name, raw_header;
-
--- What fell to residual?
-SELECT payload->'tables_partial' AS partial,
-       payload->'tables_unmapped' AS unmapped
-FROM residual_data
-WHERE experiment_id = 'EXP-001';
-
--- What's awaiting human review?
-SELECT column_name, raw_header, mapping_confidence,
-       value_canonical->'normalization' AS norm
-FROM golden_observations
-WHERE needs_review AND superseded_by IS NULL
-ORDER BY mapping_confidence ASC
-LIMIT 20;
-```
-
-The CLI also surfaces the review queue:
-
-```bash
-fermdocs review --next
-```
-
----
-
-## How testing works
-
-```
-tests/unit/                 fast, deterministic, offline. Run on every save.
-tests/integration/          pipeline tests using fakes for repo + store.
-                            Still no DB, no LLM. Run before commit.
-```
-
-Key patterns:
-
-- **`FakeHeaderMapper`** lets you exercise the whole pipeline without an API key. It matches by exact synonym; tests use small canonical schemas so matches are predictable.
-- **`_FakeRepo` / `_FakeFileStore`** in `tests/integration/test_normalizer_pipeline.py` show the dependency-injection pattern. Real `IngestionPipeline` + fake collaborators = full flow tested with no infra.
-- **Pydantic-validated LLM responses** mean tests can mock the LLM client by returning canned dicts; the rest of the code doesn't know the difference.
-
-Run:
-
-```bash
-pytest tests/unit -v          # ~1s, runs anywhere
-pytest tests -v               # full suite, still no DB or LLM
-```
-
-Add a test in the matching `tests/unit/test_<module>.py` when you change anything. The bar is 100% coverage for new code paths; it's cheap with AI-assisted writing.
-
----
-
-## Configuration cheat sheet
-
-All behavior is environment-configurable. The full list is in `.env.example`; the high-leverage ones:
-
-```bash
-DATABASE_URL=postgresql+psycopg://fermdocs:fermdocs@localhost:5432/fermdocs
-
-# Mapper provider
-FERMDOCS_MAPPER_PROVIDER=gemini         # default; alternatives: 'anthropic' or 'fake'
-GEMINI_API_KEY=AI...                    # required if using Gemini (default)
-ANTHROPIC_API_KEY=sk-ant-...            # required if FERMDOCS_MAPPER_PROVIDER=anthropic
-FERMDOCS_GEMINI_MODEL=gemini-3-flash
-FERMDOCS_MAPPER_MODEL=claude-haiku-4-5-20251001
-
-# Storage
-FERMDOCS_DATA_DIR=./data                # where original files land
-
-# Optional schema override
-FERMDOCS_SCHEMA_PATH=./my_custom_schema.yaml
-
-# Unit normalizer
-FERMDOCS_USE_LLM_NORMALIZER=false       # rule-based always on; LLM is opt-in
-FERMDOCS_NORMALIZER_PROVIDER=anthropic  # falls back to MAPPER_PROVIDER
-
-# PDF
-FERMDOCS_PDF_OCR=false                  # only enable for image-based PDFs
-```
-
----
-
-## CLI reference
-
-### Ingest
+Live mapper:
 
 ```bash
 fermdocs ingest \
   --experiment-id EXP-001 \
-  --files path/to/a.pdf path/to/b.csv \
-  [--out /tmp/dossier.json] \
-  [--schema /path/to/custom.yaml] \
-  [--provider {anthropic|gemini|fake}] \
-  [--fake-mapper] \
-  [--llm-normalizer | --no-llm-normalizer]
+  --files path/to/report.pdf path/to/data.xlsx \
+  --out out/EXP-001.dossier.json
 ```
 
-Exit codes: `0` ok, `1` usage, `2` input, `3` parse, `4` db, `5` partial.
-
-### Build a dossier from already-ingested data
+For CSV-only bundles, supply a process manifest so the dossier carries
+a canonical `process_family`:
 
 ```bash
-fermdocs dossier --experiment-id EXP-001 --out dossier.json
+echo "process_family: penicillin_fedbatch" > manifest.yaml
+echo "organism: Penicillium chrysogenum" >> manifest.yaml
+
+fermdocs ingest \
+  --experiment-id EXP-001 \
+  --files path/to/data.csv \
+  --process-manifest manifest.yaml \
+  --out out/EXP-001.dossier.json
 ```
 
-This is a pure read of Postgres; safe to run any time.
-
-### Review queue
+Useful ingest options:
 
 ```bash
-fermdocs review --next   # one observation at a time, sorted by oldest unreviewed
+--provider gemini|anthropic|fake
+--no-llm-normalizer
+--no-extract-narrative
+--process-manifest path/to/process_manifest.yaml
+--segment-pdfs / --no-segment-pdfs
+--manifest-run-id RUN-001
+--extract-narrative-insights / --no-extract-narrative-insights
 ```
 
-### Inspect contracts
+### 2. Characterize and Write a Bundle
 
 ```bash
-fermdocs --print-schema dossier   # full dossier JSON Schema
-fermdocs --print-schema golden    # GoldenSchema YAML structure
-fermdocs --print-schema mapper    # mapper response schema (JSON Schema)
+fermdocs-characterize out/EXP-001.dossier.json \
+  --bundle out
 ```
 
-Use these to validate downstream consumers and to lock contracts for a future Rust port.
+This writes a bundle directory under `out/`, including the dossier,
+characterization JSON, flattened observations CSV, optional narrative
+observations, and bundle metadata.
 
----
+To disable the optional LLM trajectory analyzer:
 
-## Common gotchas
+```bash
+fermdocs-characterize out/EXP-001.dossier.json \
+  --bundle out \
+  --no-trajectory-analyzer
+```
 
-- **`DATABASE_URL not set`** -- you ran the CLI without `set -a; source .env; set +a` first. Or you don't have a `.env` yet.
-- **`role "fermdocs" does not exist`** -- you have Postgres but no `fermdocs` user. See the Database setup section above.
-- **PDF ingest seems stuck** -- Docling is loading ~1GB of ML weights on first run. Subsequent runs are cached. The progress bar is below where you'd expect.
-- **`ImportError: docling`** -- you didn't install the `[pdf]` extra. `pip install -e ".[pdf]"`.
-- **All values come out wrong by 1000x** -- check `unit_canonical` vs `canonical_unit` in `golden_schema.yaml`. The mapper extracted `"mg/mL"` but your schema declared `"g/L"`; pint is doing its best but maybe the source unit string was misread. Inspect via `fermdocs review --next`.
-- **Same experiment_id has wildly contradicting values** -- expected if multiple files report the same column with disagreeing numbers. Philosophy B: we preserve, never resolve. The next agent reasons about it.
-- **`DimensionalityError: Cannot convert from ...`** -- the LLM mapped a column to a golden field whose canonical unit doesn't match the raw unit's dimension. Likely a schema design issue; either add a per-product golden column or accept that this header should land in residual.
+### 3. Diagnose the Bundle
 
----
+```bash
+fermdocs-diagnose run \
+  --bundle out/bundle_<id>
+```
 
-## What's intentionally NOT in v1
+With a bundle, diagnosis writes:
 
-- Figure / chart data extraction (figures stored as references only)
-- Multi-product breakdown columns (one product per experiment_id assumed; see `docs/architecture.md` for the workaround)
-- Self-learning unit hints (one-shot LLM normalization without persistence)
-- A review UI (CLI-only review queue)
-- Cloud file storage (LocalFileStore only; FileStore Protocol is the swap point)
-- Service mode / FastAPI wrapper (CLI + library only; pattern A or B integration)
-- Authentication, multi-tenancy, RBAC
+```text
+out/bundle_<id>/diagnosis/diagnosis.json
+```
 
-None of these are forced moves; the architecture is set up so each can be added without disturbing the rest.
+### 4. Run Hypothesis
 
----
+```bash
+fermdocs-hypothesize run out/bundle_<id> \
+  --out-root out/hypothesis
+```
 
-## Where to learn more
+With an initial user question:
 
-- [`docs/architecture.md`](docs/architecture.md) -- full design, invariants, data model, failure modes, rollback runbook.
-- The Pydantic models in `src/fermdocs/domain/models.py` -- read these and you understand 80% of the system.
-- `src/fermdocs/pipeline.py` -- one file, end to end.
-- The integration test in `tests/integration/test_normalizer_pipeline.py` -- shows the full flow with fakes.
+```bash
+fermdocs-hypothesize run out/bundle_<id> \
+  --question "Why did RUN-2 lose carotenoid productivity after 80 hours?"
+```
 
-If something in the codebase surprises you, that's a documentation bug. Open an issue or update the relevant doc as part of your PR.
+Outputs include:
+
+```text
+out/hypothesis/<hypothesis_run_id>/global.md
+out/hypothesis/<hypothesis_run_id>/hypothesis_output.json
+```
+
+`global.md` is the human-readable event log. The JSON output is the
+structured contract.
+
+The CLI uses `NoopBackend` for memory by default. The API runner reads
+`FERMDOCS_MEMORY=synap` to enable the live memory backend.
+
+
+### 4. Human-in-the-Loop (HITL) Interaction
+
+When running the hypothesis stage, you can explicitly enable HITL mode. If the agents encounter ambiguity and emit `open_questions`, the system will pause and ask the operator for ground-truth answers.
+
+```bash
+fermdocs-hypothesize run \
+  --bundle-dir out/bundle-EXP-001 \
+  --hitl \
+  --out-dir out/hyp-EXP-001
+```
+
+If open questions are generated, the CLI prompts:
+`N open question(s). Answer them and re-run? [Y/n]:`
+
+The user's answers are captured as `HumanInputReceivedEvent`s and `QuestionResolvedEvent`s, appended to the event log, and the stage automatically resumes. The agents then factor the operator's input into the next round of debate.
+
+## API Surface
+
+The local API lives under `/api`:
+
+```text
+GET  /api/health
+POST /api/uploads          form fields: files[], process_family (optional)
+POST /api/runs
+GET  /api/runs
+GET  /api/runs/{run_id}
+WS   /api/runs/{run_id}/events
+POST /api/runs/{run_id}/answers
+POST /api/runs/{run_id}/followup
+```
+
+The API is local-only by design. It has no auth, no tenancy model, and no
+durable job queue.
+
+## Frontend (Editorial Scientific)
+
+The web UI is being redesigned in the Editorial Scientific direction —
+Quanta/Nature register, generous whitespace, single forest accent,
+asymmetric two-column grid. Phase 1 (typography + color tokens) is
+live as of `frontend-styling` branch. Phase 2 (layouts) and Phase 3
+(editorial chart styling) are scheduled.
+
+Type stack: **Fraunces** (variable serif) + **Hanken Grotesk** (UI).
+Both free, hosted via `next/font/google`. Color: paper #FBFAF7, ink
+#0F1B2D, forest accent #1B4D3E. Light-only — dark mode was dropped
+for v1.
+
+See `plans/2026-05-11-frontend-redesign-editorial.md` for the full
+design doc.
+
+## Configuration Cheat Sheet
+
+Common environment variables:
+
+```bash
+# Database and storage
+DATABASE_URL=postgresql+psycopg://fermdocs:fermdocs@localhost:5432/fermdocs
+FERMDOCS_DATA_DIR=./data
+FERMDOCS_API_ROOT=out/api
+FERMDOCS_REPO_ROOT=/absolute/path/to/fermdocs
+
+# Mapper / ingest
+FERMDOCS_MAPPER_PROVIDER=gemini
+FERMDOCS_GEMINI_MODEL=gemini-3-flash
+FERMDOCS_MAPPER_MODEL=claude-haiku-4-5-20251001
+FERMDOCS_SCHEMA_PATH=/path/to/golden_schema.yaml
+FERMDOCS_USE_LLM_NORMALIZER=true
+FERMDOCS_NORMALIZER_PROVIDER=gemini
+
+# PDF and narrative extraction
+FERMDOCS_PDF_OCR=false
+FERMDOCS_PDF_SEGMENT=true
+FERMDOCS_SEGMENTER_PROVIDER=gemini
+FERMDOCS_SEGMENTER_MODEL=gemini-3-pro
+FERMDOCS_EXTRACT_NARRATIVE=true
+FERMDOCS_EXTRACT_NARRATIVE_INSIGHTS=true
+FERMDOCS_NARRATIVE_PROVIDER=gemini
+FERMDOCS_NARRATIVE_MODEL=gemini-3-pro
+
+# Later stages
+FERMDOCS_CHARACTERIZE_PROVIDER=gemini
+FERMDOCS_CHARACTERIZE_MODEL=gemini-3-pro
+FERMDOCS_DIAGNOSIS_PROVIDER=gemini
+FERMDOCS_DIAGNOSIS_MODEL=gemini-3-pro
+FERMDOCS_HYPOTHESIS_PROVIDER=gemini
+FERMDOCS_HYPOTHESIS_MODEL=gemini-3-pro
+FERMDOCS_QUESTION_CLASSIFIER_MODEL=gemini-3-flash
+
+# Memory layer
+FERMDOCS_MEMORY=synap                 # noop (default) | synap
+SYNAP_API_KEY=...
+SYNAP_INSTANCE_ID=                    # optional; resolved from API key when blank
+FERMDOCS_TENANT_ID=lemnisca-internal  # multi-tenant scope; default "default"
+
+# Keys
+GEMINI_API_KEY=...
+ANTHROPIC_API_KEY=...
+
+# Debug prompt/response payloads
+FERMDOCS_DEBUG_MAPPER=1
+FERMDOCS_DEBUG_IDENTITY=1
+FERMDOCS_DEBUG_SEGMENTER=1
+FERMDOCS_DEBUG_CHARACTERIZE=1
+FERMDOCS_DEBUG_DIAGNOSIS=1
+FERMDOCS_DEBUG_HYPOTHESIS=1
+```
+
+## Testing and Checks
+
+Fast default test run:
+
+```bash
+pytest tests/unit -v
+```
+
+Broader local run:
+
+```bash
+pytest tests -v
+```
+
+Memory layer tests:
+
+```bash
+pytest tests/unit/memory tests/unit/hypothesis/memory -v
+# Live Synap integration test (requires SYNAP_API_KEY in env):
+pytest tests/integration/memory -v
+```
+
+Frontend:
+
+```bash
+cd apps/web
+npm run typecheck
+npm run build
+```
+
+Useful invariant/eval scripts:
+
+```bash
+python scripts/check_audit_invariant.py
+python scripts/check_hypothesis_invariants.py
+python scripts/eval_hypothesis_reliability.py --help
+```
+
+The default pytest config deselects `live_llm`. Live LLM tests/evals require
+keys and will cost tokens.
+
+## Design Decisions to Preserve
+
+- The bundle is the artifact boundary between stages.
+- `meta.json` is the bundle readiness signal and is written last.
+- Runtime code should not read `audit/` artifacts as evidence.
+- Characterization should prefer deterministic metrics and validators before
+  optional LLM analysis.
+- Diagnosis is observational: what happened, what trended, what is uncertain.
+- Hypothesis is causal: mechanisms, alternatives, critiques, judgments, and
+  actionable recommendations.
+- Diagnosis open questions do not carry `re_run_from`; hypothesis open
+  questions do.
+- User questions are a lens over the evidence, not a replacement for the
+  bottom-up analysis.
+- Specialist routing is intentionally static while there are only three
+  specialists. Add routing when there is a fourth specialist.
+- **Memory is opt-in and gated on a closed-vocab `process_family`.**
+  `NoopBackend` is the default; `SynapBackend` activates via env var.
+  No `process_family` → memory silently no-ops.
+- **Memory failures never break runs.** Backend outage on fetch returns
+  empty priors; outage on write logs a warning and continues. The D6
+  invariant: failed/budget-exhausted runs never write.
+- The closed-enum `process_family` (penicillin_fedbatch,
+  yeast_intracellular_product_fedbatch, yeast_aerobic_fedbatch,
+  ecoli_recombinant_protein, melanin_batch) is enforced at the LLM
+  schema level, in the manifest loader, and at the memory layer.
+
+## Current Limitations
+
+- The API run store is in-memory plus files on disk. Restarting the backend
+  loses active run state.
+- The web/API stack is local development software: no auth, RBAC,
+  multi-tenancy enforcement, rate limiting, or production deployment
+  hardening. Memory layer carries a `tenant_id` field but isolation
+  is currently logical (no separate Synap instances per tenant).
+- Hypothesis live execution currently uses Gemini.
+- PDF extraction quality depends on Docling and on source document quality.
+- Browser print-to-PDF is the current PDF export path.
+- Prompt structure is cache-friendly, but provider-level prompt caching is
+  not a universal cross-stage feature.
+- Some historical docs and package docstrings may still describe older v1
+  behavior; prefer code, schemas, tests, and this document.
+- Synap dashboard's Memories tab is currently a mock-data preview; live
+  records are inspectable via the SDK only.
+
+## Where to Start in Code
+
+Read in this order:
+
+```text
+src/fermdocs/domain/models.py
+src/fermdocs/pipeline.py
+src/fermdocs/bundle/writer.py
+src/fermdocs/bundle/reader.py
+src/fermdocs_characterize/schema.py
+src/fermdocs_characterize/pipeline.py
+src/fermdocs_diagnose/schema.py
+src/fermdocs_diagnose/agent.py
+src/fermdocs_hypothesis/schema.py
+src/fermdocs_hypothesis/runner.py
+src/fermdocs_hypothesis/projector.py
+src/fermdocs_memory/base.py
+src/fermdocs_memory/synap.py
+apps/api/fermdocs_api/runner_pipeline.py
+apps/web/src/app/runs/[id]/page.tsx
+```

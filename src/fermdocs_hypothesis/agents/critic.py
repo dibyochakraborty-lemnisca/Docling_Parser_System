@@ -1,0 +1,474 @@
+"""Critic agent — adversarially reviews the synthesized hypothesis.
+
+Plan ref: plans/2026-05-03-hypothesis-debate-v0.md §2 (critic role), §5
+(critic tools — query_bundle, get_priors, get_narrative_observations,
+execute_python, file_critique).
+
+Loop shape (ReAct, max 6 tool calls then forced file_critique):
+  - Each turn the agent emits {action: tool_call|file_critique}
+  - tool_call routes to HypothesisToolBundle (read tools) OR to
+    execute_python (sandboxed pandas/numpy/scipy)
+  - file_critique is terminal — emits {flag: red|green, reasons: [...]}
+  - Red-flag REQUIRES ≥1 reason (enforced at parse time)
+
+execute_python reuses diagnose's harness directly — same sandbox, same
+50KB output cap. Per plan §15 / Stage 3 scope: shared sandbox is fine
+for v0; wrap with different limits later if v1 critic needs it.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from typing import Any
+
+from fermdocs_diagnose.tools_bundle.execute_python import execute_python
+from fermdocs_hypothesis.llm_clients import GeminiHypothesisClient
+from fermdocs_hypothesis.prompts import ToolHint, build_prompt
+from fermdocs_hypothesis.schema import CriticView, CritiqueFull
+from fermdocs_hypothesis.tools_bundle.factory import (
+    GET_NARRATIVE_OBSERVATIONS,
+    GET_PRIORS,
+    HypothesisToolBundle,
+    QUERY_BUNDLE,
+    truncate_result,
+)
+
+EXECUTE_PYTHON = "execute_python"
+FILE_CRITIQUE = "file_critique"
+MAX_CRITIC_TOOL_CALLS = 6
+
+
+CRITIC_SYSTEM = """\
+You are the Critic in a fermentation-hypothesis debate.
+
+Your job: attack the synthesized hypothesis for the current turn. Look
+for weak citations, unsupported claims, missed alternative explanations,
+arithmetic errors, and overreach beyond the cited evidence. You can
+verify numerical claims with execute_python (sandboxed pandas/numpy
+against the bundle's observations.csv when available).
+
+Your job is NOT to rewrite the hypothesis. It is to flag concrete
+problems if they exist. If the hypothesis is sound, file a green flag
+with no reasons. If it is not sound, file a red flag with concrete,
+specific reasons.
+
+Be precise. "Citation is weak" is useless. "Cites narrative N-0001 about
+BATCH-01 but extends the claim to BATCH-05 which N-0001 does not cover"
+is the kind of reason a judge can act on.
+
+PRIOR ATTEMPTS: when `previous_attempts` is non-empty, the synthesizer
+has already been told to address those critic_reasons. Read each prior
+attempt and check whether the new hypothesis actually fixed the cited
+problem. Do NOT re-raise an objection the synthesizer has now addressed —
+that's how the debate gets stuck in a loop. If the synthesizer has
+narrowed the claim to fix the prior reason, that's progress; flag green
+unless a NEW concrete problem exists.\
+"""
+
+CRITIC_INVARIANTS = (
+    "Use tools before judging. A green flag without any tool call is suspicious.",
+    "Red flag requires ≥1 concrete, evidence-based reason.",
+    "Reasons must be specific (cite IDs, name variables, point at numbers).",
+    "EVERY red-flag reason MUST start with an axis tag in square brackets:"
+    " one of [trajectory-axis], [robustness-axis], [tool-gap-axis],"
+    " [memory-axis], [metadata-axis], [actionability-axis], [question-axis],"
+    " or [followup-axis]. The tag tells the synthesizer which rule was"
+    " violated so it can fix the right thing on retry. If a problem doesn't"
+    " fit any of these axes, use [general-axis] as the tag (and prefer to"
+    " green-flag if the issue is minor).",
+    "Do not rewrite the hypothesis. Do not propose a fix. Just flag problems.",
+    "If previous_attempts is non-empty, the synthesizer was asked to address those prior reasons. Check whether it actually did. If a prior reason was addressed (claim narrowed, overreach removed), acknowledge that — do not raise the same objection again.",
+    "If a new attempt fixes the prior critic_reasons but is otherwise sound, file green. Iterative narrowing is the goal.",
+    "USER QUESTION (when view.user_question is non-null): one additional"
+    " rejection axis. The hypothesis MUST address the user's question. If"
+    " hypothesis.question_answered is 'yes' or 'partial', verify the cited"
+    " evidence actually supports that — when the cited findings/narratives"
+    " do NOT establish what the answer claims, file red with reason"
+    " '[question-axis]: hypothesis claims to answer the question but the"
+    " cited evidence does not support that claim'. If question_answered is"
+    " 'insufficient_data', do NOT reject on this axis (honest answer is"
+    " always acceptable). If question_answered is null while user_question"
+    " is non-null, file red: '[question-axis]: hypothesis ignored the user"
+    " question'. Tag question-axis reasons with the [question-axis] prefix"
+    " so the synthesizer can distinguish them from evidence-shape reasons"
+    " on retry — different reasons need different fixes.",
+    "[METADATA-AXIS] (metadata-anomaly-prepass branch): rejection axis"
+    " for hypotheses that compare across a metadata-anomaly confound"
+    " without acknowledging it. If view.relevant_findings contains a"
+    " Finding with statistics.pattern_kind='metadata_anomaly' AND the"
+    " hypothesis's affected runs/variables overlap the anomaly's run"
+    " set, the summary MUST cite the metadata-anomaly finding by id"
+    " OR scope the comparison to within-confound runs. If neither"
+    " condition holds, file red with reason '[metadata-axis]:"
+    " hypothesis compares across instrument/header/scale/bioreactor"
+    " confound (F-NNNN) without acknowledgement; either cite the"
+    " anomaly or scope the claim to within-confound runs'. Do NOT"
+    " over-fire when no metadata-anomaly findings exist in the view,"
+    " or when the hypothesis is already scoped within a single"
+    " confound group. Tag with [metadata-axis] prefix.",
+    "[ACTIONABILITY-AXIS] (commit 4 of rigour-and-actionability plan):"
+    " rejection axis for descriptive-only hypotheses. If the hypothesis"
+    " is otherwise sound (would receive a green flag) but its"
+    " actionable_recommendation field is null OR empty whitespace,"
+    " file red with reason '[actionability-axis]: hypothesis is"
+    " descriptive but proposes no next step; populate"
+    " actionable_recommendation with a concrete parameter change or the"
+    " literal prefix \"insufficient evidence to recommend\"'. Do NOT"
+    " over-fire when the field starts with 'insufficient evidence' —"
+    " honest abstention is acceptable. Tag with [actionability-axis]"
+    " prefix.",
+    "[ROBUSTNESS-AXIS] (commit 2 of rigour-and-actionability plan):"
+    " rejection axis for un-caveated correlations on small n. When the"
+    " hypothesis cites a Pearson r (e.g. 'r=-0.90 between DO and WCW')"
+    " you MUST verify the supporting finding's statistics. If the"
+    " finding's statistics include `weak_n_flag: True` (n<8) OR an"
+    " explicit `n` value below 8, the hypothesis must either (a) name"
+    " the n explicitly in the summary ('r=-0.90, n=6'), (b) cite the"
+    " bootstrap CI ('r=-0.90, 95%% CI [-0.99, -0.40]'), or (c) downgrade"
+    " the claim to 'preliminary association' or 'apparent trend'."
+    " Otherwise file red with reason '[robustness-axis]: hypothesis"
+    " cites correlation r=X with no n/CI caveat; supporting finding"
+    " carries weak_n_flag and n=Y'. Do NOT over-fire when n≥8 OR when"
+    " the hypothesis already includes the caveat. Tag with"
+    " [robustness-axis] prefix so retry can address specifically.",
+    "[TRAJECTORY-AXIS] (commit 1 of rigour-and-actionability plan):"
+    " rejection axis for descriptive-without-dynamics hypotheses. Scan"
+    " the hypothesis summary for time-dependent language: 'decline',"
+    " 'peak', 'onset', 'transient', 'rate', 'kinetic', 'over time',"
+    " 'after Nh', 'before peak', 'post-induction', 'growth phase',"
+    " 'ramp-up', 'plateau'. If such language is present AND"
+    " cited_trajectories is empty AND view.relevant_trajectories has"
+    " matching (run, variable) entries, file red with reason"
+    " '[trajectory-axis]: hypothesis asserts time-dependent behavior"
+    " but cites no trajectory; relevant trajectory(ies) <run,var> were"
+    " available in view.relevant_trajectories'. Do NOT over-fire when"
+    " view.relevant_trajectories is empty for the relevant"
+    " (run, variable) — the trajectory may genuinely not be in the"
+    " bundle. Tag with [trajectory-axis] prefix so retry can either"
+    " cite the trajectory or weaken the claim from dynamic to"
+    " point-in-time.",
+    "[TOOL-GAP-AXIS] (commit 5 of characterize-determinism plan): one"
+    " more rejection axis when characterize emitted [SYMMETRY] data_gaps"
+    " (statistics.symmetry_violation == True). If the hypothesis sets"
+    " question_answered='insufficient_data' AND its rationale cites"
+    " symmetry-violation findings as the reason, file red with reason"
+    " '[tool-gap-axis]: hypothesis treated tool gaps as data gaps; the"
+    " bundle has the data, the toolchain failed to compute it'. Do NOT"
+    " over-fire: 'insufficient_data' is still acceptable when the"
+    " BUNDLE itself lacks the data (no symmetry_violation findings on"
+    " the relevant metrics; or the relevant trajectories simply don't"
+    " exist for the runs in question). Only file red when the bundle"
+    " demonstrably had the inputs but the synthesizer hid behind a"
+    " tool gap. Tag with [tool-gap-axis] prefix so retry can address"
+    " specifically.",
+    "[MEMORY-AXIS] (memory-layer Phase 1): rejection axis for"
+    " misuse of cross-run priors. When view.cross_run_lessons is"
+    " populated and the hypothesis CITES one of those prior lessons,"
+    " verify two things: (a) the lesson's process_family / strain"
+    " context matches the current bundle's context, and (b) the"
+    " hypothesis doesn't treat the prior as evidence overriding"
+    " current-bundle findings. Fire red with reason"
+    " '[memory-axis]: hypothesis cites a prior lesson but the cited"
+    " evidence is from a different run/strain' when the prior is"
+    " misapplied. Do NOT over-fire: (i) memory priors that the"
+    " synthesizer surfaces as contradictions with current evidence"
+    " are CORRECT behavior, not a rejection axis; (ii) when"
+    " cross_run_lessons is None/empty there is no memory citation"
+    " to check. Tag with [memory-axis] prefix so retry can either"
+    " scope the prior to within-strain runs or drop it entirely.",
+)
+
+def make_followup_critic_invariants(view: CriticView) -> tuple[str, ...]:
+    """Drive-posture rejection axes for follow-up runs.
+
+    Layered on top of CRITIC_INVARIANTS. Fires only when
+    view.user_question.raised_by == 'user_followup'. Returns empty
+    tuple on bias-posture / legacy runs, preserving back-compat.
+
+    Tagged with [followup-axis] prefix so the synthesizer (commit 4
+    feedback loop) can distinguish these from evidence-shape reasons
+    on retry — different reasons need different fixes.
+
+    Per shape:
+      - mechanistic: reject when the hypothesis (a) restates the
+        mechanism without testing it, or (b) cites only confirming
+        evidence and never engages with disconfirming alternatives.
+      - comparative: reject when the hypothesis describes only one
+        side of the comparison.
+      - scoping: reject when the hypothesis extrapolates beyond the
+        user's cited scope (runs / variables they didn't ask about).
+    """
+    q = view.user_question
+    if q is None or q.raised_by != "user_followup":
+        return ()
+
+    rules: list[str] = []
+
+    if q.shape == "mechanistic":
+        rules.append(
+            "[FOLLOWUP-AXIS] MECHANISTIC: the user proposed a mechanism."
+            " The hypothesis must TEST it, not restate it. File red with"
+            " reason '[followup-axis]: hypothesis restated the mechanism"
+            " without testing it' when the summary just paraphrases the"
+            " user's mechanism without citing evidence FOR or AGAINST."
+            " Also file red with '[followup-axis]: hypothesis ignored"
+            " disconfirming evidence' when the hypothesis cites ONLY"
+            " confirming evidence and the bundle has visible findings"
+            " or narratives that would contradict the mechanism."
+        )
+    elif q.shape == "comparative":
+        rules.append(
+            "[FOLLOWUP-AXIS] COMPARATIVE: the user asked for a contrast"
+            " between named groups (affected_runs). The hypothesis must"
+            " describe BOTH sides explicitly. File red with"
+            " '[followup-axis]: hypothesis covered only one group of the"
+            " requested comparison' when the summary mentions only one"
+            " of the user's named runs/groups, or describes one side"
+            " without contrasting it against the other."
+        )
+    elif q.shape == "scoping":
+        rules.append(
+            "[FOLLOWUP-AXIS] SCOPING: the user narrowed the question to"
+            " specific runs/variables. The hypothesis must stay inside"
+            " that scope. File red with '[followup-axis]: hypothesis"
+            " extrapolated beyond the user-cited scope' when the summary"
+            " or citations include runs/variables the user did NOT ask"
+            " about. Out-of-scope citations on a scoping follow-up are"
+            " noise, not support."
+        )
+
+    return tuple(rules)
+
+
+CRITIC_TASK = """\
+Read the hypothesis in the view. Optionally call tools to verify
+citations / numerics / alternative explanations. Then file a critique.
+
+Tool budget: up to 6 tool calls before you MUST file_critique.
+
+Critique policy:
+  - Green flag: hypothesis is well-supported by cited evidence and you
+    found no concrete problem.
+  - Red flag: at least one concrete problem (citation gap, unsupported
+    extrapolation, missed alternative, numerical error, scope drift).
+"""
+
+CRITIC_RECAP = """\
+Output one JSON action.
+
+When tool_call: {"action":"tool_call","tool":"<name>","args":{...}}
+When done: {"action":"file_critique","flag":"red"|"green","reasons":[...]}
+
+Hard rules:
+  - flag='red' MUST include ≥1 reason.
+  - flag='green' SHOULD include 0 reasons (any reasons must be sub-critical observations).
+  - Each reason ≤300 chars.\
+"""
+
+CRITIC_TOOL_HINTS = (
+    ToolHint(
+        name=QUERY_BUNDLE,
+        purpose="search findings/narratives/trajectories by id or substring",
+    ),
+    ToolHint(
+        name=GET_PRIORS,
+        purpose="organism-aware variable bounds (range, typical, source)",
+    ),
+    ToolHint(
+        name=GET_NARRATIVE_OBSERVATIONS,
+        purpose="filter narrative_observations by run_id/tag/variable",
+    ),
+    ToolHint(
+        name=EXECUTE_PYTHON,
+        purpose="sandboxed pandas/numpy/scipy; observations.csv is at <bundle>/characterization/observations.csv if present",
+    ),
+    ToolHint(
+        name=FILE_CRITIQUE,
+        purpose="TERMINAL: emit critique with flag (red/green) + reasons",
+    ),
+)
+
+
+_CRITIC_SCHEMA: dict[str, Any] = {
+    "type": "OBJECT",
+    "properties": {
+        "action": {
+            "type": "STRING",
+            "enum": ["tool_call", "file_critique"],
+        },
+        # tool_call branch
+        "tool": {
+            "type": "STRING",
+            "enum": [
+                QUERY_BUNDLE,
+                GET_PRIORS,
+                GET_NARRATIVE_OBSERVATIONS,
+                EXECUTE_PYTHON,
+            ],
+            "nullable": True,
+        },
+        "args": {
+            "type": "OBJECT",
+            "nullable": True,
+            "properties": {
+                "scope": {"type": "STRING", "nullable": True},
+                "id_or_query": {"type": "STRING", "nullable": True},
+                "organism": {"type": "STRING", "nullable": True},
+                "process_family": {"type": "STRING", "nullable": True},
+                "variable": {"type": "STRING", "nullable": True},
+                "run_id": {"type": "STRING", "nullable": True},
+                "tag": {"type": "STRING", "nullable": True},
+                "limit": {"type": "INTEGER", "nullable": True},
+                "code": {"type": "STRING", "nullable": True},
+                "timeout": {"type": "INTEGER", "nullable": True},
+            },
+        },
+        # file_critique branch
+        "flag": {"type": "STRING", "enum": ["red", "green"], "nullable": True},
+        "reasons": {
+            "type": "ARRAY", "items": {"type": "STRING"}, "nullable": True,
+        },
+    },
+    "required": ["action"],
+}
+
+
+@dataclass
+class CriticResult:
+    critique: CritiqueFull
+    input_tokens: int
+    output_tokens: int
+    tool_calls: int
+
+
+class CriticAgent:
+    def __init__(
+        self,
+        client: GeminiHypothesisClient,
+        tools: HypothesisToolBundle,
+    ):
+        self._client = client
+        self._tools = tools
+
+    def critique(self, view: CriticView) -> CriticResult:
+        tool_history: list[dict[str, Any]] = []
+        total_in = 0
+        total_out = 0
+
+        # Compose drive-mode rules once per critique call. Empty tuple
+        # on bias-posture / legacy runs → identical prompt to PR-A.
+        invariants = CRITIC_INVARIANTS + make_followup_critic_invariants(view)
+
+        for call_idx in range(MAX_CRITIC_TOOL_CALLS + 1):
+            must_critique = call_idx >= MAX_CRITIC_TOOL_CALLS
+            user_text = self._build_user_text(view, tool_history, must_critique)
+            parts = build_prompt(
+                system_identity=CRITIC_SYSTEM,
+                invariants=invariants,
+                task_spec=CRITIC_TASK,
+                view_obj=view,
+                tool_hints=CRITIC_TOOL_HINTS,
+                recap=CRITIC_RECAP,
+            )
+            parsed, in_tok, out_tok = self._client.call(
+                system=parts.system,
+                user_text=user_text,
+                response_schema=_CRITIC_SCHEMA,
+            )
+            total_in += in_tok
+            total_out += out_tok
+
+            action = parsed.get("action", "")
+
+            if action == "tool_call" and not must_critique:
+                tool_name = parsed.get("tool") or ""
+                args = dict(parsed.get("args") or {})
+                if tool_name == EXECUTE_PYTHON:
+                    code = (args.get("code") or "").strip()
+                    timeout = int(args.get("timeout") or 60)
+                    if not code:
+                        result = {"error": "execute_python requires non-empty code"}
+                    else:
+                        ep_result = execute_python(code, timeout=timeout)
+                        result = {
+                            "stdout": ep_result.stdout,
+                            "stderr": ep_result.stderr,
+                            "returncode": ep_result.returncode,
+                            "timed_out": ep_result.timed_out,
+                            "duration_ms": ep_result.duration_ms,
+                        }
+                else:
+                    result = self._tools.dispatch(tool_name, args)
+                tool_history.append(
+                    {"call": tool_name, "args": args, "result": result}
+                )
+                continue
+
+            critique = self._build_critique(parsed, view, len(tool_history))
+            return CriticResult(
+                critique=critique,
+                input_tokens=total_in,
+                output_tokens=total_out,
+                tool_calls=len(tool_history),
+            )
+
+        raise RuntimeError("critic loop exited without filing critique")
+
+    def _build_user_text(
+        self,
+        view: CriticView,
+        tool_history: list[dict[str, Any]],
+        must_critique: bool,
+    ) -> str:
+        invariants = CRITIC_INVARIANTS + make_followup_critic_invariants(view)
+        parts = build_prompt(
+            system_identity=CRITIC_SYSTEM,
+            invariants=invariants,
+            task_spec=CRITIC_TASK,
+            view_obj=view,
+            tool_hints=CRITIC_TOOL_HINTS,
+            recap=CRITIC_RECAP,
+        )
+        body = parts.as_user_message()
+        if tool_history:
+            body += "\n\n[TOOL HISTORY]\n"
+            for entry in tool_history:
+                body += f"- {entry['call']}({json.dumps(entry['args'], default=str)}) → "
+                body += truncate_result(json.dumps(entry["result"], default=str), cap=2500) + "\n"
+        if must_critique:
+            body += (
+                "\n\n[FORCED]\nTool budget exhausted. You MUST file_critique now."
+                " If you found no concrete problems, file flag='green' with empty"
+                " reasons."
+            )
+        return body
+
+    def _build_critique(
+        self,
+        parsed: dict[str, Any],
+        view: CriticView,
+        tool_calls_used: int,
+    ) -> CritiqueFull:
+        flag = parsed.get("flag") or "green"
+        if flag not in ("red", "green"):
+            flag = "green"
+        reasons_raw = parsed.get("reasons") or []
+        reasons = [str(r)[:300] for r in reasons_raw if r]
+        # Hard guard: red flag without reasons → demote to green (validator
+        # would otherwise reject the CritiqueFull entirely).
+        if flag == "red" and not reasons:
+            flag = "green"
+        return CritiqueFull(
+            hyp_id=view.hypothesis.hyp_id,
+            flag=flag,
+            reasons=reasons,
+            tool_calls_used=tool_calls_used,
+        )
+
+
+def build_critic(
+    client: GeminiHypothesisClient,
+    tools: HypothesisToolBundle,
+) -> CriticAgent:
+    return CriticAgent(client=client, tools=tools)

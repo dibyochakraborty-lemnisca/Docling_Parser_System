@@ -30,6 +30,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from fermdocs.domain.user_question import UserQuestion
 from fermdocs_characterize.flags import ProcessFlag, compute_flags
 from fermdocs_characterize.schema import (
     CharacterizationOutput,
@@ -78,18 +79,30 @@ class AgentContext(BaseModel):
     # Findings raw refs; severity rollup computed at serialize time
     finding_ids: list[str] = Field(default_factory=list)
 
+    # User question (PR-A): when the human typed a question at run start,
+    # this carries the typed-and-classified directive. None on legacy runs.
+    # Diagnose's prompt builder reads this and appends a question section
+    # to the system prompt; downstream agents see it via threading
+    # through the hypothesis-stage views.
+    user_question: UserQuestion | None = None
+
 
 def build_agent_context(
     dossier: dict[str, Any],
     output: CharacterizationOutput,
     *,
     specs_provider: SpecsProvider | None = None,
+    user_question: UserQuestion | None = None,
 ) -> AgentContext:
     """Project (dossier, output) into an AgentContext.
 
     Pure function. specs_provider defaults match the CharacterizationPipeline's
     resolution: schema-with-overrides when the schema is loadable, falling
     back to dossier-only specs for offline tests / fixtures.
+
+    When user_question is non-None, it threads through to the AgentContext
+    so the diagnose-stage prompt prefix surfaces the question (PR-A
+    commit 5).
     """
     if specs_provider is not None:
         specs = specs_provider
@@ -105,6 +118,7 @@ def build_agent_context(
     trajectories = build_trajectories(summary, dossier)
 
     process = (dossier.get("experiment") or {}).get("process") or {}
+    process = _strip_unmatched_registered_rationale(process)
     ingestion_summary = dossier.get("ingestion_summary") or {}
 
     schema_version = (
@@ -142,6 +156,7 @@ def build_agent_context(
         ],
         flags=compute_flags(dossier, summary, trajectories),
         finding_ids=[f.finding_id for f in output.findings],
+        user_question=user_question,
     )
 
 
@@ -193,6 +208,40 @@ def serialize_for_agent(
 # -----------------------------------------------------------------------------
 
 
+def _strip_unmatched_registered_rationale(process: dict[str, Any]) -> dict[str, Any]:
+    """Drop the LLM-written rationale when no registered process matched.
+
+    When the identity extractor finds no registry entry that matches the
+    observed organism, it still writes a rationale string into
+    `process.registered.rationale` explaining what it compared against
+    (e.g. "S. cerevisiae does not match the registry entry for
+    Penicillium chrysogenum"). That string then travels into every
+    downstream agent's prompt prefix as part of AgentContext.process,
+    where it hijacks salience — agents read it as "the reference frame
+    for this experiment is Penicillium" rather than "no useful reference
+    in registry."
+
+    The UNKNOWN_PROCESS flag is the routing signal; the rationale text
+    is what biases the agent's framing. We strip the rationale (and the
+    null process_id stays — downstream code that reads .get("process_id")
+    keeps working) so the agent gets the routing signal without the
+    misleading comparison string.
+
+    No-op when registered.process_id is non-null (a real match exists,
+    rationale is informative).
+    """
+    if not isinstance(process, dict):
+        return process
+    registered = process.get("registered")
+    if not isinstance(registered, dict):
+        return process
+    if registered.get("process_id"):
+        return process
+    # Unmatched. Strip the rationale, keep everything else.
+    cleaned_registered = {k: v for k, v in registered.items() if k != "rationale"}
+    return {**process, "registered": cleaned_registered}
+
+
 def _time_range(summary: Summary) -> tuple[float, float] | None:
     if not summary.rows:
         return None
@@ -217,23 +266,33 @@ def _rank_finding_ids(
     """Sort findings for the agent prefix.
 
     Order:
-      1. Severity desc (critical > major > minor > info).
-      2. Within severity: aggregated rollups before per-row findings.
+      1. trajectory_pattern findings ALWAYS first (regardless of severity).
+         Trajectory-grounded patterns (cross-batch variance, phase
+         boundaries, outlier batches, correlations) are biology-grounded
+         and computed from real time-series — strictly more debatable
+         than spec-mismatch findings, especially for unknown_process
+         bundles where specs are misaligned. Without this promotion, on
+         IndPenSim-shape bundles the ~80 spec findings crowd them out
+         below the agent's visible cap and diagnose never cites them.
+      2. Severity desc (critical > major > minor > info).
+      3. Within severity: aggregated rollups before per-row findings.
          A rollup carrying N=2242 violations covers more variables and
          carries strictly more information density than a per-row finding
-         that flags one timestep. Without this nudge, a single high-sigma
-         per-row finding crowds out N rollups for other variables.
-      3. Tiebreaker: natural id order (the pipeline already pre-sorted by
-         sigma desc / severity, so this is stable).
+         that flags one timestep.
+      4. Tiebreaker: natural id order (pipeline pre-sorted, stable).
     """
+    from fermdocs_characterize.schema import FindingType
+
     def _key(fid: str) -> tuple:
         if fid not in by_id:
-            return (0, 1, fid)  # missing → lowest priority
+            return (1, 0, 1, fid)  # missing → lowest priority
         f = by_id[fid]
+        is_pattern = f.type == FindingType.TRAJECTORY_PATTERN
         is_aggregated = bool(f.statistics.get("aggregated"))
         return (
+            0 if is_pattern else 1,  # trajectory_pattern wins outright
             -_severity_rank(f.severity),
-            0 if is_aggregated else 1,  # aggregated wins within severity
+            0 if is_aggregated else 1,
             fid,
         )
 
@@ -290,8 +349,16 @@ def _build_blob(
 
     Stable key order so prompt-cache prefixes are byte-stable for matching
     inputs.
+
+    user_question is rendered AT THE TOP when present so the agent reads
+    it before the rest of the context. Absent (key missing) on no-question
+    runs — preserves byte-identical JSON for legacy bundles, so the
+    prompt-prefix cache still hits.
     """
-    return {
+    blob: dict[str, Any] = {}
+    if ctx.user_question is not None:
+        blob["user_question"] = ctx.user_question.model_dump(mode="json")
+    blob.update({
         "process": ctx.process,
         "posture": {
             "schema_version": ctx.schema_version,
@@ -310,4 +377,5 @@ def _build_blob(
             "by_severity": _severity_rollup(ctx.finding_ids, by_id),
             "top": [_finding_summary(by_id[fid]) for fid in top_finding_ids if fid in by_id],
         },
-    }
+    })
+    return blob

@@ -1,0 +1,19 @@
+{
+  "bundle_schema_version": "1.0",
+  "golden_schema_version": "2.1",
+  "pipeline_version": "0.1.0",
+  "created_at": "2026-05-03T15:11:53.576725Z",
+  "bundle_id": "bundle_multi_20260503T151153Z_d31381",
+  "run_ids": [
+    "RUN-0001",
+    "RUN-0002",
+    "RUN-0003",
+    "RUN-0004",
+    "RUN-0005",
+    "RUN-0006"
+  ],
+  "model_labels": {
+    "characterization": "deterministic/v1"
+  },
+  "flags": {}
+}
