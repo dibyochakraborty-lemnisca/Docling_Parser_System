@@ -36,7 +36,7 @@ from fermdocs_hypothesis.tools_bundle.factory import (
 
 EXECUTE_PYTHON = "execute_python"
 FILE_CRITIQUE = "file_critique"
-MAX_CRITIC_TOOL_CALLS = 6
+MAX_CRITIC_TOOL_CALLS = 12
 
 
 CRITIC_SYSTEM = """\
@@ -245,7 +245,7 @@ CRITIC_TASK = """\
 Read the hypothesis in the view. Optionally call tools to verify
 citations / numerics / alternative explanations. Then file a critique.
 
-Tool budget: up to 6 tool calls before you MUST file_critique.
+Tool budget: up to 12 tool calls before you MUST file_critique.
 
 Critique policy:
   - Green flag: hypothesis is well-supported by cited evidence and you

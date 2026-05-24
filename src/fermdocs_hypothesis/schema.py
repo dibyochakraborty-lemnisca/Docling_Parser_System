@@ -497,12 +497,12 @@ class BudgetSnapshot(BaseModel):
     Defaults reflect Stage 3 production budget. Tests pass tighter caps.
     """
 
-    max_turns: int = 10
-    max_critic_cycles_per_topic: int = 3
-    max_tool_calls_total: int = 80
-    max_tokens_per_agent_call: int = 4000
+    max_turns: int = 20
+    max_critic_cycles_per_topic: int = 6
+    max_tool_calls_total: int = 160
+    max_tokens_per_agent_call: int = 8000
     max_open_questions: int = 15
-    max_total_input_tokens: int = 200_000
+    max_total_input_tokens: int = 400_000
     skip_critic: bool = False
 
     turns_used: int = 0

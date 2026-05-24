@@ -67,7 +67,7 @@ priors. Never make causal claims you cannot ground in cited evidence.\
 Read the view, optionally call tools to fetch more data, then contribute
 ONE facet on the current_topic from the kinetic angle.
 
-Tool budget: up to 6 tool calls before you must contribute_facet.
+Tool budget: up to 12 tool calls before you must contribute_facet.
 
 Citation policy:
   - Prefer cited_finding_ids when range/cohort findings already cover it.
