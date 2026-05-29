@@ -13,7 +13,7 @@ Usage:
         [--max-total-input-tokens N]
 
 The console-script entry is `fermdocs-hypothesize`. Defaults match the
-production budget: max_turns=10, max_critic_cycles_per_topic=3,
+production budget: max_turns=20, max_critic_cycles_per_topic=6,
 max_tool_calls_total=80, max_total_input_tokens=200000.
 """
 
@@ -61,10 +61,10 @@ def cli() -> None:
     type=click.Path(path_type=Path),
     help="Root directory for hypothesis bundles.",
 )
-@click.option("--max-turns", type=int, default=10)
-@click.option("--max-critic-cycles-per-topic", type=int, default=3)
-@click.option("--max-tool-calls", type=int, default=80)
-@click.option("--max-total-input-tokens", type=int, default=200_000)
+@click.option("--max-turns", type=int, default=20)
+@click.option("--max-critic-cycles-per-topic", type=int, default=6)
+@click.option("--max-tool-calls", type=int, default=160)
+@click.option("--max-total-input-tokens", type=int, default=400_000)
 @click.option(
     "--no-validate",
     is_flag=True,
@@ -288,10 +288,10 @@ def _maybe_hitl_loop(
     "bundle_dir",
     type=click.Path(exists=True, file_okay=False, path_type=Path),
 )
-@click.option("--max-turns", type=int, default=10)
-@click.option("--max-critic-cycles-per-topic", type=int, default=3)
-@click.option("--max-tool-calls", type=int, default=80)
-@click.option("--max-total-input-tokens", type=int, default=200_000)
+@click.option("--max-turns", type=int, default=20)
+@click.option("--max-critic-cycles-per-topic", type=int, default=6)
+@click.option("--max-tool-calls", type=int, default=160)
+@click.option("--max-total-input-tokens", type=int, default=400_000)
 @click.option("--no-validate", is_flag=True, default=False)
 def answer(
     out_dir: Path,

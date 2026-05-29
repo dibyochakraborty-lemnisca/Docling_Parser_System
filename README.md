@@ -1,6 +1,6 @@
-# fermdocs
+# FASSO — Fermentation Agentic Scientific Synthesis and Observation
 
-`fermdocs` is a fermentation document intelligence pipeline. It ingests
+FASSO is a fermentation document intelligence pipeline. It ingests
 CSV, Excel, PDF, or pre-built bundle uploads; preserves raw observations
 with provenance; characterizes trajectories deterministically; runs an
 observational diagnosis agent; runs a multi-agent hypothesis stage with

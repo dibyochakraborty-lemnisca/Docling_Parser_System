@@ -95,7 +95,7 @@ SPECIALIST_SCHEMA: dict[str, Any] = {
 }
 
 
-MAX_SPECIALIST_TOOL_CALLS = 6
+MAX_SPECIALIST_TOOL_CALLS = 12
 
 
 def make_user_question_invariant(role: str) -> str:

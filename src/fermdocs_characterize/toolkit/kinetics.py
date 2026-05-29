@@ -84,36 +84,51 @@ def compute_mu(
     time_h: pd.Series | np.ndarray | list[float],
     biomass: pd.Series | np.ndarray | list[float],
     *,
-    window: int = 7,
+    window: int = 5,
     poly: int = 2,  # accepted for catalog parity, currently unused
 ) -> MuResult:
-    """Specific growth rate mu(t) = d(ln X)/dt.
+    """Specific growth rate mu(t) = d(ln X)/dt using a rolling window.
 
-    Smooths ln(X) with a centered rolling mean of `window` points, then
-    central-differences against time_h. NaNs at boundaries when the
-    finite-difference stencil doesn't fit.
-
+    Calculates the instantaneous derivative over a rolling window.
+    Filters out None/NaN and non-positive biomass values, then for each
+    window computes (ln(X_end) - ln(X_start)) / (t_end - t_start).
+    The maximum of these windowed derivatives is returned as mu_max.
+    
     `poly` is accepted for forward-compatibility with a Savitzky-Golay
     upgrade (catalog default mirrors the reference); ignored today.
-
-    Raises ValueError if fewer than 5 valid points remain after cleaning.
     """
     del poly  # reserved for future SG upgrade; keep signature stable
     t, x = _ensure_sorted_finite(time_h, biomass)
     n = len(t)
+    
+    # We need at least 2 points to compute a derivative.
     if n < 5:
         raise ValueError(f"compute_mu needs >= 5 valid points, got {n}")
-    window = max(1, min(int(window), n))
-
+        
+    # Enforce window size constraints
+    w = max(2, min(int(window), n))
+    
     ln_x = np.log(x)
-    ln_x_smooth = _rolling_mean(ln_x, window)
-
     mu = np.full(n, np.nan, dtype=float)
-    for i in range(1, n - 1):
-        dt = t[i + 1] - t[i - 1]
-        if dt > 0:
-            mu[i] = (ln_x_smooth[i + 1] - ln_x_smooth[i - 1]) / dt
-
+    
+    # Vectorized calculation for the rolling window
+    t_start = t[:-w+1]
+    t_end = t[w-1:]
+    dt = t_end - t_start
+    
+    ln_x_start = ln_x[:-w+1]
+    ln_x_end = ln_x[w-1:]
+    
+    # Defensive check: dt > 0 to avoid division by zero
+    valid_dt = dt > 0
+    
+    # Calculate mu only where dt > 0
+    mu_calc = np.full_like(dt, np.nan, dtype=float)
+    mu_calc[valid_dt] = (ln_x_end[valid_dt] - ln_x_start[valid_dt]) / dt[valid_dt]
+    
+    # Assign the calculated window derivatives to the start of the window
+    mu[:-w+1] = mu_calc
+        
     finite_mu = mu[np.isfinite(mu)]
     if finite_mu.size == 0:
         raise ValueError("compute_mu produced no finite mu values")
