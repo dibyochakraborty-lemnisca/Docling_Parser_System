@@ -97,7 +97,7 @@ For full setup with screenshots and troubleshooting, see [`SETUP.md`](SETUP.md).
 The short version:
 
 ```bash
-git clone https://github.com/Lemniscabio/fermdocs.git
+git clone https://github.com/dibyochakraborty-lemnisca/FASSO.git
 cd fermdocs
 
 # Python
@@ -174,7 +174,7 @@ See `plans/2026-05-10-memory-layer.md` for the full roadmap and the
 ## Setup at a Glance
 
 ```bash
-git clone https://github.com/Lemniscabio/fermdocs.git
+git clone https://github.com/dibyochakraborty-lemnisca/FASSO.git
 cd fermdocs
 
 python3.11 -m venv .venv

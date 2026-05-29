@@ -64,7 +64,7 @@ You also need accounts to obtain API keys (see step 4):
 ## 2. Clone and Python environment
 
 ```bash
-git clone https://github.com/Lemniscabio/fermdocs.git
+git clone https://github.com/dibyochakraborty-lemnisca/FASSO.git
 cd fermdocs
 
 python3.11 -m venv .venv
