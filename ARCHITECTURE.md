@@ -1,13 +1,13 @@
-# fermdocs Architecture
+# FASSO Architecture
 
-This document describes the current architecture of `fermdocs`. It is the
+This document describes the current architecture of FASSO (Fermentation Agentic Scientific Synthesis and Observation). It is the
 repo-root design reference. Historical notes in `plans/` are useful for
 intent, but the current contracts are the code, schemas, tests, and this
 document.
 
 ## System Shape
 
-`fermdocs` is a staged analysis system for fermentation reports:
+FASSO is a staged analysis system for fermentation reports:
 
 ```text
 source files
@@ -209,7 +209,7 @@ machine contract.
 
 ```text
 NoopBackend     write no-op; fetch returns []. Default; preserves byte-
-                identical behavior to pre-memory-layer fermdocs.
+                identical behavior to pre-memory-layer FASSO.
 
 StubBackend     in-memory dict; substring ranking. For unit tests.
 

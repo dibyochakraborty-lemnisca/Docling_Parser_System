@@ -1,4 +1,4 @@
-# fermdocs architecture
+# FASSO architecture
 
 Last updated: matches `0.1.0`. Source of truth for design intent. Update when you change a public contract.
 
@@ -6,7 +6,7 @@ Last updated: matches `0.1.0`. Source of truth for design intent. Update when yo
 
 ## 1. What this is
 
-`fermdocs` ingests fermentation experiment reports (PDF, Excel, CSV) and produces a versioned, agent-consumable dossier JSON for downstream LLM workflows. It maps raw column headers to a canonical golden-column schema using an LLM (Anthropic or Gemini), preserves full provenance for every value, normalizes units via pint with optional LLM fallback, and stores everything in Postgres with a re-extraction-friendly schema.
+FASSO (Fermentation Agentic Scientific Synthesis and Observation) ingests fermentation experiment reports (PDF, Excel, CSV) and produces a versioned, agent-consumable dossier JSON for downstream LLM workflows. It maps raw column headers to a canonical golden-column schema using an LLM (Anthropic or Gemini), preserves full provenance for every value, normalizes units via pint with optional LLM fallback, and stores everything in Postgres with a re-extraction-friendly schema.
 
 **The non-negotiables:**
 
