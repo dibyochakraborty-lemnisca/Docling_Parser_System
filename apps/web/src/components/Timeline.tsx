@@ -122,19 +122,19 @@ export function Timeline({ events }: { events: Event[] }) {
     );
   }
   return (
-    <ol className="space-y-3 border-l pl-6 ml-2">
+    <ol className="ml-2 space-y-3 border-l border-rule pl-6">
       {events.map((ev, i) => (
         <li key={i} className="relative">
-          <span className="absolute -left-[31px] top-2 h-2 w-2 rounded-full bg-foreground" />
-          <div className="rounded-md border bg-card px-4 py-3">
+          <span className="absolute -left-[31px] top-2 h-2 w-2 rounded-full bg-accent shadow-glow" />
+          <div className="rounded-md border border-rule bg-surface-1 px-4 py-3 transition-colors hover:border-rule-strong">
             <div className="flex items-center justify-between gap-4">
               <div className="flex items-center gap-2">
                 <Badge variant={TYPE_COLOR[ev.type] ?? "outline"}>
                   {eventLabel(ev)}
                 </Badge>
-                <span className="text-xs text-muted-foreground">turn {ev.turn}</span>
+                <span className="font-ui text-ui-xs text-ink-muted">turn {ev.turn}</span>
               </div>
-              <span className="text-xs text-muted-foreground tabular-nums">
+              <span className="font-ui text-ui-xs tabular-nums text-ink-muted">
                 {new Date(ev.ts).toLocaleTimeString()}
               </span>
             </div>

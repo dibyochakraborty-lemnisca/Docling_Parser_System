@@ -8,7 +8,9 @@ const Card = React.forwardRef<
   <div
     ref={ref}
     className={cn(
-      "rounded-lg border bg-card text-card-foreground shadow-sm",
+      // Lemnisca: surface-1 well, 1px hairline, 14px radius, no shadow.
+      // Border lifts to teal on hover for interactive cards.
+      "rounded-lg border border-rule bg-surface-1 text-ink transition-colors",
       className,
     )}
     {...props}

@@ -3,228 +3,197 @@
 @tailwind utilities;
 
 /*
- * Editorial Scientific palette (Phase 1 of frontend-redesign).
- * Plan ref: plans/2026-05-11-frontend-redesign-editorial.md
+ * LEMNISCA design system (frontend Lemnisca-design-refactor).
  *
- * Paper-and-ink foundation, single forest accent. Light-only — dark mode
- * was dropped for v1 because editorial designs are intrinsically light-
- * first and a half-implemented dark mode is worse than no dark mode.
+ * "A black scientific instrument panel with one teal signal."
+ * True-black canvas, near-black surface steps, an off-white text ramp,
+ * a single signature teal (#38AFD8 — the dot over the "i" in the
+ * wordmark), Helvetica Neue grotesk + JetBrains Mono labels + sparing
+ * Newsreader italic. 1px hairlines (not shadows) carry structure.
  *
- * Token shape: every color is exposed as a CSS variable so the Tailwind
- * config can read it, and so a future switch to paid Söhne/Tiempos is
- * a one-line change in --font-display / --font-body / --font-ui.
+ * Token shape: Lemnisca-native vars (--color-*) drive new chrome.
+ * The shadcn-compat aliases (--background/--card/--primary/…) are kept
+ * as HSL triples and consumed via `hsl(var(--x) / <alpha-value>)` so
+ * components that haven't been hand-re-treated inherit the dark theme —
+ * and so opacity modifiers (bg-primary/5, bg-background/95) keep working.
  */
 
 @layer base {
   :root {
-    /* Type — the variables tailwind config + components read. The
-     * --font-display / --font-ui variables themselves come from
-     * next/font in layout.tsx; we expose --font-body as Fraunces too
-     * because the optical-size axis lets one family handle both. */
-    --font-body: var(--font-display);
+    /* ---- Type families (font files come from next/font in layout.tsx;
+     * --font-display = Newsreader, --font-ui = JetBrains Mono). Body +
+     * headings are the system grotesk. ---- */
+    --font-grotesk: "Helvetica Neue", Helvetica, "Inter", system-ui, sans-serif;
 
-    /* Paper and ink — the foundation. Everything chrome inherits from
-     * here. RGB tuples (not hsl) because Tailwind's `theme.extend.colors`
-     * uses them more straightforwardly with `var(--token)`. */
-    --color-paper: #FBFAF7;             /* off-white warm; page bg */
-    --color-paper-elevated: #FFFFFF;    /* card surfaces */
-    --color-ink: #0F1B2D;               /* deep navy; body text */
-    --color-ink-secondary: #3D4A5C;     /* metadata, captions */
-    --color-ink-muted: #6B7280;         /* footnotes, byline meta */
-    --color-rule: #E5E2DA;              /* hairline dividers */
-    --color-rule-strong: #BFB9AB;       /* heavier section rules */
+    /* ---- Lemnisca palette ---- */
+    --color-bg:        #000000;          /* true-black canvas */
+    --color-surface-1: #0b0c0d;          /* card surfaces */
+    --color-surface-2: #111315;          /* hover / nested */
+    --color-surface-3: #181b1d;          /* avatars, wells */
 
-    /* The accent — forest. Used at most 3× per screen. */
-    --color-accent: #1B4D3E;            /* forest, the editorial accent */
-    --color-accent-soft: #E8EFE8;       /* 5% forest tint for pull-quotes */
-    --color-accent-ink: #FBFAF7;        /* text ON accent surface */
+    --color-ink:           #f4f5f6;      /* primary text */
+    --color-ink-secondary: #c7cbce;      /* emphasis body */
+    --color-ink-muted:     #92989c;      /* labels, captions */
+    --color-faint:         #62686c;      /* tertiary */
 
-    /* Functional — semantic only. NOT decorative.
-     * Warn: amber, used only for [memory-axis], [robustness-axis] flags.
-     * Error: burgundy, used only for failed runs / rejected hypotheses. */
-    --color-warn: #B45309;
-    --color-error: #991B1B;
+    --color-rule:        rgba(255,255,255,0.10);  /* hairline */
+    --color-rule-soft:   rgba(255,255,255,0.06);
+    --color-rule-strong: rgba(255,255,255,0.18);
 
-    /* Shadcn-compatibility aliases so existing components that read
-     * --background, --foreground, --border etc. keep working without a
-     * mass rewrite. They map to editorial tokens. We'll prune these as
-     * components are individually re-treated in Phase 2. */
-    --background: 38 27% 97%;           /* paper */
-    --foreground: 215 51% 12%;          /* ink */
-    --card: 0 0% 100%;
-    --card-foreground: 215 51% 12%;
-    --primary: 156 48% 21%;             /* accent (forest) */
-    --primary-foreground: 38 27% 97%;
-    --secondary: 47 24% 89%;            /* a paper-tinted secondary */
-    --secondary-foreground: 215 51% 12%;
-    --muted: 47 24% 89%;
-    --muted-foreground: 217 19% 36%;
-    --accent: 156 48% 21%;
-    --accent-foreground: 38 27% 97%;
-    --destructive: 0 65% 35%;
-    --destructive-foreground: 38 27% 97%;
-    --border: 41 24% 86%;
-    --input: 41 24% 86%;
-    --ring: 156 48% 21%;
-    --radius: 0.25rem;                  /* tighter corners; editorial */
+    /* The accent — teal. Used sparingly: index numbers, key stats,
+     * active states, focus rings, links, the lemniscate stroke. */
+    --color-accent:        #38afd8;
+    --color-accent-bright: #5bc7ec;
+    --color-accent-deep:   #1c7c9c;
+    --color-accent-ink:    #04222c;               /* text ON teal */
+    --color-accent-soft:   rgba(56,175,216,0.10);  /* teal wash */
+    --color-accent-glow:   rgba(56,175,216,0.16);
+
+    /* Functional — semantic only. ok = launched/valid (teal-green),
+     * warn = planned/flagged (amber), error = failed/rejected. */
+    --color-ok:    #3fbfa6;
+    --color-warn:  #e3a552;
+    --color-error: #e5484d;
+
+    /* RGB channel triples — consumed by Tailwind as
+     * `rgb(var(--x-rgb) / <alpha-value>)` so /10, /40 opacity modifiers
+     * work on the accent + semantic colors (tinted pills, soft fills). */
+    --accent-rgb: 56 175 216;
+    --ok-rgb:     63 191 166;
+    --warn-rgb:   227 165 82;
+    --error-rgb:  229 72 77;
+
+    /* Editorial-token compatibility aliases (the layout + a few
+     * components still reference paper/ink/rule/accent names). */
+    --color-paper: var(--color-bg);
+    --color-paper-elevated: var(--color-surface-1);
+
+    /* ---- shadcn-compat aliases (HSL triples) ---- */
+    --background: 0 0% 0%;               /* bg */
+    --foreground: 220 9% 96%;            /* ink */
+    --card: 210 8% 5%;                   /* surface-1 */
+    --card-foreground: 220 9% 96%;
+    --primary: 196 67% 53%;              /* teal */
+    --primary-foreground: 194 78% 9%;    /* teal-ink */
+    --secondary: 210 11% 7%;             /* surface-2 */
+    --secondary-foreground: 200 6% 79%;
+    --muted: 210 11% 7%;
+    --muted-foreground: 204 5% 59%;
+    --accent: 210 11% 7%;                /* neutral hover surface */
+    --accent-foreground: 220 9% 96%;
+    --destructive: 358 73% 59%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 0 0% 100%;                 /* consumed at low alpha */
+    --input: 200 9% 16%;
+    --ring: 196 67% 53%;                 /* teal focus */
+    --radius: 14px;                      /* Lemnisca cards: 14 / 20 / pill */
   }
 
-  /* Reset: every element gets the editorial hairline as its default
-   * border color, body inherits paper + ink. */
+  /* Hairline reset — every element's default border is the 10% white
+   * hairline that carries Lemnisca's structure. */
   * {
-    border-color: hsl(var(--border));
+    border-color: var(--color-rule);
   }
 
   body {
-    background-color: var(--color-paper);
+    background-color: var(--color-bg);
     color: var(--color-ink);
-    font-family: var(--font-body), Georgia, "Times New Roman", serif;
-    font-feature-settings: "kern", "liga", "calt", "onum";
+    font-family: var(--font-grotesk);
+    font-weight: 400;
+    line-height: 1.6;
+    font-feature-settings: "kern", "liga", "calt";
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
 
-  /* Display headings use Fraunces with optical-size axis tuned UP.
-   * The opsz axis is 9-144; we pin specific values per heading scale. */
+  ::selection { background: var(--color-accent); color: var(--color-accent-ink); }
+
+  /* Headings — grotesk, light/regular weight, tight negative tracking. */
   h1, .font-display {
-    font-family: var(--font-display), Georgia, serif;
-    font-variation-settings: "opsz" 96, "wght" 600, "SOFT" 30;
-    letter-spacing: -0.015em;
+    font-family: var(--font-grotesk);
+    font-weight: 300;
+    letter-spacing: -0.02em;
     line-height: 1.05;
   }
-
   h2 {
-    font-family: var(--font-display), Georgia, serif;
-    font-variation-settings: "opsz" 48, "wght" 600, "SOFT" 30;
-    letter-spacing: -0.01em;
+    font-family: var(--font-grotesk);
+    font-weight: 400;
+    letter-spacing: -0.015em;
     line-height: 1.15;
   }
-
   h3 {
-    font-family: var(--font-display), Georgia, serif;
-    font-variation-settings: "opsz" 28, "wght" 600, "SOFT" 30;
-    letter-spacing: -0.005em;
+    font-family: var(--font-grotesk);
+    font-weight: 400;
+    letter-spacing: -0.01em;
     line-height: 1.25;
   }
 
-  /* Body paragraphs use a smaller opsz value for tighter strokes at
-   * reading sizes. This is what Fraunces was designed for. */
-  p, li {
-    font-variation-settings: "opsz" 14, "wght" 400, "SOFT" 30;
-    line-height: 1.65;
-  }
-
-  /* UI chrome — buttons, labels, badges, form controls — uses Hanken
-   * grotesk. The .font-ui class is the explicit opt-in; components that
-   * should look like UI rather than prose apply it. */
-  .font-ui, button, label, input, select, textarea, .badge {
-    font-family: var(--font-ui), -apple-system, BlinkMacSystemFont, sans-serif;
-    font-feature-settings: "kern", "tnum";  /* tnum: tabular numerals for metadata */
+  code, kbd, pre, .font-ui {
+    font-family: var(--font-ui), ui-monospace, "SF Mono", Menlo, monospace;
   }
 }
 
-/* ---------- Editorial utilities ----------
- * Bridge classes that components can apply to get magazine-style
- * treatments without re-implementing them per component.
- */
-
+/* ---------- Lemnisca utilities ---------- */
 @layer components {
-  /* Kicker: small, tracked, all-caps label that sits above a display
-   * headline. Hanken Grotesk for clear UI feel against the serif. */
+  /* Eyebrow / kicker — mono, wide-tracked, uppercase. */
   .kicker {
-    font-family: var(--font-ui), sans-serif;
-    font-size: 0.6875rem;          /* 11px */
-    font-weight: 600;
-    letter-spacing: 0.12em;
+    font-family: var(--font-ui), monospace;
+    font-size: 0.6875rem;            /* 11px */
+    font-weight: 500;
+    letter-spacing: 0.18em;
     text-transform: uppercase;
-    color: var(--color-ink-secondary);
+    color: var(--color-ink-muted);
   }
+  .kicker-accent { color: var(--color-accent); }
 
-  .kicker-accent {
+  /* Section index number — mono, teal. */
+  .section-index {
+    font-family: var(--font-ui), monospace;
+    font-size: 0.8125rem;
+    letter-spacing: 0.08em;
     color: var(--color-accent);
   }
 
-  /* Hairline rule — the typographic full-stop between sections. */
-  .rule {
-    border-top: 1px solid var(--color-rule);
-  }
+  .rule { border-top: 1px solid var(--color-rule); }
+  .rule-strong { border-top: 1px solid var(--color-rule-strong); }
 
-  .rule-strong {
-    border-top: 1px solid var(--color-rule-strong);
-  }
-
-  /* Drop cap — applied to the first paragraph of an accepted
-   * hypothesis. The first-letter pseudo handles the rest. */
-  .drop-cap::first-letter {
-    font-family: var(--font-display), serif;
-    font-variation-settings: "opsz" 144, "wght" 500, "SOFT" 60;
+  /* Serif accent — sparing Newsreader italic for editorial pull-lines. */
+  .serif-accent {
+    font-family: var(--font-display), Georgia, serif;
     font-style: italic;
-    font-size: 4rem;               /* 64px */
-    line-height: 1;
-    float: left;
-    margin: 0.25rem 0.5rem 0 0;
-    color: var(--color-accent);
+    font-weight: 400;
+    letter-spacing: -0.01em;
   }
 
-  /* Pull-quote — the recommendation treatment. Indented from body,
-   * forest left rule, italic Fraunces. */
+  /* Pull-quote — teal left rule + teal wash, Newsreader italic. */
   .pull-quote {
-    margin: 3rem 0;
-    padding: 1.5rem 0 1.5rem 1.5rem;
+    margin: 2rem 0;
+    padding: 1.25rem 0 1.25rem 1.5rem;
     border-left: 3px solid var(--color-accent);
-    background-color: var(--color-accent-soft);
-    font-family: var(--font-display), serif;
-    font-variation-settings: "opsz" 24, "wght" 400, "SOFT" 60;
+    background: var(--color-accent-soft);
+    font-family: var(--font-display), Georgia, serif;
     font-style: italic;
-    font-size: 1.375rem;           /* 22px */
+    font-size: 1.3rem;
     line-height: 1.45;
     color: var(--color-ink);
   }
 
-  .pull-quote-attribution {
-    display: block;
-    margin-top: 1rem;
-    font-family: var(--font-ui), sans-serif;
-    font-style: normal;
-    font-size: 0.6875rem;
-    font-weight: 600;
-    letter-spacing: 0.15em;
-    text-transform: uppercase;
-    color: var(--color-accent);
+  /* Teal focus-glow ring used on interactive chrome. */
+  .focus-glow:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--color-accent-glow);
   }
 }
 
-/* ---------- Print styles ----------
- * Editorial designs print well by default; the rules below are minimal
- * cleanups. Phase 3 will revisit this when chart styling lands.
- */
-
+/* ---------- Print — the panel prints on white for legibility. ---------- */
 @media print {
-  @page {
-    margin: 2cm;
-    size: A4;
-  }
-  body {
-    background: white !important;
-    color: black !important;
-  }
-  nav, footer, .print\:hidden {
+  @page { margin: 2cm; size: A4; }
+  html, body { background: #fff !important; color: #000 !important; }
+  * { border-color: #ddd !important; }
+  nav, footer, .print\:hidden, .scroll-progress, .hero-lemniscate {
     display: none !important;
   }
-  main {
-    max-width: 100% !important;
-    padding: 0 !important;
-  }
-  .pull-quote {
-    background-color: transparent !important;
-    border-left-color: #000 !important;
-  }
-  .js-plotly-plot {
-    page-break-inside: avoid;
-    break-inside: avoid;
-    max-width: 100% !important;
-  }
-  *:hover {
-    background-color: inherit !important;
-  }
+  main { max-width: 100% !important; padding: 0 !important; }
+  .pull-quote { background: transparent !important; border-left-color: #000 !important; }
+  .js-plotly-plot { page-break-inside: avoid; break-inside: avoid; max-width: 100% !important; }
 }

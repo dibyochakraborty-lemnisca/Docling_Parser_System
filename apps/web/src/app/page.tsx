@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Lemniscate } from "@/components/brand/Lemniscate";
 import {
   PROCESS_FAMILY_OPTIONS,
   createRun,
@@ -130,9 +131,30 @@ export default function Home() {
   }
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-12">
+      {/* Hero — the lemniscate motif over a teal glow. */}
+      <section className="relative isolate overflow-hidden pb-2">
+        <div className="pointer-events-none absolute inset-0 -z-10 flex items-center justify-center">
+          <div className="absolute left-1/2 top-1/2 h-[380px] w-[760px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-accent-glow blur-3xl" />
+          <div className="hero-lemniscate absolute left-1/2 top-1/2 w-[130%] max-w-[1000px] -translate-x-1/2 -translate-y-1/2 opacity-70">
+            <Lemniscate />
+          </div>
+        </div>
+        <p className="kicker kicker-accent">Fermentation hypothesis engine</p>
+        <h1 className="mt-4 max-w-[20ch] text-display-lg">
+          From raw batch data to{" "}
+          <span className="serif-accent text-accent">tested hypotheses.</span>
+        </h1>
+        <p className="mt-5 max-w-prose text-body-lg text-ink-muted">
+          Upload a run bundle and the multi-agent pipeline ingests, characterizes,
+          diagnoses, and debates its way to ranked, evidence-cited hypotheses —
+          then recommends what to change.
+        </p>
+      </section>
+
       <Card>
         <CardHeader>
+          <p className="section-index">01</p>
           <CardTitle>Upload</CardTitle>
           <CardDescription>
             Upload a <code>.csv</code>, <code>.xlsx</code>, or <code>.pdf</code> —
@@ -158,7 +180,7 @@ export default function Home() {
               maxLength={2000}
               rows={3}
               disabled={submitting}
-              className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring resize-none"
+              className="w-full resize-none rounded-md border border-rule bg-surface-1 px-3 py-2 text-ui-base text-ink placeholder:text-ink-faint transition-colors focus:border-accent-deep focus:shadow-glow-soft focus:outline-none"
             />
             <p className="mt-1 text-xs text-muted-foreground">
               Leave empty to run as today. When provided, the system biases
@@ -184,7 +206,7 @@ export default function Home() {
               value={processFamily}
               onChange={(e) => setProcessFamily(e.target.value)}
               disabled={submitting}
-              className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              className="w-full rounded-md border border-rule bg-surface-1 px-3 py-2 text-ui-base text-ink transition-colors focus:border-accent-deep focus:shadow-glow-soft focus:outline-none"
             >
               {PROCESS_FAMILY_OPTIONS.map((opt) => (
                 <option key={opt.value} value={opt.value}>
@@ -221,7 +243,7 @@ export default function Home() {
             </div>
 
             {files.length > 0 && (
-              <ul className="divide-y rounded-md border bg-card text-sm">
+              <ul className="divide-y divide-rule rounded-md border border-rule bg-surface-1 text-sm">
                 {files.map((f, idx) => (
                   <li
                     key={`${f.name}-${idx}`}
@@ -276,11 +298,12 @@ export default function Home() {
       </Card>
 
       <section>
-        <div className="flex items-baseline justify-between mb-3">
-          <h2 className="text-lg font-semibold">Recent runs</h2>
+        <p className="section-index">02</p>
+        <div className="mb-4 flex items-baseline justify-between">
+          <h2 className="text-display-sm">Recent runs</h2>
           <button
             onClick={refreshRuns}
-            className="text-xs text-muted-foreground hover:text-foreground"
+            className="font-ui text-ui-xs uppercase tracking-[0.1em] text-ink-muted transition-colors hover:text-accent"
           >
             refresh
           </button>
@@ -295,12 +318,12 @@ export default function Home() {
               <li key={r.run_id}>
                 <a
                   href={`/runs/${r.run_id}`}
-                  className="block rounded-md border bg-card px-4 py-3 hover:bg-accent transition-colors"
+                  className="block rounded-md border border-rule bg-surface-1 px-4 py-3 transition-colors hover:border-accent-deep hover:bg-surface-2"
                 >
                   <div className="flex items-center justify-between">
                     <div>
-                      <div className="font-mono text-sm">{r.run_id.slice(0, 8)}</div>
-                      <div className="text-xs text-muted-foreground">
+                      <div className="font-ui text-ui-sm text-ink">{r.run_id.slice(0, 8)}</div>
+                      <div className="font-ui text-ui-xs text-ink-muted">
                         started {formatRelative(r.created_at)}
                       </div>
                     </div>

@@ -136,8 +136,9 @@ export default function RunPage({ params }: { params: { id: string } }) {
     <div className={`space-y-8 ${showFollowupBar ? "pb-40" : ""}`}>
       <header className="flex items-center justify-between print:mb-4">
         <div>
-          <h1 className="text-2xl font-semibold">Run {run.run_id.slice(0, 8)}</h1>
-          <p className="text-sm text-muted-foreground">{run.run_id}</p>
+          <p className="kicker kicker-accent">Run</p>
+          <h1 className="mt-1 text-display-sm">{run.run_id.slice(0, 8)}</h1>
+          <p className="mt-1 font-ui text-ui-xs text-ink-muted">{run.run_id}</p>
         </div>
         <div className="flex items-center gap-2 print:hidden">
           <Badge>{statusLabel}</Badge>
@@ -166,7 +167,7 @@ export default function RunPage({ params }: { params: { id: string } }) {
       {/* Recommendation Panel */}
       {run.recommendation_output && (
         <section className="space-y-3">
-          <h2 className="text-lg font-semibold">Recommendation</h2>
+          <h2 className="text-display-sm">Recommendation</h2>
           <Card className={run.recommendation_output.confident ? "border-primary" : ""}>
             <CardHeader>
               <div className="flex items-center justify-between">
@@ -209,12 +210,12 @@ export default function RunPage({ params }: { params: { id: string } }) {
                             <div>R² (worst): {c.selection_r2 !== null ? c.selection_r2.toFixed(3) : "N/A"}</div>
                             <div>RMSE (worst): {c.selection_rmse !== null ? c.selection_rmse.toFixed(3) : "N/A"}</div>
                             {c.good_fit !== null && (
-                              <div className={c.good_fit ? "text-green-600" : "text-amber-600"}>
+                              <div className={c.good_fit ? "text-ok" : "text-warn"}>
                                 Good fit: {c.good_fit ? "Yes" : "No"}
                               </div>
                             )}
                             {c.plausible !== null && (
-                              <div className={c.plausible ? "text-green-600" : "text-amber-600"}>
+                              <div className={c.plausible ? "text-ok" : "text-warn"}>
                                 Plausible: {c.plausible ? "Yes" : "No"}
                               </div>
                             )}
@@ -239,14 +240,14 @@ export default function RunPage({ params }: { params: { id: string } }) {
                   <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Interventions</h3>
                   <ul className="space-y-2">
                     {run.recommendation_output.interventions.map((inv, i) => (
-                      <li key={i} className="text-sm border-l-2 pl-3 border-muted">
+                      <li key={i} className="text-sm border-l-2 border-accent/50 pl-3">
                         <div className="font-medium">{inv.description}</div>
                         {inv.predicted_value !== null && inv.baseline_value !== null && (
                           <div className="text-xs mt-1">
                             <span className="font-mono">{inv.objective_metric ?? "objective"}</span>:{" "}
                             {inv.baseline_value} → <strong>{inv.predicted_value}</strong>
                             {inv.delta !== null && (
-                              <span className={inv.delta >= 0 ? "text-green-600" : "text-destructive"}>
+                              <span className={inv.delta >= 0 ? "text-ok" : "text-destructive"}>
                                 {" "}({inv.delta >= 0 ? "+" : ""}{inv.delta})
                               </span>
                             )}
@@ -256,7 +257,7 @@ export default function RunPage({ params }: { params: { id: string } }) {
                           </div>
                         )}
                         {inv.rationale && <p className="text-muted-foreground text-xs mt-1">{inv.rationale}</p>}
-                        {inv.caveat && <p className="text-amber-600 text-xs mt-1">{inv.caveat}</p>}
+                        {inv.caveat && <p className="text-warn text-xs mt-1">{inv.caveat}</p>}
                       </li>
                     ))}
                   </ul>
@@ -270,7 +271,7 @@ export default function RunPage({ params }: { params: { id: string } }) {
       {/* Final hypotheses */}
       {run.output && run.output.final_hypotheses.length > 0 && (
         <section className="space-y-3">
-          <h2 className="text-lg font-semibold">Final hypotheses</h2>
+          <h2 className="text-display-sm">Final hypotheses</h2>
           {run.output.final_hypotheses.map((h) => (
             <Card key={h.hyp_id}>
               <CardHeader>
@@ -284,7 +285,7 @@ export default function RunPage({ params }: { params: { id: string } }) {
               </CardHeader>
               <CardContent>
                 {h.question_answered && (
-                  <div className="mb-3 rounded-md border bg-accent/40 px-3 py-2">
+                  <div className="mb-3 rounded-md border border-accent/30 bg-accent-soft px-3 py-2">
                     <div className="flex items-center gap-2 text-xs">
                       <span className="font-medium">Your question:</span>
                       <Badge
@@ -344,7 +345,7 @@ export default function RunPage({ params }: { params: { id: string } }) {
       {followups.length > 0 && (
         <section className="space-y-4">
           <div className="border-t pt-4" />
-          <h2 className="text-lg font-semibold">Follow-ups</h2>
+          <h2 className="text-display-sm">Follow-ups</h2>
           {followups.map((f: FollowupResultDTO) => (
             <div key={f.followup_index} className="space-y-2">
               <div className="text-sm">
@@ -366,7 +367,7 @@ export default function RunPage({ params }: { params: { id: string } }) {
                   </CardHeader>
                   <CardContent>
                     {h.question_answered && (
-                      <div className="mb-3 rounded-md border bg-accent/40 px-3 py-2">
+                      <div className="mb-3 rounded-md border border-accent/30 bg-accent-soft px-3 py-2">
                         <div className="flex items-center gap-2 text-xs">
                           <span className="font-medium">Your follow-up:</span>
                           <Badge
@@ -455,7 +456,7 @@ export default function RunPage({ params }: { params: { id: string } }) {
       {/* Rejected hypotheses (collapsed) */}
       {run.output && run.output.rejected_hypotheses.length > 0 && (
         <section className="space-y-2">
-          <h2 className="text-lg font-semibold">
+          <h2 className="text-display-sm">
             Rejected hypotheses ({run.output.rejected_hypotheses.length})
           </h2>
           <ul className="space-y-2">
@@ -480,7 +481,7 @@ export default function RunPage({ params }: { params: { id: string } }) {
       {/* Pipeline progress (per-stage status messages) */}
       {statusMessages.length > 0 && (
         <section>
-          <h2 className="text-lg font-semibold mb-3">Pipeline progress</h2>
+          <h2 className="text-display-sm mb-3">Pipeline progress</h2>
           <Card>
             <CardContent className="pt-6">
               <ul className="space-y-1 text-sm">
@@ -503,7 +504,7 @@ export default function RunPage({ params }: { params: { id: string } }) {
 
       {/* Live debate timeline */}
       <section>
-        <h2 className="text-lg font-semibold mb-3">Debate timeline</h2>
+        <h2 className="text-display-sm mb-3">Debate timeline</h2>
         <Timeline events={events} />
       </section>
 
@@ -512,7 +513,7 @@ export default function RunPage({ params }: { params: { id: string } }) {
           during a follow-up run (status flips to hypothesizing) and when
           the bundle has been GC'd. */}
       {showFollowupBar && (
-        <div className="fixed bottom-0 left-0 right-0 z-30 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+        <div className="fixed bottom-0 left-0 right-0 z-30 border-t border-rule bg-bg/95 backdrop-blur supports-[backdrop-filter]:bg-bg/80">
           <div className="mx-auto max-w-3xl px-4 py-3">
             <div className="flex items-end gap-2">
               <div className="flex-1">
@@ -555,7 +556,7 @@ export default function RunPage({ params }: { params: { id: string } }) {
       {/* Token report */}
       {run.output?.token_report && (
         <section>
-          <h2 className="text-lg font-semibold mb-3">Token report</h2>
+          <h2 className="text-display-sm mb-3">Token report</h2>
           <Card>
             <CardContent className="pt-6">
               <div className="text-sm">
@@ -564,7 +565,7 @@ export default function RunPage({ params }: { params: { id: string } }) {
               </div>
               <table className="mt-4 w-full text-sm">
                 <thead>
-                  <tr className="text-muted-foreground text-xs uppercase">
+                  <tr className="font-ui text-ui-xs uppercase text-ink-muted">
                     <th className="text-left py-1">Agent</th>
                     <th className="text-right py-1">Input</th>
                     <th className="text-right py-1">Output</th>
