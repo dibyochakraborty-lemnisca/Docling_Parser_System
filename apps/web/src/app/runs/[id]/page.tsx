@@ -513,7 +513,7 @@ export default function RunPage({ params }: { params: { id: string } }) {
           during a follow-up run (status flips to hypothesizing) and when
           the bundle has been GC'd. */}
       {showFollowupBar && (
-        <div className="fixed bottom-0 left-0 right-0 z-30 border-t border-rule bg-bg/95 backdrop-blur supports-[backdrop-filter]:bg-bg/80">
+        <div className="fixed bottom-0 left-0 right-0 z-30 border-t border-rule bg-black/95 backdrop-blur supports-[backdrop-filter]:bg-black/80">
           <div className="mx-auto max-w-3xl px-4 py-3">
             <div className="flex items-end gap-2">
               <div className="flex-1">
