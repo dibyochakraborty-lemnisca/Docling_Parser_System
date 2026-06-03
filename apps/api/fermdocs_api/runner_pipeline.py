@@ -51,7 +51,25 @@ from fermdocs_hypothesis.schema import (
     PriorHypothesisRef,
 )
 
-from fermdocs_api.state import FollowupResult, Run, RunStatus, RunStore, Upload
+from fermdocs_api.state import FollowupResult, Run, RunStatus, RunStore
+
+from fermdocs_recommend.agent import RecommendationAgent
+from fermdocs_recommend.llm_clients import build_recommend_client
+from fermdocs_recommend.schema import RecommendationOutput
+
+def _run_recommendation_blocking(
+    bundle_dir: Path,
+    hypothesis_output_path: Path | None = None,
+    run_id: str | None = None,
+) -> RecommendationOutput:
+    from fermdocs.bundle import BundleReader
+
+    reader = BundleReader(bundle_dir)
+    client = build_recommend_client()
+    agent = RecommendationAgent(client=client)
+    return agent.recommend(
+        reader, hypothesis_output_path=hypothesis_output_path, run_id=run_id
+    )
 
 _log = logging.getLogger(__name__)
 
@@ -127,6 +145,9 @@ async def execute_run(
 
         unresolved = [q for q in result.output.open_questions if not q.resolved]
         run.status = RunStatus.PAUSED if unresolved else RunStatus.DONE
+        
+        if run.status == RunStatus.DONE:
+            await _try_recommendation(store, run, bundle_dir)
 
         await store.publish(
             run.run_id,
@@ -289,6 +310,46 @@ async def execute_followup_run(
     )
 
 
+async def _try_recommendation(store: RunStore, run: Run, bundle_dir: Path) -> None:
+    """Run the recommendation stage on a DONE run.
+
+    Best-effort: any failure logs and leaves the run DONE — the recommendation
+    stage must NEVER flip a completed run to FAILED. The agent itself already
+    returns a structured refusal rather than raising, but we wrap defensively
+    (client construction, disk, threading) so nothing here can break the run.
+    """
+    try:
+        run.status = RunStatus.RECOMMENDING
+        run.recommend_dir = bundle_dir / "recommend"
+        run.recommend_dir.mkdir(parents=True, exist_ok=True)
+        await store.publish(
+            run.run_id,
+            {
+                "type": "status",
+                "status": run.status.value,
+                "recommend_dir": str(run.recommend_dir),
+            },
+        )
+
+        hyp_output_path = None
+        if run.hypothesis_dir is not None:
+            candidate = Path(run.hypothesis_dir) / "hypothesis_output.json"
+            if candidate.exists():
+                hyp_output_path = candidate
+
+        rec_result = await asyncio.to_thread(
+            _run_recommendation_blocking, bundle_dir, hyp_output_path, run.run_id
+        )
+        out_path = run.recommend_dir / "recommendation.json"
+        out_path.write_text(
+            json.dumps(rec_result.model_dump(mode="json"), indent=2, default=str)
+        )
+    except Exception:  # noqa: BLE001 — recommendation must never fail the run
+        _log.exception("recommendation stage errored for run %s (run stays DONE)", run.run_id)
+    finally:
+        run.status = RunStatus.DONE
+    # The caller (execute_run / on_success) publishes the final result event.
+
 async def _run_hypothesis_with_lifecycle(
     *,
     store: RunStore,
@@ -332,6 +393,9 @@ async def _run_hypothesis_with_lifecycle(
             pass
 
         on_success(result)
+
+        if run.status == RunStatus.DONE and run.bundle_dir is not None:
+            await _try_recommendation(store, run, run.bundle_dir)
 
         await store.publish(
             run.run_id,

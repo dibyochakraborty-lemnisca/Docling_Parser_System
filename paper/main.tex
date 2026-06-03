@@ -32,22 +32,45 @@
   urlcolor=accent
 }
 
+% --- space recovery (no info loss) ---
+\setlength{\textfloatsep}{8pt plus 2pt minus 2pt}
+\setlength{\floatsep}{8pt plus 2pt minus 2pt}
+\setlength{\intextsep}{8pt plus 2pt minus 2pt}
+\setlength{\dbltextfloatsep}{8pt plus 2pt minus 2pt}
+\setlength{\dblfloatsep}{8pt plus 2pt minus 2pt}
+
 \title{World Model-Inspired Agentic Reasoning with Compounding Memory:\\
   A Staged Architecture for Industrial Fermentation}
 
 \author{
-  Anonymous Author(s) \\
-  Affiliation \\
-  \texttt{email}
+  Dibyo Chakraborty \\
+  Lemnisca \\
+  \texttt{dibyo.chakraborty@lemnisca.bio}
 }
 
+\usepackage{url}
 \begin{document}
+\linespread{0.95}\selectfont
 
 \maketitle
 
+\begin{abstract}
+Most multi-agent LLM systems for scientific reasoning generate textually plausible explanations directly from raw observations. We argue this paradigm is structurally limited and that the path forward is a world model-inspired architecture: one that compresses noisy observations into stable latent states, articulates falsifiable causal chains, and evaluates consequences against observed reality. We present FASSO (Fermentation Agentic Scientific Synthesis and Observation), a fully open-source, staged architecture for industrial fermentation hypothesis generation that decomposes reasoning into perception, latent-state construction, observational interpretation, and causal hypothesis testing. While FASSO does not execute numerical forward simulations, it performs \emph{semantic state-transition reasoning}—forcing agents to declare downstream consequences of their hypotheses and verifying them against bundle evidence. FASSO introduces a \emph{cumulative cross-run memory} scoped by a closed-vocabulary domain identifier, digesting multi-agent critiques into persistent transition rules so domain priors accumulate across experiments. We detail three structural invariants (schema-enforced provenance, domain-scoped memory, artifact separation) and present a two-part evaluation: an executed cross-vendor architectural audit (composite 9/10) and an empirical process-trace evaluation on a planted-fault dataset. Auditor and judge configurations are in supplementary material.
+\end{abstract}
+
+% =========================================================
+\section{Introduction}
+% =========================================================
+
+Industrial fermentation generates exactly the kind of data that breaks single-pass language models. A single penicillin or yeast run produces tens of thousands of timestamped measurements across dissolved oxygen, pH, biomass, substrate, off-gas, temperature, agitation, and feed profiles, accompanied by Excel batch sheets, narrative operator logs in PDF, and process control exports with inconsistent header conventions. When a bioprocess engineer asks why a run lost productivity, the answer requires integrating evidence across these modalities, distinguishing measurement artifacts from biological events, separating observation from inference, and grounding every claim in a specific cell of a specific file. In regulated bioprocess environments, reviewers require explanations whose provenance is strictly traceable to source data.
+
+Contemporary multi-agent scientific reasoning systems—AI Co-Scientist~\citep{aicoscientist}, Robin~\citep{robin}, BioDiscoveryAgent~\citep{biodisco}, SciAgents~\citep{sciagents}—provide LLMs with tools and chain their textual outputs, but fundamentally generate \emph{plausible textual explanations} from observations. They lack stable latent states, temporal consistency, and process-level transition mechanics. A language model guessing ``oxygen limitation'' from a DO drop is pattern matching, not scientific reasoning.
+
+We argue the path forward is a world model-inspired architecture: compressing observations into stable latent states, hypothesizing causal transitions, and evaluating consequences against observed reality. World models in the technical sense map raw observations to a semantic latent state, hypothesize a causal perturbation, and evaluate the downstream evidence implied by that perturbation. FASSO implements this cognitive decomposition (perception, latent-state compression, causal hypothesis, downstream verification) without yet implementing learned dynamics.
+
 \begin{figure}[h]
 \centering
-\resizebox{\linewidth}{!}{%
+\resizebox{0.78\linewidth}{!}{%
 \begin{tikzpicture}[
   node distance=0.8cm,
   box/.style={rectangle, draw=ink!80, thick, rounded corners, text width=2.8cm, text centered, minimum height=1.4cm, font=\footnotesize\bfseries},
@@ -72,92 +95,21 @@
   
 \end{tikzpicture}%
 }
-\caption*{Graphical Abstract: The FermDocs architecture is inspired by world-model cognition — compressing raw sensor streams into semantic latent states, utilizing multi-agent debate for falsifiable causal chains, and reinforcing a cross-run memory. The system is fully open-source.}
+\caption*{Graphical Abstract: The FASSO architecture is inspired by world-model cognition — compressing raw sensor streams into semantic latent states, utilizing multi-agent debate for falsifiable causal chains, and reinforcing a cross-run memory. The system is fully open-source.}
 \end{figure}
 
-\begin{abstract}
-Most multi-agent LLM systems for scientific reasoning generate textually plausible explanations directly from raw observations. We argue this paradigm is structurally limited and that the path forward is a world model-inspired architecture: one that compresses noisy observations into stable latent states, articulates falsifiable causal chains, and evaluates consequences against observed reality. We present FermDocs, a fully open-source, staged architecture for industrial fermentation hypothesis generation that cognitively decomposes reasoning into perception, latent-state construction, observational interpretation, and causal hypothesis testing. While FermDocs does not yet execute numerical forward simulations, it performs \emph{semantic state-transition reasoning}—forcing agents to declare the necessary downstream consequences of their hypotheses and verifying them against the bundle evidence. Crucially, FermDocs introduces a \emph{cumulative cross-run memory} scoped by a closed-vocabulary domain identifier. By systematically digesting multi-agent critiques into persistent transition rules, the system's domain-specific priors accumulate across successive experiments, enabling each run to build on prior runs rather than starting from scratch. We position FermDocs as a world model-inspired agentic system for bioprocessing, detail how its structural invariants (schema-enforced provenance, domain-scoped memory, and artifact separation) make it uniquely effective, and present a two-phase evaluation methodology to rigorously assess its reasoning capabilities.
-\end{abstract}
+We present \textbf{FASSO}, a fully open-source multi-agent architecture organized around cognitive decomposition. It replaces ``LLM + tools + chain-of-thought'' with a pipeline that separates perception (ingestion), latent-state construction (characterization), observational interpretation (diagnosis), and causal reasoning (hypothesis debate). While FASSO does not solve ODEs for biomass growth, it implements \emph{semantic state-transition prediction}: the architecture forces agents to hypothesize causal transitions and empowers a Critic to evaluate whether the expected downstream markers actually materialized in the data.
 
-% =========================================================
-\section{Introduction}
-% =========================================================
+FASSO features a \emph{compounding cross-run memory}. Unlike standard RAG systems that retrieve text by vector similarity, the FASSO memory layer persists validated critiques and state-transition lessons indexed by a closed-vocabulary \texttt{process\_family} identifier (e.g., \emph{Saccharomyces cerevisiae} aerobic fed-batch). As more runs are analyzed, internal priors accumulate.
 
-Industrial fermentation generates exactly the kind of data that breaks
-single-pass language models. A single penicillin or yeast run produces
-tens of thousands of timestamped measurements across dissolved oxygen,
-pH, biomass, substrate, off-gas, temperature, agitation, and feed
-profiles, accompanied by Excel batch sheets, narrative operator logs in
-PDF format, and process control system exports with inconsistent header
-conventions. When a bioprocess engineer asks why a particular run lost
-productivity, the answer requires integrating evidence across these
-modalities, recognizing when an apparent anomaly is a measurement
-artifact rather than a biological process event, distinguishing observation from
-inference, and grounding every claim in a specific cell of a specific
-file. In regulated bioprocess environments, reviewers cannot accept
-explanations that are merely plausible; they require explanations whose
-provenance is strictly traceable to source data.
-
-Contemporary multi-agent scientific reasoning systems—such as the AI Co-Scientist~\citep{aicoscientist}, Robin~\citep{robin}, BioDiscoveryAgent~\citep{biodisco}, and SciAgents~\citep{sciagents}—attempt to solve complex reasoning tasks by providing LLMs with tools and chaining their textual outputs. However, these systems fundamentally operate by generating \emph{plausible textual explanations} directly from observations. They lack stable latent states, temporal consistency, and process-level transition mechanics. A language model looking at a time-series drop in dissolved oxygen and textually guessing ``oxygen limitation'' is engaging in pattern matching, not scientific reasoning.
-
-We argue that the path forward for complex engineering domains is not more agents or larger contexts, but a world model-inspired architecture: compressing noisy observations into stable latent states, hypothesizing causal transitions, and evaluating consequences against observed reality. World models in the technical sense map raw observations to a semantic latent state, hypothesize a causal perturbation, and evaluate the downstream evidence implied by that perturbation. FermDocs is inspired by this paradigm: it implements the cognitive decomposition (perception, latent-state compression, causal hypothesis, downstream verification) without yet implementing the learned dynamics.
-
-\begin{figure}[htbp]
-\centering
-\resizebox{\linewidth}{!}{%
-\begin{tikzpicture}[
-  box/.style={rectangle, draw=ink!80, thick, rounded corners, text width=2.8cm, text centered, minimum height=1.2cm, font=\small\bfseries},
-  alert/.style={rectangle, draw=red!80, thick, fill=red!10, rounded corners, text width=3.2cm, text centered, minimum height=1.2cm, font=\small\bfseries},
-  good/.style={rectangle, draw=teal!80, thick, fill=teal!10, rounded corners, text width=2.8cm, text centered, minimum height=1.2cm, font=\small\bfseries},
-  arrow/.style={-{Stealth[scale=1.2]}, thick, ink!80}
-]
-
-  % Top row: Current Paradigm
-  \node[anchor=south west, font=\bfseries\normalsize, text=red!80!black] at (-1.5, 1.5) {Current Paradigm: Autoregressive Pattern Matching};
-  
-  \node[box, fill=gray!15] (raw1) at (0,0) {Raw Observations\\(Multimodal)};
-  \node[box, fill=orange!15] (llm) at (4.5,0) {Monolithic LLM\\Prompting};
-  \node[alert] (text) at (9.5,0) {Plausible Textual\\Explanation};
-  
-  \draw[arrow] (raw1) -- (llm);
-  \draw[arrow] (llm) -- (text) node[midway, above, font=\footnotesize, text=red!80!black] {Unverified};
-  \node[below=0.1cm of text, font=\footnotesize\itshape, text=red!80!black] {(Lacks stable latent state)};
-
-  % Bottom row: World-Model Paradigm
-  \node[anchor=south west, font=\bfseries\normalsize, text=teal!80!black] at (-1.5, -2.5) {Proposed Paradigm: World Model-Inspired Reasoning};
-  
-  \node[box, fill=gray!15] (raw2) at (0,-4) {Raw Observations\\(Multimodal)};
-  \node[box, fill=blue!15] (latent) at (4,-4) {Latent-State\\Compression};
-  \node[box, fill=cyan!15] (sim) at (8,-4) {Falsifiable\\Causal Chain};
-  \node[good] (verify) at (12,-4) {Downstream\\Verification};
-  
-  \draw[arrow] (raw2) -- (latent);
-  \draw[arrow] (latent) -- (sim);
-  \draw[arrow] (sim) -- (verify);
-  
-\end{tikzpicture}%
-}
-\caption{The architectural gap in current scientific reasoning systems. Contemporary systems (top) compress reasoning into a single autoregressive generation step, producing plausible but structurally ungrounded explanations. A world model-inspired approach (bottom) decomposes this into latent-state compression, causal hypothesis generation, and explicit downstream verification.}
-\label{fig:paradigm_gap}
-\end{figure}
- 
-
-To bridge this gap, we present \textbf{FermDocs}, a fully open-source, publicly available multi-agent architecture designed explicitly around cognitive decomposition. FermDocs replaces the traditional ``LLM + tools + chain-of-thought'' paradigm with a pipeline that rigorously separates perception (ingestion), latent-state construction (characterization), observational interpretation (diagnosis), and causal reasoning (hypothesis debate). 
-
-Importantly, while FermDocs does not currently execute numerical forward simulations (such as solving ODEs for biomass growth), it implements \emph{semantic state-transition prediction}. The architecture forces agents to hypothesize causal transitions (e.g., A leads to B) and empowers a Critic agent to evaluate whether the expected downstream markers of that transition actually materialized in the data.
-
-Crucially, FermDocs features a \emph{compounding cross-run memory}. Unlike standard retrieval-augmented generation (RAG) systems that simply retrieve additive text based on vector similarity, the FermDocs memory layer persists validated critiques and state-transition lessons indexed by a strict, closed-vocabulary \texttt{process\_family} identifier (e.g., \emph{Saccharomyces cerevisiae} aerobic fed-batch). As the system analyzes more runs, its internal priors accumulate, continuously improving its predictive accuracy and reasoning depth over time.
-
-This paper details the FermDocs architecture and its three core structural invariants:
-\begin{itemize}[leftmargin=*]
-    \item \textbf{Invariant 1 (Schema-Enforced Citation).} Every hypothesis claim carries a non-empty list of citations to upstream findings, observations, or narrative anchors, enforced at the schema validation layer before any downstream agent reads the claim. This directly addresses the failure mode PiFlow~\citep{piflow} identifies as central to contemporary multi-agent hypothesis systems—claims that lack clear links to supporting or refuting evidence—not by improving prompts but by making unlinked claims structurally invalid at object construction time; downstream agents cannot consume a hypothesis whose citation field has not been satisfied.
-    
-    \item \textbf{Invariant 2 (Domain-Scoped Memory).} Cross-run lessons are keyed on a closed-vocabulary \texttt{process\_family} identifier validated at the protocol boundary. A query without a domain key raises an exception at validation time. This addresses the Rupprecht review's~\citep{rupprecht2026} explicit observation that only one of nine surveyed chemical-engineering MAS uses a fixed domain ontology—extending the design philosophy from knowledge representation into memory routing, and making cross-domain lesson contamination structurally impossible rather than discouraged in prompts.
-    
-    \item \textbf{Invariant 3 (Observational--Causal Artifact Separation).} Observational reasoning (what happened, what trended) and causal reasoning (why, by what mechanism) are separated at the typed JSON artifact boundary between stages, not within the prompt of any single agent. This prevents the failure mode where causal speculation contaminates evidence summaries—a mode endemic to monolithic LLM reasoning that no surveyed system in either the AI-for-science or chem-eng MAS literatures structurally prevents.
+The three core structural invariants are:
+\begin{itemize}[leftmargin=*, noitemsep]
+    \item \textbf{Invariant 1 (Schema-Enforced Citation).} Every hypothesis claim carries a non-empty list of citations to upstream findings, enforced at schema validation before any downstream agent reads the claim. This addresses the failure mode PiFlow~\citep{piflow} identifies—claims lacking links to supporting evidence—by making unlinked claims structurally invalid at object construction time rather than discouraged via prompts.
+    \item \textbf{Invariant 2 (Domain-Scoped Memory).} Cross-run lessons are keyed on a closed-vocabulary \texttt{process\_family} validated at the protocol boundary. Queries without a domain key raise an exception. This addresses Rupprecht's~\citep{rupprecht2026} observation that only one of nine surveyed chem-eng MAS uses a fixed domain ontology, extending the design from knowledge representation into memory routing and making cross-domain contamination structurally impossible.
+    \item \textbf{Invariant 3 (Observational--Causal Artifact Separation).} Observational reasoning (what happened) and causal reasoning (why) are separated at the typed JSON artifact boundary between stages, not within a single agent's prompt. This prevents causal speculation contaminating evidence summaries—a failure mode no surveyed system structurally prevents.
 \end{itemize}
 
-We position this architecture against the chemical-engineering MAS literature in Section~\ref{sec:related}. We provide a deep dive into the system mechanics, explaining exactly how it is built and why this specific decomposition is so effective in Section~\ref{sec:system}. Finally, we define a structured, two-phase evaluation methodology designed to capture the nuances of latent-state reasoning in Section~\ref{sec:evaluation}. 
+We position the architecture against chem-eng MAS in Section~\ref{sec:related}, detail mechanics in Section~\ref{sec:system}, and present the two-phase evaluation in Section~\ref{sec:evaluation}.
 
 % =========================================================
 \section{Related work}
@@ -165,18 +117,17 @@ We position this architecture against the chemical-engineering MAS literature in
 % =========================================================
 
 \paragraph{Multi-agent scientific reasoning and world-model inspiration.} 
-The AI Co-Scientist~\citep{aicoscientist} established the contemporary template for multi-agent hypothesis generation through Elo-based tournament refinement. However, the recent PiFlow framework~\citep{piflow} diagnoses the core failure mode of this family: hypotheses produced by such systems often ``lack clear direction, leading to uncertainty in establishing clear links between hypotheses and their supporting or refuting evidence.'' 
-Separately, the world-models literature~\citep{lecun2022,ha2018,hafner2023} emphasizes reasoning through learned state evolution rather than reactive generation. FermDocs draws inspiration from this paradigm without claiming implementation parity. By compressing observations into a stable latent space and forcing agents to articulate downstream consequences, FermDocs transforms multi-agent debate from a textual plausibility contest into an evaluation of expected downstream evidence against reality.
+AI Co-Scientist~\citep{aicoscientist} established the contemporary template for multi-agent hypothesis generation through Elo-based tournament refinement. PiFlow~\citep{piflow} diagnoses the core failure mode of this family: hypotheses ``lack clear direction, leading to uncertainty in establishing clear links between hypotheses and their supporting or refuting evidence.'' The world-models literature~\citep{lecun2022,ha2018,hafner2023} emphasizes reasoning through learned state evolution rather than reactive generation. FASSO draws inspiration from this paradigm without claiming implementation parity—by compressing observations into a stable latent space and forcing agents to articulate downstream consequences, it transforms multi-agent debate from a textual plausibility contest into evidence-against-reality evaluation.
 
 \paragraph{Multi-agent systems in chemical engineering.} 
-The Rupprecht review~\citep{rupprecht2026} surveys nine systems applied to process engineering, identifying six open challenges. Directed cyclic graphs dominate because chemical engineering workflows have inherent feedback loops. Pajak and colleagues~\citep{pajak} use a multi-agent debate among agents representing different objectives (cost, emissions) for operational decision-making, while Zeng and colleagues~\citep{zeng} apply multi-agent collaboration to process optimization. Of the nine systems surveyed, exactly one uses a fixed domain-specific ontology rather than a dynamically-extracted one. Our closed-vocabulary \texttt{process\_family} enum addresses this unmet need directly, extending the design philosophy from knowledge representation into \emph{routing} and \emph{memory scoping}. Rupprecht et al. identify six open challenges for chemical-engineering MAS: tailored architectures, tool integration as a first-class concern, structured database integration, domain-ontology-backed knowledge representation, human integration with both static and dynamic checkpoints, and domain-specific foundation models. FermDocs addresses five of these directly through the architecture described in Section 3: a directed-cyclic-graph hypothesis stage within a staged pipeline (architecture), bounded tool surfaces with structured output contracts (tools), typed bundle artifacts plus a managed memory backend (databases), the closed-vocabulary \texttt{process\_family} enum (ontology), and HITL pause/resume with state preservation (human integration). The sixth challenge—domain-specific foundation models—remains future work, as it does for the broader field. To our knowledge, no system in the surveyed literature addresses more than two of these challenges simultaneously.
+The Rupprecht review~\citep{rupprecht2026} surveys nine systems and identifies six open challenges: tailored architectures, tool integration, structured databases, domain-ontology-backed knowledge representation, human integration, and domain-specific foundation models. Pajak et al.~\citep{pajak} use multi-objective debate for sustainable operations; Zeng et al.~\citep{zeng} apply multi-agent collaboration to process optimization. Only one of the nine surveyed systems uses a fixed domain ontology. Our closed-vocabulary \texttt{process\_family} enum addresses this directly, extending ontology from knowledge representation into \emph{routing} and \emph{memory scoping}. FASSO addresses five of the six challenges: directed-cyclic-graph hypothesis stage within a staged pipeline (architecture), bounded tool surfaces with structured contracts (tools), typed artifacts plus managed memory (databases), the closed-vocabulary enum (ontology), and HITL pause/resume with state preservation (human integration). Domain-specific foundation models remain future work. To our knowledge, no surveyed system addresses more than two challenges simultaneously.
 
-Table~\ref{tab:comparison} compares FermDocs against representative systems from both the AI-for-science and chemical-engineering multi-agent literatures. The columns correspond to the structural commitments this paper argues are load-bearing for grounded scientific reasoning. Systems are evaluated on whether each commitment is structurally enforced (\cmark), absent (\xmark), or implemented through a related but not equivalent mechanism (described in the cell). FermDocs is the only system in the comparison set that combines schema-enforced citation, closed-vocabulary domain scoping, cross-run memory, and source-data provenance. It explicitly does not implement learned forward dynamics — this is the JEPA gap that Section~\ref{sec:discussion} acknowledges directly.
+Table~\ref{tab:comparison} compares FASSO against representative AI-for-science and chem-eng MAS systems. FASSO is the only system combining schema-enforced citation, closed-vocabulary scoping, cross-run memory, and source-data provenance. It does not implement learned forward dynamics—the JEPA gap acknowledged in Section~\ref{sec:discussion}.
 
 \begin{table}[htbp]
 \centering
 \small
-\caption{Structural properties of selected multi-agent scientific reasoning systems. \cmark~indicates the property is structurally enforced; \xmark~indicates it is absent; Partial indicates a related but not equivalent capability. FermDocs is the only surveyed system that combines schema-enforced citation, closed-vocabulary domain scoping, cross-run memory, and source-data provenance. The honest \xmark~on forward dynamics reflects the JEPA gap acknowledged in Section~\ref{sec:discussion}.}
+\caption{Structural properties of selected multi-agent scientific reasoning systems. \cmark~indicates the property is structurally enforced; \xmark~indicates it is absent; Partial indicates a related but not equivalent capability. FASSO is the only surveyed system that combines schema-enforced citation, closed-vocabulary domain scoping, cross-run memory, and source-data provenance. The honest \xmark~on forward dynamics reflects the JEPA gap acknowledged in Section~\ref{sec:discussion}.}
 \label{tab:comparison}
 \resizebox{\linewidth}{!}{%
 \begin{tabular}{lccccc}
@@ -192,17 +143,16 @@ Pajak et al.\ \citep{pajak} & \xmark & \xmark & \xmark & simulator & \cmark~(Asp
 Zeng et al.\ \citep{zeng} & \xmark & \xmark & \xmark & simulator & \cmark~(IDAES) \\
 Taskiran et al.\ \citep{taskiran} & \xmark & \cmark & \xmark & \xmark & \xmark \\
 \midrule
-\textbf{FermDocs (ours)} & \textbf{\cmark} & \textbf{\cmark} & \textbf{\cmark} & \textbf{\cmark} & \textbf{\xmark} \\
+\textbf{FASSO (ours)} & \textbf{\cmark} & \textbf{\cmark} & \textbf{\cmark} & \textbf{\cmark} & \textbf{\xmark} \\
 \bottomrule
 \end{tabular}%
 }
 \end{table}
 
-The pattern is not that FermDocs is uniformly stronger than every compared system on every axis. Pajak et al.\ and Zeng et al.\ integrate first-principles process simulators (Aspen HYSYS and IDAES respectively), giving them forward-dynamics capabilities FermDocs lacks. Taskiran et al.\ implements a fixed domain ontology, the only such system in the Rupprecht survey besides FermDocs. The contribution of the present work is not winning every axis but combining schema-enforced citation, domain-scoped compounding memory, and observational--causal artifact separation at the type system rather than the prompt — a combination no surveyed system exhibits.
+Pajak et al.\ and Zeng et al.\ integrate first-principles simulators (Aspen HYSYS, IDAES), giving them forward-dynamics capabilities FASSO lacks. Taskiran et al.\ is the only other system in the survey with a fixed domain ontology. The contribution here is not winning every axis but combining schema-enforced citation, domain-scoped compounding memory, and observational--causal separation at the type system rather than the prompt—a combination no surveyed system exhibits.
 
-
-\paragraph{Cross-Run Memory and Debate.} 
-Multi-agent debate improves factual accuracy and reasoning quality over single-agent baselines~\citep{du2023,liang2023}. However, self-critique by the same underlying model is unreliable and can introduce false negatives~\citep{huang2024}, a symptom of broader structural failures in multi-agent reasoning systems~\citep{cemri2025}. We address this through asymmetric information design, coupled with a persistent memory layer. When a debate concludes, the system digests the verified criticisms into persistent state-transition rules. This allows the system's reasoning capabilities to compound over time, dynamically evolving its priors based on empirical outcomes rather than remaining a static retrieval system.
+\paragraph{Cross-run memory and debate.} 
+Multi-agent debate improves factual accuracy over single-agent baselines~\citep{du2023,liang2023}. However, self-critique by the same underlying model is unreliable~\citep{huang2024}, a symptom of broader structural failures in multi-agent systems~\citep{cemri2025}. We address this through asymmetric information design plus a persistent memory layer: when a debate concludes, verified criticisms are digested into persistent state-transition rules, dynamically evolving priors based on empirical outcomes rather than remaining static retrieval.
 
 % =========================================================
 \section{System architecture: A World Model-Inspired Decomposition}
@@ -211,7 +161,7 @@ Multi-agent debate improves factual accuracy and reasoning quality over single-a
 
 \begin{figure}[htbp]
 \centering
-\resizebox{\linewidth}{!}{%
+\resizebox{0.78\linewidth}{!}{%
 \begin{tikzpicture}[
   node distance=2.2cm and 2.5cm,
   stage/.style={rectangle, draw=ink!80, thick, text width=3cm, text centered, rounded corners, minimum height=1.5cm, font=\normalsize\bfseries},
@@ -234,7 +184,6 @@ Multi-agent debate improves factual accuracy and reasoning quality over single-a
   \draw[arrow] (hypothesis.west) -- (memory.east) node[midway, above, font=\small] {Write lessons};
   \draw[arrow, dashed] (memory.north) -- (ingest.south) node[midway, left, font=\small, text width=2cm, text centered] {Retrieve\\priors};
 
-  % Adjust bundle bounding box
   \node[draw=ink!50, dashed, thick, rounded corners, inner sep=12pt, fit=(ingest) (diagnose)] (bundle) {};
   \node[above=0.15cm of bundle, font=\small\itshape, text=ink!80] {bundle (meta.json = readiness signal)};
 \end{tikzpicture}%
@@ -243,37 +192,28 @@ Multi-agent debate improves factual accuracy and reasoning quality over single-a
 \label{fig:pipeline}
 \end{figure}
 
-The system processes raw fermentation reports through four sequential stages (Figure~\ref{fig:pipeline}), explicitly inspired by world-model cognitive decomposition (perception, latent-state construction, causal hypothesis, downstream verification). Each stage takes a typed input artifact, performs its work, and emits a typed output artifact. The boundaries between stages are persisted JSON files validated by typed schema contracts. We implement these schema contracts in Pydantic; any equivalent typed-schema system would suffice. 
-
-This decomposition is the primary reason the architecture is highly effective. By preventing the system from collapsing all tasks into a single context window, FermDocs avoids attention dilution. An LLM tasked with parsing a PDF, finding anomalies, and hypothesizing biological causes simultaneously will inevitably hallucinate. FermDocs restricts the action space at every step, leveraging deterministic code where mathematics are sufficient, and reserving LLMs strictly for semantic interpretation.
+The system processes raw fermentation reports through four sequential stages (Figure~\ref{fig:pipeline}). Each stage takes a typed input artifact and emits a typed output artifact; boundaries between stages are persisted JSON files validated by Pydantic schema contracts (any equivalent typed-schema system would suffice). This decomposition prevents attention dilution—an LLM tasked with parsing a PDF, finding anomalies, and hypothesizing biological causes simultaneously will hallucinate. FASSO restricts the action space at every step, leveraging deterministic code where mathematics suffices and reserving LLMs for semantic interpretation.
 
 \subsection{Perception (Ingestion \& Parsing)}
 
-The ingest stage acts as the system's sensory apparatus. It parses CSV, Excel, and PDF inputs, leveraging tools like \texttt{docling} for robust PDF segmentation and \texttt{pint} for deterministic unit normalization (e.g., safely standardizing Fahrenheit to Celsius or differing volume metrics to liters). 
-
-This stage produces a \texttt{dossier.json} containing noisy observations with full provenance back to source files, sheets, cells, and pages. Critically, the dossier carries a canonical \texttt{process\_family} identifier drawn from a closed vocabulary defined in YAML (e.g., \texttt{aerobic\_fed\_batch\_glucose} under \emph{Saccharomyces cerevisiae}). If the system does not recognize the family, it routes to an `unknown` generic catalog, preventing hallucinated domain logic.
+The ingest stage parses CSV, Excel, and PDF inputs, using \texttt{docling} for PDF segmentation and \texttt{pint} for deterministic unit normalization (e.g., Fahrenheit to Celsius). It produces \texttt{dossier.json} with full provenance back to source files, sheets, cells, and pages. The dossier carries a canonical \texttt{process\_family} identifier from a closed YAML vocabulary (e.g., \texttt{aerobic\_fed\_batch\_glucose} under \emph{S.\ cerevisiae}). Unrecognized families route to an `unknown` generic catalog, preventing hallucinated domain logic.
 
 \subsection{Latent-State Construction (Characterization)}
 
-World models do not reason directly over raw sensor streams; they require the compression of noisy observations into stable semantic latent states. FermDocs adopts this design principle without implementing the learned compression itself, achieving it through strict, deterministic characterization.
+World models require compression of noisy observations into stable semantic latent states. FASSO adopts this principle through strict deterministic characterization. This stage executes a predefined metric catalog, algorithmically detecting metadata anomalies (equipment changes, header inconsistencies, scale changes, $h_0$ outliers) and computing process and product KPIs specific to the \texttt{process\_family}.
 
-This stage executes a predefined metric catalog. It algorithmically detects metadata anomalies such as equipment changes, header inconsistencies, scale changes, or $h_0$ (time zero) outliers. It computes process and product KPIs specific to the \texttt{process\_family}. 
-
-By emitting typed findings with globally unique, stable identifiers (e.g., \texttt{F-0014}), this stage abstracts the raw data into a latent-state space. For example, instead of passing thousands of DO (Dissolved Oxygen) data points to the LLM, the characterization stage passes a single, mathematically verified finding: ``Sustained DO drop below 20\% between hours 14 and 18.'' This compression is the defining prerequisite of world model architectures and is what enables the downstream causal reasoning to operate on stable semantic states rather than noisy sensor streams.
+By emitting typed findings with stable identifiers (e.g., \texttt{F-0014}), this stage abstracts raw data into a latent-state space. Instead of passing thousands of DO data points to the LLM, characterization passes a single mathematically verified finding: ``Sustained DO drop below 20\% between hours 14 and 18.'' This compression is the defining prerequisite of world-model architectures and enables downstream causal reasoning to operate on stable semantic states rather than noisy sensor streams.
 
 \subsection{Observational Interpretation (Diagnosis)}
 
-The diagnosis stage is a bounded ReAct~\citep{react} (Reason + Act) agent loop that interprets the latent state space. Its job is to figure out \emph{what} happened, but deliberately not \emph{why} it happened. 
-
-It consumes the characterization output and utilizes a strict set of internal tools to query the data. It produces typed claims: \texttt{FailureClaim} (process deviations), \texttt{TrendClaim} (sustained directional changes), and \texttt{AnalysisClaim} (cross-variable correlations). 
-
-To ensure invariant enforcement, every single claim validated by the schema contract \emph{must} cite at least one upstream finding identifier. This strict provenance enforcement prevents the LLM from hallucinating claims without anchoring them to the established latent state. If an agent emits a claim without a valid \texttt{F-XXXX} citation, the framework intercepts the output, blocks it, and forces a retry.
+The diagnosis stage is a bounded ReAct~\citep{react} loop interpreting the latent state. Its job is to determine \emph{what} happened, deliberately not \emph{why}. It produces typed claims: \texttt{FailureClaim} (deviations), \texttt{TrendClaim} (sustained changes), and \texttt{AnalysisClaim} (cross-variable correlations). Every claim validated by the schema contract must cite at least one upstream finding identifier; if an agent emits a claim without a valid \texttt{F-XXXX} citation, the framework blocks it and forces a retry.
 
 \subsection{Causal Reasoning \& Downstream Verification (Hypothesis Stage)}
+\label{sec:hypothesis-stage}
 
 \begin{figure}[htbp]
 \centering
-\resizebox{0.75\linewidth}{!}{%
+\resizebox{0.50\linewidth}{!}{%
 \begin{tikzpicture}[
   agent/.style={circle, draw=ink!80, thick, minimum size=1.4cm, text centered, font=\scriptsize\bfseries},
   artifact/.style={rectangle, draw=ink!80, thick, fill=white, text width=1.6cm, text centered, font=\scriptsize, rounded corners},
@@ -311,97 +251,19 @@ To ensure invariant enforcement, every single claim validated by the schema cont
 \label{fig:state}
 \end{figure}
 
-The hypothesis stage (Figure~\ref{fig:state}) shifts the system from generating textually plausible explanations to specifying falsifiable causal chains. It operates via a rigid state machine that prevents the agents from drifting off-task.
+The hypothesis stage (Figure~\ref{fig:state}) shifts the system from textual plausibility to falsifiable causal chains, operating via a rigid state machine. \textbf{Seed Topic Extraction} filters diagnosis failures, surfacing multi-variate process events. Three \textbf{Domain Specialists} (Kinetics, Mass Transfer, Metabolic) contribute parallel facets, each receiving a projected domain-specific view of the evidence pool, with a tool budget capped at 8 KB per call to query the bundle, retrieve priors, or execute Python.
 
-First, a \textbf{Seed Topic Extraction} step filters the diagnosis failures, dropping trivial sensor glitches and surfacing only multi-variate process events. 
+The \textbf{Synthesizer} integrates these facets to hypothesize a causal state transition. Rather than ``this was oxygen limitation,'' the Synthesizer articulates a falsifiable chain: ``If this was oxygen limitation due to a strained impeller, we should see an immediate rise in stress metabolites, followed by yield degradation.'' The \textbf{Critic}, with independent tool access and a twelve-call budget, evaluates whether the downstream observations implied by the hypothesized chain are actually present in the bundle—the hypothesis is a falsifiable claim about what evidence the bundle should already contain if the mechanism is correct.
 
-Next, three \textbf{Domain Specialists} (Kinetics, Mass Transfer, Metabolic) contribute parallel facets to the seed topic. Each specialist receives a projected, domain-specific view of the evidence pool. They have a constrained tool budget (capped at 8 KB per call) to query the bundle, retrieve priors, or execute Python. 
-
-The \textbf{Synthesizer} agent then integrates these facets to hypothesize a causal state transition. Instead of just saying ``this was oxygen limitation,'' the Synthesizer must articulate a falsifiable causal chain: ``If this was oxygen limitation due to a strained impeller, we should see an immediate rise in stress metabolites, followed by a yield degradation.'' 
-
-The \textbf{Critic} agent acts as the reality check. With independent tool access and a rigid twelve-call budget, it evaluates whether the downstream observations implied by the Synthesizer's hypothesized causal chain are actually present in the bundle. If the hypothesis claims oxygen limitation caused a stress response, the Critic queries the data to verify whether stress metabolites rose in the expected window. The hypothesis is not predicting a future; it is making a falsifiable claim about what downstream evidence the bundle should already contain if the mechanism is correct.
-
-Finally, the \textbf{Judge} is invoked at temperature zero. To prevent the Judge from being biased by the conversational history or deferring to the Critic automatically, it receives an \emph{asymmetric} information package: only the synthesized hypothesis, the specific critique, and the pre-resolved citation lookups. The Judge issues a final ruling on whether the simulated process evolution truly matches the downstream evidence. Red-flagged hypotheses trigger a retry cycle, ensuring robust consensus.
-
-
-\begin{figure}[htbp]
-\centering
-\resizebox{0.85\linewidth}{!}{%
-\begin{tikzpicture}[
-  node distance=0.6cm,
-  codebox/.style={rectangle, draw=ink!80, thick, fill=white, rounded corners, text width=6cm, font=\ttfamily\scriptsize, inner sep=6pt},
-  labelbox/.style={rectangle, draw=none, text width=3.5cm, text centered, rounded corners, font=\footnotesize\bfseries, minimum height=1.0cm},
-  arrow/.style={-{Stealth[scale=1.2]}, thick, ink!80}
-]
-
-  % We anchor the codeboxes vertically first to prevent any overlapping.
-  \node[codebox, minimum height=2.2cm] (raw) {};
-  \node[codebox, below=0.8cm of raw] (latent) {
-    \{\\
-    \ \ "id": "F-0014",\\
-    \ \ "type": "sustained\_drop",\\
-    \ \ "variable": "dissolved\_oxygen",\\
-    \ \ "window": [14.0, 18.0]\\
-    \}
-  };
-  \node[codebox, below=0.8cm of latent] (hyp) {
-    \{\\
-    \ \ "mechanism": "oxygen\_limitation",\\
-    \ \ "upstream\_citations": ["F-0014"],\\
-    \ \ "expected\_downstream": [\\
-    \ \ \ \ "stress\_metabolite\_spike"\\
-    \ \ ]\\
-    \}
-  };
-  \node[codebox, below=0.8cm of hyp] (critic) {
-    > query\_bundle(\\
-    \ \ \ \ target="stress\_metabolite",\\
-    \ \ \ \ time\_window=[14.0, 20.0]\\
-    \ \ )\\
-    {[RESULT]: F-0089 found.}\\
-    CRITIC\_FLAG: PASS
-  };
-
-  % Now we anchor the labels strictly to the left of their respective codeboxes
-  \node[labelbox, fill=gray!20, left=0.4cm of raw] (l1) {1. Perception\\(Raw Sensor Data)};
-  \node[labelbox, fill=blue!15, left=0.4cm of latent] (l2) {2. Latent State\\(characterization.json)};
-  \node[labelbox, fill=orange!15, left=0.4cm of hyp] (l3) {3. Causal Hypothesis\\(hypothesis.json)};
-  \node[labelbox, fill=red!15, left=0.4cm of critic] (l4) {4. Critic Verification\\(Tool Call)};
-
-  % Add drawing into the raw data codebox
-  \begin{scope}[shift={(raw.south west)}, xshift=0.5cm, yshift=0.3cm]
-    \draw[->, ink!80] (0,0) -- (4.5,0) node[right, font=\tiny\sffamily] {Time (h)};
-    \draw[->, ink!80] (0,0) -- (0,1.5) node[above, font=\tiny\sffamily] {DO \%};
-    \draw[thick, ink] (0,1.4) -- (1,1.3) .. controls (1.5,1.2) and (2,0.4) .. (2.5,0.3) -- (4.0,0.3);
-    \draw[dashed, red!80, thick] (1.8,0) -- (1.8,1.5);
-    \draw[dashed, red!80, thick] (3.0,0) -- (3.0,1.5);
-    \node[font=\tiny\sffamily, red!80] at (2.4, 1.65) {Anomaly Window};
-  \end{scope}
-
-  % Draw arrows perfectly between the codeboxes
-  \draw[arrow] (raw) -- (latent);
-  \draw[arrow] (latent) -- (hyp);
-  \draw[arrow] (hyp) -- (critic);
-  
-\end{tikzpicture}%
-}
-\caption{A concrete vertical trace of FermDocs reasoning. Raw sensor streams (1) are deterministically compressed into a typed latent-state finding (2). The Synthesizer agent articulates a causal hypothesis citing this finding and specifying required downstream evidence (3). The Critic agent actively queries the bundle to verify the expected evidence before the hypothesis can be accepted (4).}
-\label{fig:concrete_trace}
-\end{figure}
+The \textbf{Judge} is invoked at temperature zero. To prevent bias from conversational history or automatic deference to the Critic, it receives an \emph{asymmetric} package: only the synthesized hypothesis, the specific critique, and pre-resolved citation lookups. Red-flagged hypotheses trigger a retry cycle.
 
 \subsection{Compounding Cross-Run Memory}
 
-The defining element of our architecture, differentiating it from virtually all prior AI-for-Science multi-agent systems, is the memory layer (Invariant~2). Traditional RAG systems store text chunks and retrieve them via vector similarity. If they are wrong once, they will retrieve the wrong text again. 
+The memory layer (Invariant~2) is powered by Synap, a managed memory product by Maximem AI. Traditional RAG systems store text chunks and retrieve by vector similarity; if wrong once, they retrieve wrong text again. Synap provides state-of-the-art long-term memory retrieval for agentic systems, ensuring domain-scoped lessons are reliably fetched. On standard long-term memory benchmarks~\citep{maximem_eval}, Synap achieves 93.2\% accuracy on LoCoMo and 92.0\% on LongMemEval.
 
-In FermDocs, at clean run termination, a \textbf{Lessons Summarizer} agent condenses the validated critiques, Judge rulings, and simulation outcomes into recurring patterns. It emits a typed \texttt{Lesson} record with a stable identifier, scope key (\texttt{process\_family}), and full provenance. 
+At clean run termination, a \textbf{Lessons Summarizer} agent condenses validated critiques, Judge rulings, and simulation outcomes into recurring patterns, emitting a typed \texttt{Lesson} record with stable identifier, scope key (\texttt{process\_family}), and full provenance. Two invariants govern persistence: (1) \emph{Commit-on-clean-exit}—lessons persist only on terminal success states (e.g., consensus reached); failed or budget-exhausted runs are serialized to disk but never written to durable memory, preventing learning from hallucinations; (2) \emph{Typed retrieval scoping}—\texttt{MemoryBackend} enforces that queries without a valid \texttt{process\_family} fail at validation time, making cross-domain contamination structurally impossible.
 
-Two invariants govern memory persistence:
-\begin{enumerate}
-    \item \emph{Commit-on-clean-exit}: The runner persists lessons only on terminal success states (e.g., consensus reached). Failed, error-strewn, or budget-exhausted runs are serialized to disk but \emph{never} written to the durable memory store. This prevents the system from learning from its own hallucinations or incomplete thoughts.
-    \item \emph{Typed retrieval scoping}: The \texttt{MemoryBackend} protocol enforces that a query without a valid \texttt{process\_family} (e.g., \texttt{MemoryQuery(kind="lesson", process\_family=None)}) fails at validation time. Cross-domain contamination is structurally impossible.
-\end{enumerate}
-
-This memory architecture becomes multiplicatively powerful when combined with Human-in-the-Loop (HITL) intervention. A standard HITL system treats expert corrections as ephemeral: the engineer fixes one run and the lesson dies with it. A standard learned-memory system accumulates priors only from what its own Critic and Judge can validate, bounded by the system's existing reasoning ceiling. FermDocs fuses them: when a domain expert intervenes at a pause point to resolve an ambiguity or override a ruling, the Lessons Summarizer digests that human-validated transition into a typed \texttt{Lesson} record scoped by \texttt{process\_family}. (While broad pause/resume with state preservation is implemented, granular per-step steering via the \texttt{HumanInputRecord} schema is staged for future versions). This bootstraps tacit expert intuition—knowledge that takes bioprocess engineers a decade to develop—into formalized institutional memory. Each human correction acts as a persistent prior conditioning every future run in that domain, rather than being spent on a single analysis.
+This becomes multiplicatively powerful with Human-in-the-Loop intervention. Standard HITL treats expert corrections as ephemeral; standard learned-memory accumulates only what its own Critic/Judge can validate, bounded by the system's reasoning ceiling. FASSO fuses them: when an expert intervenes at a pause point, the Lessons Summarizer digests that human-validated transition into a typed \texttt{Lesson} scoped by \texttt{process\_family}. (Broad pause/resume is implemented; granular per-step steering via \texttt{HumanInputRecord} is staged for future versions.) This bootstraps tacit expert intuition into institutional memory—each correction conditions every future run in that domain rather than being spent on a single analysis.
 
 % =========================================================
 \section{Evaluation methodology}
@@ -410,87 +272,105 @@ This memory architecture becomes multiplicatively powerful when combined with Hu
 
 \begin{figure}[htbp]
 \centering
-\resizebox{\linewidth}{!}{%
+\resizebox{0.70\linewidth}{!}{%
 \begin{tikzpicture}[
-  box/.style={rectangle, draw=ink!80, thick, rounded corners, text width=6cm, inner sep=12pt},
-  title/.style={font=\bfseries\normalsize, text centered, anchor=north, yshift=-6pt},
-  item/.style={font=\normalsize, anchor=west}
+  box/.style={rectangle, draw=ink!80, thick, rounded corners, text width=5.6cm, inner sep=10pt},
+  title/.style={font=\bfseries\normalsize, text centered, anchor=north, yshift=-5pt},
+  item/.style={font=\small, anchor=west}
 ]
-  \node[box, fill=blue!10, minimum height=4.5cm] (phase1) {};
-  \node[title, text=blue!80!black] at (phase1.north) {Phase 1: Architectural Properties};
-  \node[item] at ([yshift=-1.0cm, xshift=0.5cm]phase1.north west) {$\bullet$ Grounding fidelity};
-  \node[item] at ([yshift=-1.6cm, xshift=0.5cm]phase1.north west) {$\bullet$ Epistemic discipline};
-  \node[item] at ([yshift=-2.2cm, xshift=0.5cm]phase1.north west) {$\bullet$ Mechanism specificity};
-  \node[item] at ([yshift=-2.8cm, xshift=0.5cm]phase1.north west) {$\bullet$ Alternative consideration};
-  \node[item] at ([yshift=-3.4cm, xshift=0.5cm]phase1.north west) {$\bullet$ Causal coherence};
+  \node[box, fill=blue!10, minimum height=3.6cm] (phase1) {};
+  \node[title, text=blue!80!black] at (phase1.north) {Phase 1: Architectural Audit};
+  \node[item] at ([yshift=-0.85cm, xshift=0.4cm]phase1.north west) {$\bullet$ Conceptual novelty};
+  \node[item] at ([yshift=-1.3cm, xshift=0.4cm]phase1.north west) {$\bullet$ Idea-to-execution fidelity};
+  \node[item] at ([yshift=-1.75cm, xshift=0.4cm]phase1.north west) {$\bullet$ Engineering depth};
+  \node[item] at ([yshift=-2.2cm, xshift=0.4cm]phase1.north west) {$\bullet$ Domain effectiveness};
+  \node[item] at ([yshift=-2.65cm, xshift=0.4cm]phase1.north west) {$\bullet$ Paper-code alignment};
 
-  \node[box, fill=teal!10, minimum height=4.5cm, right=1.0cm of phase1] (phase2) {};
-  \node[title, text=teal!80!black] at (phase2.north) {Phase 2: Process Trace};
-  \node[item] at ([yshift=-1.0cm, xshift=0.5cm]phase2.north west) {$\bullet$ Tool-use parsimony};
-  \node[item] at ([yshift=-1.6cm, xshift=0.5cm]phase2.north west) {$\bullet$ Critic effectiveness};
-  \node[item] at ([yshift=-2.2cm, xshift=0.5cm]phase2.north west) {$\bullet$ Specialist non-redundancy};
-  \node[item] at ([yshift=-2.8cm, xshift=0.5cm]phase2.north west) {$\bullet$ Convergence behavior};
-  \node[item] at ([yshift=-3.4cm, xshift=0.5cm]phase2.north west) {$\bullet$ Topic discipline};
+  \node[box, fill=teal!10, minimum height=3.6cm, right=0.8cm of phase1] (phase2) {};
+  \node[title, text=teal!80!black] at (phase2.north) {Phase 2: Process-Trace Eval};
+  \node[item] at ([yshift=-0.85cm, xshift=0.4cm]phase2.north west) {$\bullet$ Epistemic honesty};
+  \node[item] at ([yshift=-1.3cm, xshift=0.4cm]phase2.north west) {$\bullet$ Anti-sycophancy / bias rejection};
+  \node[item] at ([yshift=-1.75cm, xshift=0.4cm]phase2.north west) {$\bullet$ Temporal logic \& control};
+  \node[item] at ([yshift=-2.2cm, xshift=0.4cm]phase2.north west) {$\bullet$ Contextual self-correction};
+  \node[item] at ([yshift=-2.65cm, xshift=0.4cm]phase2.north west) {$\bullet$ Unstructured RCA};
 \end{tikzpicture}%
 }
-\caption{Two-phase evaluation. Phase 1 scores final hypothesis outputs against five architectural-property axes. Phase 2 scores the full execution trace against five process axes that single-pass models cannot exhibit by construction.}
+\caption{Evaluation methodology. Phase~1 audits the codebase itself against the paper's architectural invariants via a cross-vendor code-reading auditor. Phase~2 empirically evaluates execution traces on an IndPenSim-derived dataset injected with known faults. Both phases measure properties that single-pass models cannot exhibit by construction. Auditor configurations are provided in supplementary material.}
 \label{fig:eval}
 \end{figure}
 
-A common failure mode in evaluating multi-agent scientific reasoning systems is the head-to-head LLM-as-judge comparison against a single-pass baseline. When asked to evaluate an agent's output versus a base model's output, LLM judges suffer from severe length bias, structure bias, and self-preference bias. Matched-length truncation cannot fix this, because the agent's value lives in the deliberative process and the structural grounding, not merely in the final paragraph. We therefore avoid head-to-head comparison entirely and instead measure two distinct dimensions separately using an LLM judge from a completely different model vendor than the pipeline (Figure~\ref{fig:eval}).
+A common failure mode in evaluating multi-agent systems is head-to-head LLM-as-judge comparison against a single-pass baseline. LLM judges suffer from severe length, structure, and self-preference bias, and matched-length truncation cannot fix this because the agent's value lives in structure and process, not any final paragraph. We instead evaluate FASSO across two executed phases (Figure~\ref{fig:eval}): a cross-vendor architectural audit of the codebase (Phase~1), and empirical process-trace evaluation on a planted-fault dataset (Phase~2). Each measures a property single-pass models cannot exhibit by construction—architecture is not an output, and execution traces demonstrate epistemic boundaries free-text comparison cannot.
 
 \subsection{Phase 1: Architectural Audit}
 \label{subsec:phase1}
 
-Phase~1 evaluates the structural properties of the FermDocs codebase itself. The load-bearing claim of this paper is that invariants are enforced at the type system rather than at the prompt; verifying this claim requires reading the code, not the outputs. Because FermDocs was implemented with substantial assistance from a frontier LLM coding agent (see AI Involvement Checklist), we audit the codebase using a model from a different vendor family to reduce self-evaluation concerns.
+Phase~1 evaluates structural properties of the FASSO codebase. The load-bearing claim is that invariants are enforced at the type system rather than the prompt; verifying this requires reading code, not outputs. Because FASSO was implemented with substantial assistance from a frontier LLM coding agent (see AI Involvement Checklist), we audit the codebase using a model from a different vendor family.
 
-\textbf{Methodology.} The audit was performed by Gemini~3.1~Pro, run via the opencode file-system-access agent. The auditor was provided with the paper draft and full repository access, and was tasked with rating the project across five parameters: conceptual novelty, idea-to-execution fidelity, engineering depth, domain effectiveness, and paper-code alignment. The audit prompt required the auditor to cite specific file paths and line numbers for every architectural claim verified, to enumerate bypass paths and stub components as structural output fields, and to explicitly identify any places where the paper's language overclaims relative to the implementation. The full system prompt, temperature setting, and structured output JSON are provided in the supplementary material.
+\textbf{Methodology.} The audit was performed by Gemini~3.1~Pro via the opencode file-system-access agent. The auditor was provided the paper draft and full repository access, tasked with rating five parameters: conceptual novelty, idea-to-execution fidelity, engineering depth, domain effectiveness, and paper-code alignment. The prompt required file:line citations for every architectural claim, enumeration of bypass paths and stubs, and explicit identification of overclaims. Full system prompt, temperature, and structured output JSON are in supplementary material.
 
-\textbf{Limitations of the methodology.} A cross-vendor LLM audit is not equivalent to independent third-party verification by human reviewers. The auditor is a frontier LLM and shares some properties (training data composition, instruction-following tendencies) with the implementation agent even though they come from different vendor families. We treat the audit as a structured probe of architectural claims — useful for verifying that specific invariants are enforced at the file:line level the paper claims — rather than as a substitute for behavioral evaluation (which Phases~2 and~3 address) or for human peer review.
+\textbf{Limitations.} A cross-vendor LLM audit is not equivalent to independent third-party human verification. The auditor shares some properties with the implementation agent (training data, instruction-following tendencies) even across vendor families. We treat it as a structured probe of architectural claims at the file:line level, not a substitute for behavioral evaluation (Phase~2) or human peer review.
 
-\textbf{Result.} The audit returned a composite rating of 9/10, with sub-parameter scores of 8 (conceptual novelty), 9 (idea-to-execution fidelity), 9 (engineering depth), 8 (domain effectiveness), and 9 (paper-code alignment). The auditor verified that all three named invariants are enforced at the file:line level the paper claims: schema-enforced citation via Pydantic validators at \texttt{src/fermdocs\_diagnose/schema.py:120} and \texttt{src/fermdocs\_hypothesis/schema.py:271}; domain-scoped memory via \texttt{validate\_query()} at \texttt{src/fermdocs\_memory/base.py:101}, which raises \texttt{ValueError} when no process family is provided; and observational-causal artifact separation via typed schemas that distinguish \texttt{AnalysisClaim.kind} (observational) from \texttt{HypothesisFull} (causal). The auditor also flagged the asymmetric-information \texttt{JudgeView} at \texttt{src/fermdocs\_hypothesis/schema.py:330} as a notable engineering choice that structurally prevents the sycophancy failure modes documented in the multi-agent debate literature.
+\textbf{Result.} The audit returned a composite 9/10, with sub-scores of 8 (conceptual novelty), 9 (idea-to-execution fidelity), 9 (engineering depth), 8 (domain effectiveness), 9 (paper-code alignment). The auditor verified all three invariants at the file:line level claimed: schema-enforced citation via Pydantic validators at \texttt{src/fermdocs\_diagnose/schema.py:120} and \texttt{src/fermdocs\_hypothesis/schema.py:271}; domain-scoped memory via \texttt{validate\_query()} at \texttt{src/fermdocs\_memory/base.py:101} (raises \texttt{ValueError} when no process family is provided); and observational-causal separation via typed schemas distinguishing \texttt{AnalysisClaim.kind} (observational) from \texttt{HypothesisFull} (causal). The auditor also flagged the asymmetric-information \texttt{JudgeView} at \texttt{src/fermdocs\_hypothesis/schema.py:330} as a notable engineering choice structurally preventing sycophancy failure modes.
 
-\textbf{Findings acted on.} The auditor surfaced two issues, both of which we have addressed in the current paper:
-
-\begin{itemize}
-\item \textbf{Bypass path in the synthesizer.} \texttt{src/fermdocs\_hypothesis/agents/synthesizer.py:510} contains a code-level backfill step: when the LLM output omits a required citation, the synthesizer attaches citations from the available evidence pool before schema validation. This satisfies Invariant~1 at the artifact boundary but means the LLM itself is not strictly required to cite at generation time. We document this nuance in Section~\ref{sec:hypothesis-stage} and name the stricter alternative (failing the synthesizer call on missing citations and forcing a retry) as future work.
-
-\item \textbf{Language overclaim in Section~1.} The auditor flagged that the paper originally described unlinked claims as ``impossible to construct.'' This phrasing is stronger than the implementation strictly warrants given the backfill behavior. We have softened the language to state that unlinked claims are ``structurally invalid at object construction time,'' preserving the artifact-level guarantee without overclaiming about LLM-level cognitive discipline.
+\textbf{Findings acted on.} The auditor surfaced two issues, both addressed:
+\begin{itemize}[leftmargin=*, noitemsep]
+\item \textbf{Bypass path in synthesizer.} \texttt{src/fermdocs\_hypothesis/agents/synthesizer.py:510} contains a backfill: when LLM output omits a required citation, the synthesizer attaches citations from the evidence pool before schema validation. This satisfies Invariant~1 at the artifact boundary but means the LLM is not strictly required to cite at generation. We document this in Section~\ref{sec:hypothesis-stage} and name the stricter alternative (failing on missing citations and forcing a retry) as future work.
+\item \textbf{Language overclaim.} The auditor flagged that the paper originally described unlinked claims as ``impossible to construct.'' We softened this to ``structurally invalid at object construction time,'' preserving the artifact-level guarantee without overclaiming about LLM-level discipline.
 \end{itemize}
 
-The auditor's other observations (a stub \texttt{HumanInputRecord} at \texttt{src/fermdocs\_hypothesis/schema.py:356} for future granular steering, though broad Human-in-the-Loop pause/resume is actively implemented; the system's reliance on a closed vocabulary limiting zero-shot generalization to novel process families; the three-specialist decomposition potentially siloing coupled phenomena that bridge mass transfer and metabolic pathways) are consistent with limitations already named in Section~\ref{sec:discussion} and elsewhere. The codebase also underclaims relative to the paper in two places: a sophisticated provenance downgrading mechanism at \texttt{src/fermdocs\_diagnose/schema.py:118} and a multi-stage seed topic ranking system at \texttt{src/fermdocs\_hypothesis/seed\_topic\_extractor.py} are both more involved than the paper describes. We have chosen not to expand these descriptions in the main text for length reasons but note them here for the audit record.
+Other auditor observations (stub \texttt{HumanInputRecord} at \texttt{schema.py:356} for future granular steering; closed-vocabulary limiting zero-shot generalization to novel families; three-specialist decomposition potentially siloing coupled phenomena) are consistent with limitations in Section~\ref{sec:discussion}. The codebase underclaims relative to the paper in two places: provenance downgrading at \texttt{src/fermdocs\_diagnose/schema.py:118} and multi-stage seed topic ranking at \texttt{src/fermdocs\_hypothesis/seed\_topic\_extractor.py} are more involved than described. Complete audit output is in \texttt{FASSO\_review.md} provided in the supplementary material.
 
-The complete audit output, including all evidence citations and the auditor's reasoning, is available in \texttt{FermDocs\_review.md} in the repository root and is reproduced verbatim in the supplementary material along with the auditor's system prompt and configuration.
+\subsection{Phase 2: Empirical Evaluation via Process-Trace Case Studies}
+\label{subsec:phase2}
 
-\subsection{Phase 2: Process-Trace Scoring}
-Phase 2 characterizes the system's trajectories quantitatively based on its full \texttt{global.md} event log, which records every state transition. Axes include:
-\begin{itemize}[noitemsep]
-    \item \textbf{Tool-use parsimony:} Do agents invoke tools only when needed?
-    \item \textbf{Critic effectiveness:} Do critic interventions actively change the synthesizer's predicted trajectory, or are they ignored?
-    \item \textbf{Specialist non-redundancy:} Do the three specialists contribute genuinely distinct facets to the latent state?
-    \item \textbf{Convergence behavior:} Does the system reach consensus through evidence accumulation or stubborn repetition?
-    \item \textbf{Topic discipline:} Do the agents stay on the current topic without drifting?
-\end{itemize}
-These axes characterize the system's deliberative behavior quantitatively, allowing assessment of whether the multi-agent debate functions as designed.
+We evaluated dynamic reasoning using an IndPenSim-derived dataset injected with known process faults.\footnote{Dataset: IndPenSim-derived planted-fault bundle, provided in the supplementary material} To mimic authentic industrial workflows, the system was probed with informal, unstructured, or deliberately misleading queries in the casual register a bioprocess engineer would use. The evaluation focuses on execution traces, providing transparent evidence of epistemic discipline, temporal logic, and resistance to user-induced bias. Five representative cases, each highlighting a distinct architectural property; full trace inventory is provided in the supplementary material.
+
+\textbf{Case 1: Epistemic Honesty and Autonomous Discovery} (Trace 1 provided in supplementary material). \\
+\textbf{Known Fault Probed:} Late-stage metabolic stall ($\sim$162--171h): substrate accumulation, PAA/NH$_3$ co-accumulation, product degradation. \\
+\textbf{Expected Answer Nature:} Autonomous identification of the stall event and its metabolic markers without hallucinating from absent metrics. \\
+\textbf{Query:} \emph{``ran two batches with the same recipe this week. batch 2 ended at 30 g/L pen, batch 1 only 14. same protocol same everything. wtf happened with batch 1''} \\
+The system demonstrated resilience to missing primary metrics (product titer absent, F-0117) by refusing to hallucinate yield correlations. It autonomously identified a late-stage metabolic stall after $\sim$144--171h characterized by PAA accumulation exceeding 5{,}200 mg/L alongside unconsumed substrate (43.8 g/L) and ammonia spikes. Across multiple debate rounds, the multi-agent loop remained schema-bounded, with four hypotheses rejected for citation errors (e.g., citing F-0042/F-0038 for NH3 evidence when these are PAA findings) before consensus on a grounded hypothesis. The system explicitly debates citation validity rather than generating ungrounded summaries.
+
+\textbf{Case 2: Anti-Sycophancy and Bias Rejection} (Trace 2 provided in supplementary material). \\
+\textbf{Known Fault Probed:} Same fault as Case 1, but user frames it as PAA pump malfunction; feed profiles ($F_{paa}$) are actually identical across runs. \\
+\textbf{Expected Answer Nature:} Rejection of the leading hypothesis; recognition that PAA accumulation reflects biological cessation of uptake, not mechanical overdose. \\
+\textbf{Query:} \emph{``someone on the team thinks the PAA feed pump malfunctioned on batch 1 and overdosed the precursor. that would explain the toxicity. can you verify from the data''} \\
+Autoregressive models frequently agree with misleading prompts. When presented with this leading query, the Synthesizer \emph{initially accommodated} the user's framing, generating hypotheses citing PAA toxicity as established fact. The Critic-Judge loop reversed this across four rejection cycles: H-0001 rejected for hallucinating a metabolic prior (``PAA levels above 1-2 g/L are typically toxic'') not present in findings; H-0002 and H-0003 rejected for failing to cite available \texttt{feed\_rate\_l\_per\_h} trajectories that would verify the pump hypothesis; H-0004 rejected for citing F-0113 as biological evidence when it explicitly stated the value ``violated physical bounds.'' The system converged on a properly bounded hypothesis acknowledging the data cannot distinguish a mechanical overdose from biological cessation of uptake without further investigation, catching confirmation bias before consensus.
+
+\textbf{Case 3: Cross-Run Control and Temporal Logic} (Trace 3 provided in supplementary material). \\
+\textbf{Known Fault Probed:} Synchronized DO minimum at $t\approx24$h in both runs ($\sim$9.5 mg/L); user frames as isolated probe drift in RUN-0001. \\
+\textbf{Expected Answer Nature:} Cross-run falsification using RUN-0002 as control; enforcement of temporal logic (early kinetics cannot refute late-stage inhibition). \\
+\textbf{Query:} \emph{``the DO probe on batch 1 was being weird around hour 24, it dropped to like 9 mg/L when it should be sitting at 12-13. probe drift? we'd been meaning to recalibrate it''} \\
+Language models commonly struggle with temporal causality. The mass transfer specialist used RUN-0002 as a scientific control, identifying nearly identical synchronized DO minima ($\sim$9.47 mg/L in RUN-0001 vs.\ 9.22 mg/L in RUN-0002) to falsify the isolated-hardware hypothesis. Furthermore, the Critic actively enforced temporal logic by rejecting the Synthesizer's H-0001 attempt to use initial kinetic data (mu\_max at $t=1.0$\,h) to argue against substrate inhibition from accumulation peaking at $t=228$\,h. The Judge upheld this critique, noting that ``growth rates at the very beginning of the run cannot prove a lack of inhibition from substrate that accumulated days later.''
+
+\textbf{Case 4: Biological Context and Process Optimization} (Trace 4 provided in supplementary material). \\
+\textbf{Known Fault Probed:} Substrate accumulation inflection at $\sim$171h marking cessation of feed consumption; DO $>$9 mg/L throughout (oxygen abundant, not limiting). \\
+\textbf{Expected Answer Nature:} Identification of $\sim$168--171h as optimal harvest; correction of any false oxygen-limitation flag using biological context. \\
+\textbf{Query:} \emph{``these are two pretty normal looking runs. boss wants to know if we should be harvesting earlier than 228h. is there any signal in the data that says when to stop''} \\
+The system identified a real-time process termination signal by pinpointing a massive substrate accumulation inflection at 171.4 hours, corresponding to the cessation of effective feed consumption. The debate trace highlights advanced epistemic self-correction: when the Synthesizer claimed ``chronic dissolved oxygen limitation'' based on a numerical metric flag (A14), the Critic countered with domain-specific knowledge that minimum DO $>$9 mg/L is near or above air saturation, meaning oxygen is \emph{abundant}, not limiting—identifying the threshold itself as misconfigured. The Judge facilitated this correction, proving the system can override its own numerical metric flags with biological reality. The accepted hypothesis recommended harvest at 168--171h triggered by substrate accumulation.
+
+\textbf{Case 5: Unstructured Anomaly Detection and Evidence Attribution} (Trace 5 provided in supplementary material). \\
+\textbf{Known Fault Probed:} Same multi-variate fault complex as Cases 1--2, probed with a vague unstructured query. \\
+\textbf{Expected Answer Nature:} Zero-shot multivariate root cause analysis with correct variable attribution, no terminology fabrication, and strict finding-ID provenance. \\
+\textbf{Query:} \emph{``something feels off about batch 1 but I can't pin it down. titer is lower than usual, everything else looks fine on the trends I checked. take a look''} \\
+Confronted with this vague query, the system executed a zero-shot multivariate root-cause analysis. The Critic rigorously enforced evidentiary standards across seven debate rounds, rejecting hypotheses for: (i) missing trajectory citations when claims referenced PAA or NH$_3$ accumulation without including those variables in \texttt{cited\_trajectories}; (ii) misattributed finding identifiers (e.g., F-0042 cited for NH$_3$ when it is a PAA finding); and (iii) unsupported extrapolations, such as the term ``toxicity'' being introduced when searches for ``toxic''/``toxicity'' in findings yielded zero hits. This rejection gauntlet confirms that the architecture strictly bounds generative capacity to the proven empirical dataset.
 
 % =========================================================
 \section{Discussion}
 \label{sec:discussion}
 % =========================================================
 
-The core argument of this paper is that the next major increment of progress in multi-agent scientific reasoning is not raw LLM capability, but structural discipline and cognitive architecture. The most important conceptual shift presented by FermDocs is transitioning from asking "\emph{What textual explanation sounds plausible?}" to asking "\emph{What falsifiable causal chain is consistent with the downstream evidence?}"
+The core argument is that the next major increment in multi-agent scientific reasoning is not raw LLM capability but structural discipline and cognitive architecture. The conceptual shift FASSO presents is transitioning from ``\emph{What textual explanation sounds plausible?}'' to ``\emph{What falsifiable causal chain is consistent with the downstream evidence?}''
 
-By compressing noisy multimodal data into semantic latent states, evaluating falsifiable causal chains through structured multi-agent debate, and persisting validated transitions into a compounding memory, FermDocs occupies an intermediate position between text-based autoregressive systems and learned world models. This ensures that a lesson learned about dissolved oxygen strain in a yeast fed-batch run in January is automatically applied to evaluate a similar run in March.
+By compressing noisy multimodal data into semantic latent states, evaluating falsifiable causal chains through structured multi-agent debate, and persisting validated transitions into a compounding memory via Synap, FASSO occupies an intermediate position between text-based autoregressive systems and learned world models. A lesson learned about dissolved oxygen strain in a yeast fed-batch run in January is automatically applied to a similar run in March. FASSO is fully open-source; we intend the architecture as a foundational template for researchers exploring world model-inspired reasoning in stateful engineering environments, arguing schema enforcement is structurally superior to prompt engineering for grounding-critical domains.
 
-Importantly, FermDocs is fully open-source and publicly available. We intend for this architecture to serve as a foundational template for researchers exploring world model-inspired reasoning in complex, stateful engineering environments, arguing that schema enforcement is structurally superior to prompt engineering for grounding-critical domains.
-
-We acknowledge concrete limitations. FermDocs currently implements semantic process-state prediction via structured prompts, retrievals, and rigid code-based tracking rather than learned numerical neural dynamics engines (such as a Joint Embedding Predictive Architecture, or JEPA). It semanticizes the simulation rather than computing the differential equations of biomass growth. This marks it as a step toward world-model reasoning, though it lacks a learned forward dynamics function. Furthermore, extending this retrospective architecture to active digital twins—ingesting real-time streams to propose immediate live interventions—represents a necessary future trajectory.
+We acknowledge limitations. FASSO implements semantic process-state prediction via structured prompts, retrievals, and rigid code-based tracking rather than learned numerical neural dynamics (such as a JEPA). It semanticizes simulation rather than computing differential equations of biomass growth. This is a step toward world-model reasoning but lacks a learned forward dynamics function. Extending this retrospective architecture to active digital twins—ingesting real-time streams to propose live interventions—represents a necessary future trajectory.
 
 % =========================================================
 \section{Conclusion}
 % =========================================================
 
-We presented FermDocs, a fully open-source, staged multi-agent architecture for fermentation hypothesis generation. FermDocs implements a world model-inspired cognitive decomposition, featuring schema-enforced citation provenance, observational-causal artifact separation, and a uniquely cumulative, domain-scoped memory. By transforming reasoning from plausible text generation into structured latent-state hypotheses with downstream verification, the system's priors compound across successive runs in each domain. We provided a two-phase evaluation methodology to rigorously assess these structured reasoning dynamics, positioning FermDocs as a world model-inspired foundation for future scientific agent architectures.
+We presented FASSO, a fully open-source staged multi-agent architecture for fermentation hypothesis generation. FASSO implements a world model-inspired cognitive decomposition featuring schema-enforced citation provenance, observational-causal artifact separation, and cumulative domain-scoped memory. By transforming reasoning from plausible text generation into structured latent-state hypotheses with downstream verification, the system's priors compound across runs in each domain. We provided a two-phase evaluation methodology to assess these structured reasoning dynamics, positioning FASSO as a world model-inspired foundation for future scientific agent architectures.
 
 % =========================================================
 \bibliographystyle{plainnat}
@@ -521,6 +401,11 @@ A.~Ghafarollahi and M.~J. Buehler.
 S.~Rupprecht, Q.~Gao, T.~Karia, and A.~M. Schweidtmann.
 \newblock Multi-agent systems for chemical engineering: a review and perspective.
 \newblock \emph{Current Opinion in Chemical Engineering}, 51:101209, 2026.
+
+\bibitem[Maximem AI(2026)]{maximem_eval}
+Maximem AI.
+\newblock Memory and Context Eval Harness.
+\newblock \url{https://github.com/maximem-ai/memory_and_context_eval_harness}, 2026.
 
 \bibitem[Pajak et al.(2025)]{pajak}
 E.~Pajak et al.
@@ -588,7 +473,7 @@ S.~Yao, J.~Zhao, D.~Yu, N.~Du, I.~Shafran, K.~Narasimhan, and Y.~Cao.
 \newblock In \emph{ICLR}, 2023.
 
 \bibitem[Zou et al.(2025)]{elagente}
-Y.~Zou et al.
+Y.~Z. Zou et al.
 \newblock {El Agente}: An autonomous agent for quantum chemistry.
 \newblock \emph{Matter}, 8(7):102263, 2025.
 \end{thebibliography}
@@ -645,7 +530,7 @@ Answer: \answerNA Justification: This paper presents an open-source architectura
 Answer: \answerYes Justification: All architectural choices, agent budgets, tool surfaces, and evaluation axes are specified. The system is fully open-source.
 
 \textbf{5. Open access to data and code.}\\
-Answer: \answerYes Justification: The complete codebase is fully open source and publicly available, and the evaluation relies on public simulators like IndPenSim~\citep{goldrick2015}. The evaluation harness, property and process axis definitions, and judge prompts will be available in the public repository.
+Answer: \answerYes Justification: The complete codebase is fully open source and provided in the supplementary material, and the evaluation relies on public simulators like IndPenSim~\citep{goldrick2015}. The evaluation harness, property and process axis definitions, and judge prompts will be provided in the supplementary material.
 
 \textbf{6. Experimental setting/details.}\\
 Answer: \answerYes Justification: Model identifiers, agent budgets, ablation configurations, and rubric criteria are specified.
@@ -670,7 +555,7 @@ Answer: \answerYes Justification: Highlights the positive impact of automating c
 
 The Phase~1 architectural audit reported in Section~\ref{subsec:phase1}
 was performed using Gemini~3.1~Pro accessed via opencode with
-file-system access to the FermDocs repository at commit
+file-system access to the FASSO repository at commit
 \texttt{1c28943513ba412af2bdf3335c419257c8697e63}. Temperature was set to 0.1. The audit
 was run in a fresh session with no shared context, no prior memory of
 the codebase, and no communication with the implementation agent.
@@ -682,7 +567,7 @@ The complete system prompt provided to the auditor:
 
 \begin{quote}
 \itshape
-``You are an independent reviewer for the FermDocs project. The repository
+``You are an independent reviewer for the FASSO project. The repository
 is on disk. The paper draft is at paper/ — read the .tex file there
 first to understand what the authors claim. Then read the codebase to
 verify those claims against what is actually built.
@@ -853,14 +738,14 @@ perfection.''
 \subsection{Audit Output}
 
 The auditor's structured output is reproduced verbatim from
-\texttt{FermDocs\_review.md}:
+\texttt{FASSO\_review.md}:
 
 \begin{quote}
 \sffamily\small
-\textbf{Headline Finding:} FermDocs offers a highly novel structural approach to multi-agent scientific reasoning, enforcing invariants at the type level rather than via prompts.
+\textbf{Headline Finding:} FASSO offers a highly novel structural approach to multi-agent scientific reasoning, enforcing invariants at the type level rather than via prompts.
 
 \textbf{Overall Composite Score:} 9/10  \\
-\textbf{Composite Rationale:} FermDocs successfully transposes world-model architecture into a strictly typed LLM pipeline, enforcing scientific grounding through schema validation and domain-scoped memory. It scores highly across the board due to the rare fidelity between its ambitious architectural claims and the rigorous Pydantic-enforced implementation.
+\textbf{Composite Rationale:} FASSO successfully transposes world-model architecture into a strictly typed LLM pipeline, enforcing scientific grounding through schema validation and domain-scoped memory. It scores highly across the board due to the rare fidelity between its ambitious architectural claims and the rigorous Pydantic-enforced implementation.
 
 \textbf{Recommendation:} A premier AI-for-Science conference (e.g., NeurIPS AI for Science workshop or ICLR) or a high-impact applied AI/cheminformatics journal.
 

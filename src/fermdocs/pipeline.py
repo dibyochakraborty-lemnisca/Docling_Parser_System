@@ -290,7 +290,8 @@ class IngestionPipeline:
         golden = self._schema_index[ext.column]
         data_type = str(golden.data_type)
         conversion = self._converter.convert(
-            ext.value, ext.unit, golden.canonical_unit, normalizer=self._normalizer
+            ext.value, ext.unit, golden.canonical_unit, normalizer=self._normalizer,
+            nominal=getattr(golden, "nominal", None),
         )
         value_raw = {"value": _coerce(ext.value, data_type), "type": data_type}
         value_canonical: dict[str, Any] | None = None
@@ -471,8 +472,10 @@ class IngestionPipeline:
         run_id: str | None = None,
         time_h: float | None = None,
     ) -> Observation:
+        _golden_var = self._schema_index.get(entry.mapped_to) if entry.mapped_to else None
         conversion = self._converter.convert(
-            raw_value, entry.raw_unit, golden_unit, normalizer=self._normalizer
+            raw_value, entry.raw_unit, golden_unit, normalizer=self._normalizer,
+            nominal=getattr(_golden_var, "nominal", None),
         )
         value_raw = {"value": _coerce(raw_value, data_type), "type": data_type}
         value_canonical: dict[str, Any] | None = None

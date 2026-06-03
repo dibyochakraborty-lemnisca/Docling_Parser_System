@@ -163,6 +163,110 @@ export default function RunPage({ params }: { params: { id: string } }) {
         </Card>
       )}
 
+      {/* Recommendation Panel */}
+      {run.recommendation_output && (
+        <section className="space-y-3">
+          <h2 className="text-lg font-semibold">Recommendation</h2>
+          <Card className={run.recommendation_output.confident ? "border-primary" : ""}>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle className="font-mono text-sm">
+                  Model: {run.recommendation_output.recommended_model}
+                </CardTitle>
+                <div className="flex items-center gap-2">
+                  <Badge variant={run.recommendation_output.confident ? "success" : "secondary"}>
+                    {run.recommendation_output.confident ? "Confident" : "Refused"}
+                  </Badge>
+                  {!run.recommendation_output.confident && (
+                    <Badge variant="destructive">{run.recommendation_output.refusal_reason}</Badge>
+                  )}
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm leading-relaxed mb-4">
+                {run.recommendation_output.selection_rationale}
+              </p>
+              
+              {run.recommendation_output.candidates.length > 0 && (
+                <div className="mt-4 space-y-2">
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Candidate Bake-off</h3>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                    {run.recommendation_output.candidates.map((c, i) => (
+                      <div key={i} className="rounded-md border p-3 text-xs">
+                        <div className="font-semibold mb-1 flex items-center justify-between">
+                          <span>{c.model_type}</span>
+                          {!c.attempted ? (
+                            <Badge variant="outline" className="text-[10px]">Skipped</Badge>
+                          ) : c.disqualified ? (
+                            <Badge variant="destructive" className="text-[10px]">Disqualified</Badge>
+                          ) : (
+                            <Badge variant="secondary" className="text-[10px]">Attempted</Badge>
+                          )}
+                        </div>
+                        {c.attempted && !c.disqualified && (
+                          <div className="space-y-1 mt-2 text-muted-foreground">
+                            <div>R² (worst): {c.selection_r2 !== null ? c.selection_r2.toFixed(3) : "N/A"}</div>
+                            <div>RMSE (worst): {c.selection_rmse !== null ? c.selection_rmse.toFixed(3) : "N/A"}</div>
+                            {c.good_fit !== null && (
+                              <div className={c.good_fit ? "text-green-600" : "text-amber-600"}>
+                                Good fit: {c.good_fit ? "Yes" : "No"}
+                              </div>
+                            )}
+                            {c.plausible !== null && (
+                              <div className={c.plausible ? "text-green-600" : "text-amber-600"}>
+                                Plausible: {c.plausible ? "Yes" : "No"}
+                              </div>
+                            )}
+                            {c.offending_params && c.offending_params.length > 0 && (
+                              <div className="text-destructive mt-1">
+                                Offending: {c.offending_params.join(", ")}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {c.disqualified && c.disqualification_reason && (
+                          <div className="text-destructive mt-2">{c.disqualification_reason}</div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {run.recommendation_output.interventions.length > 0 && (
+                <div className="mt-4 space-y-2">
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Interventions</h3>
+                  <ul className="space-y-2">
+                    {run.recommendation_output.interventions.map((inv, i) => (
+                      <li key={i} className="text-sm border-l-2 pl-3 border-muted">
+                        <div className="font-medium">{inv.description}</div>
+                        {inv.predicted_value !== null && inv.baseline_value !== null && (
+                          <div className="text-xs mt-1">
+                            <span className="font-mono">{inv.objective_metric ?? "objective"}</span>:{" "}
+                            {inv.baseline_value} → <strong>{inv.predicted_value}</strong>
+                            {inv.delta !== null && (
+                              <span className={inv.delta >= 0 ? "text-green-600" : "text-destructive"}>
+                                {" "}({inv.delta >= 0 ? "+" : ""}{inv.delta})
+                              </span>
+                            )}
+                            {inv.in_coverage === false && (
+                              <Badge variant="outline" className="ml-2 text-[10px]">extrapolation</Badge>
+                            )}
+                          </div>
+                        )}
+                        {inv.rationale && <p className="text-muted-foreground text-xs mt-1">{inv.rationale}</p>}
+                        {inv.caveat && <p className="text-amber-600 text-xs mt-1">{inv.caveat}</p>}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </section>
+      )}
+
       {/* Final hypotheses */}
       {run.output && run.output.final_hypotheses.length > 0 && (
         <section className="space-y-3">
