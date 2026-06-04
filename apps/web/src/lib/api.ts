@@ -29,11 +29,53 @@ export interface FollowupResultDTO {
   created_at: string;
 }
 
+export interface Intervention {
+  intervention_id: string | null;
+  description: string;
+  knob: string | null;
+  objective_metric: string | null;
+  baseline_value: number | null;
+  predicted_value: number | null;
+  delta: number | null;
+  in_coverage: boolean | null;
+  caveat: string | null;
+  rationale: string | null;
+}
+
+export interface CandidateReport {
+  model_type: string;
+  attempted: boolean;
+  disqualified: boolean;
+  disqualification_reason: string | null;
+  selection_r2: number | null;
+  selection_rmse: number | null;
+  good_fit: boolean | null;
+  good_fit_reason: string | null;
+  plausible: boolean | null;
+  offending_params: string[] | null;
+  stalled: boolean | null;
+  eligible_species: string[] | null;
+  report: Record<string, unknown> | null;
+}
+
+export interface RecommendationOutput {
+  meta: Record<string, unknown>;
+  recommended_model: string;
+  confident: boolean;
+  refusal_reason: string | null;
+  selection_rationale: string;
+  candidates: CandidateReport[];
+  interventions: Intervention[];
+  grounding_hyp_ids: string[];
+}
+
 export interface RunDetail extends RunSummary {
   bundle_dir: string | null;
   hypothesis_dir: string | null;
+  recommend_dir: string | null;
   global_md: string | null;
   output: HypothesisOutput | null;
+  recommendation_output: RecommendationOutput | null;
   // PR-A2 drive posture: follow-up question history + eligibility flag.
   // Legacy runs (pre-PR-A2) return [] / 0 / true-when-bundle-present.
   followups?: FollowupResultDTO[];

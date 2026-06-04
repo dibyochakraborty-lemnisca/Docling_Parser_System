@@ -34,6 +34,7 @@ class RunStatus(str, Enum):
     CHARACTERIZING = "characterizing"
     DIAGNOSING = "diagnosing"
     HYPOTHESIZING = "hypothesizing"
+    RECOMMENDING = "recommending"
     PAUSED = "paused"
     RESUMING = "resuming"
     DONE = "done"
@@ -97,6 +98,7 @@ class Run:
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     bundle_dir: Path | None = None
     hypothesis_dir: Path | None = None
+    recommend_dir: Path | None = None
     global_md: Path | None = None
     error: str | None = None
     # PR-A on caisc-hitl: optional human-typed question that biases the

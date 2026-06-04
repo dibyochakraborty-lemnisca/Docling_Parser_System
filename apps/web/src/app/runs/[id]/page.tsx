@@ -14,7 +14,7 @@ import {
   type RunDetail,
 } from "@/lib/api";
 import { Timeline } from "@/components/Timeline";
-import { HypothesisCharts } from "@/components/HypothesisChart";
+import { FinalHypothesisCard } from "@/components/FinalHypothesisCard";
 
 export default function RunPage({ params }: { params: { id: string } }) {
   const runId = params.id;
@@ -136,8 +136,9 @@ export default function RunPage({ params }: { params: { id: string } }) {
     <div className={`space-y-8 ${showFollowupBar ? "pb-40" : ""}`}>
       <header className="flex items-center justify-between print:mb-4">
         <div>
-          <h1 className="text-2xl font-semibold">Run {run.run_id.slice(0, 8)}</h1>
-          <p className="text-sm text-muted-foreground">{run.run_id}</p>
+          <p className="kicker kicker-accent">Run</p>
+          <h1 className="mt-1 text-display-sm">{run.run_id.slice(0, 8)}</h1>
+          <p className="mt-1 font-ui text-ui-xs text-ink-muted">{run.run_id}</p>
         </div>
         <div className="flex items-center gap-2 print:hidden">
           <Badge>{statusLabel}</Badge>
@@ -163,75 +164,116 @@ export default function RunPage({ params }: { params: { id: string } }) {
         </Card>
       )}
 
+      {/* Recommendation Panel */}
+      {run.recommendation_output && (
+        <section className="space-y-3">
+          <h2 className="text-display-sm">Recommendation</h2>
+          <Card className={run.recommendation_output.confident ? "border-primary" : ""}>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle className="font-mono text-sm">
+                  Model: {run.recommendation_output.recommended_model}
+                </CardTitle>
+                <div className="flex items-center gap-2">
+                  <Badge variant={run.recommendation_output.confident ? "success" : "secondary"}>
+                    {run.recommendation_output.confident ? "Confident" : "Refused"}
+                  </Badge>
+                  {!run.recommendation_output.confident && (
+                    <Badge variant="destructive">{run.recommendation_output.refusal_reason}</Badge>
+                  )}
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm leading-relaxed mb-4">
+                {run.recommendation_output.selection_rationale}
+              </p>
+              
+              {run.recommendation_output.candidates.length > 0 && (
+                <div className="mt-4 space-y-2">
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Candidate Bake-off</h3>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                    {run.recommendation_output.candidates.map((c, i) => (
+                      <div key={i} className="rounded-md border p-3 text-xs">
+                        <div className="font-semibold mb-1 flex items-center justify-between">
+                          <span>{c.model_type}</span>
+                          {!c.attempted ? (
+                            <Badge variant="outline" className="text-[10px]">Skipped</Badge>
+                          ) : c.disqualified ? (
+                            <Badge variant="destructive" className="text-[10px]">Disqualified</Badge>
+                          ) : (
+                            <Badge variant="secondary" className="text-[10px]">Attempted</Badge>
+                          )}
+                        </div>
+                        {c.attempted && !c.disqualified && (
+                          <div className="space-y-1 mt-2 text-muted-foreground">
+                            <div>R² (worst): {c.selection_r2 !== null ? c.selection_r2.toFixed(3) : "N/A"}</div>
+                            <div>RMSE (worst): {c.selection_rmse !== null ? c.selection_rmse.toFixed(3) : "N/A"}</div>
+                            {c.good_fit !== null && (
+                              <div className={c.good_fit ? "text-ok" : "text-warn"}>
+                                Good fit: {c.good_fit ? "Yes" : "No"}
+                              </div>
+                            )}
+                            {c.plausible !== null && (
+                              <div className={c.plausible ? "text-ok" : "text-warn"}>
+                                Plausible: {c.plausible ? "Yes" : "No"}
+                              </div>
+                            )}
+                            {c.offending_params && c.offending_params.length > 0 && (
+                              <div className="text-destructive mt-1">
+                                Offending: {c.offending_params.join(", ")}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {c.disqualified && c.disqualification_reason && (
+                          <div className="text-destructive mt-2">{c.disqualification_reason}</div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {run.recommendation_output.interventions.length > 0 && (
+                <div className="mt-4 space-y-2">
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Interventions</h3>
+                  <ul className="space-y-2">
+                    {run.recommendation_output.interventions.map((inv, i) => (
+                      <li key={i} className="text-sm border-l-2 border-accent/50 pl-3">
+                        <div className="font-medium">{inv.description}</div>
+                        {inv.predicted_value !== null && inv.baseline_value !== null && (
+                          <div className="text-xs mt-1">
+                            <span className="font-mono">{inv.objective_metric ?? "objective"}</span>:{" "}
+                            {inv.baseline_value} → <strong>{inv.predicted_value}</strong>
+                            {inv.delta !== null && (
+                              <span className={inv.delta >= 0 ? "text-ok" : "text-destructive"}>
+                                {" "}({inv.delta >= 0 ? "+" : ""}{inv.delta})
+                              </span>
+                            )}
+                            {inv.in_coverage === false && (
+                              <Badge variant="outline" className="ml-2 text-[10px]">extrapolation</Badge>
+                            )}
+                          </div>
+                        )}
+                        {inv.rationale && <p className="text-muted-foreground text-xs mt-1">{inv.rationale}</p>}
+                        {inv.caveat && <p className="text-warn text-xs mt-1">{inv.caveat}</p>}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </section>
+      )}
+
       {/* Final hypotheses */}
       {run.output && run.output.final_hypotheses.length > 0 && (
         <section className="space-y-3">
-          <h2 className="text-lg font-semibold">Final hypotheses</h2>
+          <h2 className="text-display-sm">Final hypotheses</h2>
           {run.output.final_hypotheses.map((h) => (
-            <Card key={h.hyp_id}>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="font-mono text-sm">{h.hyp_id}</CardTitle>
-                  <div className="flex items-center gap-2">
-                    <Badge variant="outline">{h.confidence_basis}</Badge>
-                    <Badge variant="success">conf {h.confidence.toFixed(2)}</Badge>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                {h.question_answered && (
-                  <div className="mb-3 rounded-md border bg-accent/40 px-3 py-2">
-                    <div className="flex items-center gap-2 text-xs">
-                      <span className="font-medium">Your question:</span>
-                      <Badge
-                        variant={
-                          h.question_answered === "yes"
-                            ? "success"
-                            : h.question_answered === "partial"
-                            ? "warning"
-                            : "secondary"
-                        }
-                      >
-                        {h.question_answered === "yes"
-                          ? "Answered"
-                          : h.question_answered === "partial"
-                          ? "Partially answered"
-                          : "Insufficient data"}
-                      </Badge>
-                    </div>
-                    {h.question_response_summary && (
-                      <p className="mt-2 text-sm leading-relaxed">
-                        {h.question_response_summary}
-                      </p>
-                    )}
-                  </div>
-                )}
-                <p className="text-sm leading-relaxed">{h.summary}</p>
-                {h.actionable_recommendation && (
-                  <div className="mt-3 rounded-md border-l-4 border-l-primary bg-primary/5 px-3 py-2">
-                    <div className="text-xs font-medium uppercase tracking-wide text-primary">
-                      Recommendation
-                    </div>
-                    <p className="mt-1 text-sm leading-relaxed">
-                      {h.actionable_recommendation}
-                    </p>
-                  </div>
-                )}
-                <HypothesisCharts figures={h.plotly_charts} />
-                <div className="mt-3 flex flex-wrap gap-1">
-                  {h.affected_variables.map((v) => (
-                    <Badge key={v} variant="secondary" className="font-mono text-xs">
-                      {v}
-                    </Badge>
-                  ))}
-                </div>
-                <div className="mt-3 text-xs text-muted-foreground">
-                  cites {h.cited_finding_ids.length} findings,{" "}
-                  {h.cited_narrative_ids.length} narratives,{" "}
-                  {h.cited_trajectories.length} trajectories
-                </div>
-              </CardContent>
-            </Card>
+            <FinalHypothesisCard key={h.hyp_id} h={h} />
           ))}
         </section>
       )}
@@ -240,7 +282,7 @@ export default function RunPage({ params }: { params: { id: string } }) {
       {followups.length > 0 && (
         <section className="space-y-4">
           <div className="border-t pt-4" />
-          <h2 className="text-lg font-semibold">Follow-ups</h2>
+          <h2 className="text-display-sm">Follow-ups</h2>
           {followups.map((f: FollowupResultDTO) => (
             <div key={f.followup_index} className="space-y-2">
               <div className="text-sm">
@@ -250,58 +292,12 @@ export default function RunPage({ params }: { params: { id: string } }) {
                 </span>
               </div>
               {f.output?.final_hypotheses?.map((h) => (
-                <Card key={h.hyp_id}>
-                  <CardHeader>
-                    <div className="flex items-center justify-between">
-                      <CardTitle className="font-mono text-sm">{h.hyp_id}</CardTitle>
-                      <div className="flex items-center gap-2">
-                        <Badge variant="outline">{h.confidence_basis}</Badge>
-                        <Badge variant="success">conf {h.confidence.toFixed(2)}</Badge>
-                      </div>
-                    </div>
-                  </CardHeader>
-                  <CardContent>
-                    {h.question_answered && (
-                      <div className="mb-3 rounded-md border bg-accent/40 px-3 py-2">
-                        <div className="flex items-center gap-2 text-xs">
-                          <span className="font-medium">Your follow-up:</span>
-                          <Badge
-                            variant={
-                              h.question_answered === "yes"
-                                ? "success"
-                                : h.question_answered === "partial"
-                                ? "warning"
-                                : "secondary"
-                            }
-                          >
-                            {h.question_answered === "yes"
-                              ? "Answered"
-                              : h.question_answered === "partial"
-                              ? "Partially answered"
-                              : "Insufficient data"}
-                          </Badge>
-                        </div>
-                        {h.question_response_summary && (
-                          <p className="mt-2 text-sm leading-relaxed">
-                            {h.question_response_summary}
-                          </p>
-                        )}
-                      </div>
-                    )}
-                    <p className="text-sm leading-relaxed">{h.summary}</p>
-                    {h.actionable_recommendation && (
-                      <div className="mt-3 rounded-md border-l-4 border-l-primary bg-primary/5 px-3 py-2">
-                        <div className="text-xs font-medium uppercase tracking-wide text-primary">
-                          Recommendation
-                        </div>
-                        <p className="mt-1 text-sm leading-relaxed">
-                          {h.actionable_recommendation}
-                        </p>
-                      </div>
-                    )}
-                    <HypothesisCharts figures={h.plotly_charts} />
-                  </CardContent>
-                </Card>
+                <FinalHypothesisCard
+                  key={h.hyp_id}
+                  h={h}
+                  questionLabel="Your follow-up"
+                  showCitations={false}
+                />
               ))}
               {(f.output?.final_hypotheses?.length ?? 0) === 0 && (
                 <p className="text-xs text-muted-foreground italic">
@@ -351,7 +347,7 @@ export default function RunPage({ params }: { params: { id: string } }) {
       {/* Rejected hypotheses (collapsed) */}
       {run.output && run.output.rejected_hypotheses.length > 0 && (
         <section className="space-y-2">
-          <h2 className="text-lg font-semibold">
+          <h2 className="text-display-sm">
             Rejected hypotheses ({run.output.rejected_hypotheses.length})
           </h2>
           <ul className="space-y-2">
@@ -376,7 +372,7 @@ export default function RunPage({ params }: { params: { id: string } }) {
       {/* Pipeline progress (per-stage status messages) */}
       {statusMessages.length > 0 && (
         <section>
-          <h2 className="text-lg font-semibold mb-3">Pipeline progress</h2>
+          <h2 className="text-display-sm mb-3">Pipeline progress</h2>
           <Card>
             <CardContent className="pt-6">
               <ul className="space-y-1 text-sm">
@@ -399,7 +395,7 @@ export default function RunPage({ params }: { params: { id: string } }) {
 
       {/* Live debate timeline */}
       <section>
-        <h2 className="text-lg font-semibold mb-3">Debate timeline</h2>
+        <h2 className="text-display-sm mb-3">Debate timeline</h2>
         <Timeline events={events} />
       </section>
 
@@ -408,7 +404,7 @@ export default function RunPage({ params }: { params: { id: string } }) {
           during a follow-up run (status flips to hypothesizing) and when
           the bundle has been GC'd. */}
       {showFollowupBar && (
-        <div className="fixed bottom-0 left-0 right-0 z-30 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+        <div className="fixed bottom-0 left-0 right-0 z-30 border-t border-rule bg-black/95 backdrop-blur supports-[backdrop-filter]:bg-black/80">
           <div className="mx-auto max-w-3xl px-4 py-3">
             <div className="flex items-end gap-2">
               <div className="flex-1">
@@ -451,7 +447,7 @@ export default function RunPage({ params }: { params: { id: string } }) {
       {/* Token report */}
       {run.output?.token_report && (
         <section>
-          <h2 className="text-lg font-semibold mb-3">Token report</h2>
+          <h2 className="text-display-sm mb-3">Token report</h2>
           <Card>
             <CardContent className="pt-6">
               <div className="text-sm">
@@ -460,7 +456,7 @@ export default function RunPage({ params }: { params: { id: string } }) {
               </div>
               <table className="mt-4 w-full text-sm">
                 <thead>
-                  <tr className="text-muted-foreground text-xs uppercase">
+                  <tr className="font-ui text-ui-xs uppercase text-ink-muted">
                     <th className="text-left py-1">Agent</th>
                     <th className="text-right py-1">Input</th>
                     <th className="text-right py-1">Output</th>

@@ -40,13 +40,16 @@ fermdocs = "fermdocs.cli:main"
 fermdocs-characterize = "fermdocs_characterize.cli:main"
 fermdocs-diagnose = "fermdocs_diagnose.cli:main"
 fermdocs-hypothesize = "fermdocs_hypothesis.cli:main"
+fermdocs-recommend = "fermdocs_recommend.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/fermdocs", "src/fermdocs_characterize", "src/fermdocs_diagnose", "src/fermdocs_hypothesis"]
+packages = ["src/fermdocs", "src/fermdocs_characterize", "src/fermdocs_diagnose", "src/fermdocs_hypothesis", "src/fermdocs_recommend"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "src/fermdocs/schema/golden_schema.yaml" = "fermdocs/schema/golden_schema.yaml"
 "src/fermdocs/units/registry.txt" = "fermdocs/units/registry.txt"
+"src/fermdocs_recommend/skills" = "fermdocs_recommend/skills"
+"src/fermdocs_recommend/models" = "fermdocs_recommend/models"
 
 [tool.ruff]
 line-length = 100

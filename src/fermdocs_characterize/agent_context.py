@@ -46,7 +46,7 @@ _log = logging.getLogger(__name__)
 # Approximate token-to-character ratio. Real tokenizers vary; we err on the
 # safe side so the agent prompt never silently exceeds budget.
 CHARS_PER_TOKEN = 4
-DEFAULT_MAX_TOKENS = 1500
+DEFAULT_MAX_TOKENS = 12000
 MAX_TOP_FINDINGS = 10
 MAX_EVIDENCE_SPAN_CHARS = 200
 

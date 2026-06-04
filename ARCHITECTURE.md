@@ -17,6 +17,7 @@ source files
   -> diagnose                    (observational ReAct loop)
   -> hypothesize                 (multi-agent causal debate)
        <-> MemoryBackend         (cross-run priors, optional)
+  -> recommend                   (model bake-off + intervention sim, or refuse)
   -> local API/web app
 ```
 
@@ -49,19 +50,26 @@ src/fermdocs_hypothesis
   follow-up, chart specs, Plotly rendering, lessons summarizer, and
   cross-run memory wire-up.
 
+src/fermdocs_recommend
+  Model-based recommendation stage. A ReAct agent fits three model
+  families (mechanistic / surrogate / hybrid) plus a pre-trained
+  IndPenSim path; a pure deterministic rubric selects the winner or
+  refuses; the winner is used as an oracle to line-search the best
+  next-batch intervention. Tools, sandbox, schema, and rubric are split.
+
 src/fermdocs_memory
   MemoryBackend Protocol with Noop / Stub / Synap adapters. Tier 1
   (lessons memory) is live; Tiers 2-5 are scaffolded but not wired.
 
 apps/api
   Local FastAPI wrapper around the full pipeline. Reads FERMDOCS_MEMORY
-  to construct the memory backend per-run.
+  to construct the memory backend per-run, and runs the recommend stage
+  after a run reaches DONE (errors there never flip the run to FAILED).
 
 apps/web
   Next.js UI for upload, run progress, websocket events, hypotheses,
-  charts, follow-up, and print-to-PDF. Editorial Scientific redesign
-  in progress on `frontend-styling` branch (Phase 1 typography +
-  color tokens are live).
+  charts, recommendations, follow-up, and print-to-PDF. Uses the
+  Lemnisca dark "instrument panel" design system.
 ```
 
 ## Artifact Flow
@@ -292,6 +300,94 @@ Tier 5  human-correction memory        first time HITL feedback fails to
                                        apply on a follow-up run
 ```
 
+### 8. Recommendation Output
+
+The recommend stage (`src/fermdocs_recommend`) runs after the hypothesis
+run reaches DONE. It turns the final hypotheses into a concrete,
+fit-tested intervention for the next batch — or refuses. It writes
+`<bundle>/recommend/recommendation.json` and is wired so any failure logs
+and leaves the run DONE (never FAILED).
+
+**Shape:** a bounded ReAct agent (`RecommendationAgent.recommend()`, max
+~20 steps) fits models in a sandbox via a gated tool registry
+(`get_hypotheses`, `get_data_feed`, `get_skill`, `execute_python`,
+`submit_recommendation`); a pure rubric judges; the schema enforces
+coherence.
+
+**Model families (the bake-off):**
+
+```text
+mechanistic   ODE with fitted parameters; parameters are plausibility-checked
+surrogate     neural ODE / LSTM; no parameters to vet (any architecture allowed)
+hybrid        ODE + learned residual (MLP) correction
+```
+
+For `penicillin_fedbatch`, a **pre-trained IndPenSim path**
+(`registry.py`) loads a control-augmented LSTM trained offline on the
+800-batch dataset (cached under `src/fermdocs_recommend/models/`,
+held-out penicillin R² ≈ 0.91) and supplies it as the surrogate
+candidate, optionally fine-tuning on all-but-last run and scoring the
+held-out run.
+
+**Deterministic rubric (`rubric.py`, no LLM, no I/O). The rubric, not the
+LLM, makes the final call.** Per-candidate scoring uses the worst eligible
+species (min R², max RMSE) over species with ≥ 4 held-out points. Gates:
+
+```text
+GOOD_FIT_R2          = 0.75   R² must exceed this on every eligible species
+                             (lowered from 0.95 for noisy bioprocess data)
+RMSE_FLOOR_MULTIPLIER = 2.0   RMSE <= 2 x measurement floor (when supplied)
+MIN_HELDOUT_POINTS    = 4     species below this are ineligible (not scored)
+STALL_REDUCTION_FRAC  = 0.05  optimizer loss must drop > 5%, else data does
+                             not constrain the model -> refuse
+DISPLACE_MARGIN_FRAC  = 0.10  a challenger must beat a passing mechanistic
+                             model on RMSE by > 10% to displace it
+```
+
+Selection: a mechanistic model that passes (good fit + plausible params +
+moved) wins unless displaced; else a passing surrogate wins; else a
+passing hybrid; else honest refusal. Mechanistic/hybrid parameters are
+checked against known ranges (out-of-range names reported in
+`offending_params`); surrogates skip plausibility.
+
+**Refusal codes** (recommended_model = "none", interventions = []):
+
+```text
+brewtwin_not_installed     fit toolkit import failed
+insufficient_data          too few points / optimizer stalled
+poor_fit_all_models        every attempted model R² <= 0.75
+implausible_parameters     only good fits were mechanistic with bad params
+mechanism_not_supported    mechanistic fit the curve but offered no mechanism
+compute_budget_exhausted   agent ran out of steps
+stage_error                unexpected error inside the stage
+```
+
+**Intervention simulation (`registry._simulate_interventions`).** The
+winning model becomes an oracle. Hypotheses' `affected_variables` map to
+control knobs (e.g. `dissolved_o2 -> [Fg, RPM]`); each knob is
+line-searched over `0.8–1.25x` baseline (19 points) to maximize predicted
+peak titer, staying within the observed envelope ± 3σ and capping the
+predicted titer at `mean + 3σ` of the training data to block oracle
+extrapolation. Changes with delta > 0.1 g/L are reported.
+
+**Output contract (`schema.py`, `RecommendationOutput`):**
+
+```text
+recommended_model    mechanistic | surrogate | hybrid | none
+confident            True iff recommended_model != none
+refusal_reason       set iff not confident (codes above)
+selection_rationale  why the rubric picked / refused
+candidates[]         one per family: attempted, disqualified, selection_r2,
+                     selection_rmse, good_fit, plausible, offending_params,
+                     stalled, fitted_parameters, report
+interventions[]      knob, objective_metric, baseline -> predicted, delta,
+                     in_coverage, caveat, rationale  (empty on refusal)
+grounding_hyp_ids[]  hypotheses that motivated the interventions
+```
+
+A model validator rejects incoherent payloads (refusal with interventions,
+or confidence with a refusal_reason), so the contract cannot be violated.
+
 ## Runtime State Machine
 
 The hypothesis runner is an explicit state machine, not LangGraph today.
@@ -383,39 +479,54 @@ This split matters: the LLM can request the chart it needs, but rendering,
 data lookup, regression details, and JSON shape stay deterministic and
 testable.
 
-## Frontend (Editorial Scientific)
+## Frontend (Lemnisca instrument panel)
 
-The web UI is being redesigned in the Editorial Scientific direction —
-Quanta/Nature register, generous whitespace, single forest accent,
-asymmetric two-column grid.
+The web UI uses the **Lemnisca design system** — a dark "instrument
+panel" aesthetic. (It replaced an earlier light "Editorial Scientific"
+direction; some plan docs still describe the old one.)
 
-Type stack (Phase 1, live as of `frontend-styling`):
-
-```text
-Fraunces       variable serif, display + body via opsz axis
-               (one family doing two jobs, more refined than three)
-Hanken Grotesk UI chrome, free Söhne alternative
-```
-
-Color palette (CSS variables in `globals.css`):
+Type stack (`next/font/google` + system grotesk):
 
 ```text
---color-paper          #FBFAF7    page background
---color-paper-elevated #FFFFFF    card surfaces
---color-ink            #0F1B2D    body text
---color-ink-secondary  #3D4A5C    metadata
---color-ink-muted      #6B7280    footnotes
---color-rule           #E5E2DA    hairline dividers
---color-accent         #1B4D3E    forest, used <=3x per screen
---color-accent-soft    #E8EFE8    pull-quote background tint
+Helvetica Neue   body + headings (system grotesk, set in globals.css)
+JetBrains Mono   --font-ui — every label, eyebrow, tag, date, stat
+Newsreader       --font-display — sparing serif-italic accents
 ```
 
-Dark mode was dropped for v1 — editorial designs are intrinsically light-first.
+Color palette (CSS variables in `apps/web/src/app/globals.css`):
 
-Phase 2 (layout overhaul: editorial masthead, asymmetric hypothesis cards,
-drop caps, pull-quote recommendations) and Phase 3 (editorial chart
-styling: endpoint labels instead of legends) are scheduled. Full design
-doc at `plans/2026-05-11-frontend-redesign-editorial.md`.
+```text
+--color-bg          #000000   true-black canvas
+--color-surface-1   #0b0c0d   card surfaces (-2 #111315, -3 #181b1d)
+--color-ink         #f4f5f6   primary text (ramp -> #c7cbce / #92989c / #62686c)
+--color-rule        rgba(255,255,255,0.10)   hairline dividers
+--color-accent      #38AFD8   signature teal — used sparingly
+--color-ok / -warn / -error   #3fbfa6 / #e3a552 / #e5484d
+```
+
+Token wiring: shadcn-compat aliases are HSL triples
+(`hsl(var(--x) / <alpha-value>)`); accent + semantic colors also expose
+RGB-channel triples (`--accent-rgb`, etc.) consumed as
+`rgb(var(--x-rgb) / <alpha-value>)` so Tailwind alpha modifiers (`/10`,
+`/40`) work on tinted fills and borders. Plain-hex vars do NOT support
+alpha modifiers — a known footgun.
+
+Signature surfaces:
+
+```text
+home hero        animated lemniscate (∞) motif over a teal glow;
+                 two-column split (hero left, upload well right)
+chrome           sticky blurred header with the ∞ wordmark, a
+                 scroll-progress bar, teal glow instead of drop shadows
+run debate       Timeline renders as a conversation: each specialist
+                 agent (kinetics / mass_transfer / metabolic + synthesizer
+                 / critic / judge) gets a colored avatar + live token
+                 count and contributes dialog bubbles; synthesis is a
+                 neutral card; accept/reject are status pills
+final hypotheses two-up — reasoning text left, Plotly charts right
+recommendation   the RecommendationOutput card (model, confidence/refusal,
+                 candidate bake-off, interventions)
+```
 
 ## API and Web Architecture
 
@@ -439,6 +550,7 @@ fermdocs ingest                      with --process-manifest if operator
   -> fermdocs-characterize --bundle
   -> fermdocs-diagnose --bundle
   -> in-process hypothesis run       with memory backend per FERMDOCS_MEMORY
+  -> recommend stage                 after DONE; writes recommend/recommendation.json
 ```
 
 Bundle zip runs execute:
@@ -447,7 +559,13 @@ Bundle zip runs execute:
 unzip bundle
   -> load_bundle
   -> in-process hypothesis run
+  -> recommend stage                 after DONE
 ```
+
+The recommend stage runs in a thread pool (the fit toolkit is blocking),
+status flips through `RunStatus.RECOMMENDING`, and the run returns to DONE
+whether the recommender succeeds, refuses, or errors. The result is
+surfaced on `GET /api/runs/{id}` as `recommendation_output`.
 
 The API publishes status messages and hypothesis events to websocket
 subscribers. It stores uploads and run outputs under `FERMDOCS_API_ROOT`,
@@ -478,6 +596,10 @@ fermdocs_hypothesis.schema
   HITL records, open questions, chart specs, final output. Lesson model
   with stable lesson_id (memory-layer Phase 1). LessonsDigest carries
   structured lessons list alongside the legacy digest string.
+
+fermdocs_recommend.schema
+  RecommendationOutput, CandidateReport, Intervention, RecommendationMeta.
+  A model validator enforces refusal <-> no-interventions coherence.
 
 fermdocs_memory.base
   MemoryRecord, MemoryQuery, MemoryBackend Protocol, MemoryKind enum.
@@ -510,6 +632,10 @@ Important invariants:
 - **Closed-vocab process_family**: the enum is enforced at the LLM
   schema layer (Gemini structured output), at the manifest loader,
   and at the memory query layer.
+- **The recommendation rubric overrides the LLM.** Model selection is the
+  deterministic `rubric.py`, not the agent's self-report; refusal ↔
+  no-interventions coherence is a schema validator; and the recommend
+  stage never flips a run to FAILED.
 
 Useful scripts:
 
@@ -530,6 +656,9 @@ narrative extraction: Gemini/Anthropic paths exist in ingest code
 characterization:     deterministic plus optional Gemini trajectory analyzer
 diagnosis:            Gemini or Anthropic clients, fake/none error path
 hypothesis:           Gemini live path
+recommendation:       Gemini or Anthropic (FERMDOCS_RECOMMEND_PROVIDER,
+                      falls back to hypothesis/mapper provider); fake path
+                      for offline tests. Model fitting itself is non-LLM.
 memory:               Synap (managed; embedding handled by Synap internally)
 embeddings (memory):  Synap-managed (no separate provider config needed)
 ```
@@ -608,6 +737,9 @@ Current known limitations:
 - PDF quality depends on Docling extraction and source layout.
 - Browser print is the current PDF export path.
 - Hypothesis live execution is Gemini-only today.
+- The pre-trained recommendation path only exists for `penicillin_fedbatch`
+  (IndPenSim). Other families fall back to fitting models from the run's own
+  data, which needs enough held-out points or the recommender refuses.
 - Memory layer uses Synap (US-hosted). Customers requiring data residency
   would need an alternative backend (Postgres+pgvector adapter is
   scoped in the plan but not implemented).
@@ -663,6 +795,19 @@ behind a new `FERMDOCS_MEMORY=...` value. The Protocol's hard guarantees
 and the runner's `_persist_lessons_to_memory` — your adapter just implements
 the three Protocol methods.
 
+### Extending the Recommendation Stage
+
+The model recipes the agent fits live as vendored brewtwin skill cards
+under `src/fermdocs_recommend/skills/` (loaded by `skill_loader.py` and
+exposed through `tools_bundle/factory.py`). To change selection behavior,
+edit the gates/thresholds in `rubric.py` — keep it LLM-free and I/O-free so
+it stays the authoritative, testable arbiter. To add a pre-trained path for
+a new process family, follow the `penicillin_fedbatch` pattern in
+`registry.py` (cached artifact under `models/`, `has_base_model()` /
+`cached_candidate()` wiring) and train offline via a `pretrain.py`-style
+script. Add tests under `tests/recommend/` — the rubric tests assert the
+verdict overrides the LLM's self-report.
+
 ### Adding a Provider
 
 Keep provider-specific SDK code behind client factories. The rest of the
@@ -687,6 +832,7 @@ raw extraction or provenance?               src/fermdocs
 deterministic observations/findings?        src/fermdocs_characterize
 observational summary?                      src/fermdocs_diagnose
 causal mechanism debate?                    src/fermdocs_hypothesis
+model fit / intervention / refusal?         src/fermdocs_recommend
 cross-run priors / memory?                  src/fermdocs_memory
 upload/run orchestration?                   apps/api
 human workflow and display?                 apps/web

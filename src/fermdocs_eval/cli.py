@@ -1,8 +1,8 @@
 """CLI entry: `python -m fermdocs_eval.cli <suite> ...`
 
-Single suite: `headtohead` — agent vs single-shot Gemini baseline, judged
-multi-axis. Earlier multi-suite plans (E1 memory cold/warm, E2 critic
-axes) were dropped when the eval scope was narrowed.
+Suites:
+  - ablation: E3a ablation studies (full vs component-removed variants)
+  - headtohead: legacy agent vs single-shot baseline (deprecated)
 """
 
 from __future__ import annotations
@@ -70,6 +70,54 @@ def run_headtohead(bundle: str, questions: str, out: str, only: tuple[str, ...])
         bundle_dir=bundle,
         questions_path=questions_path,
         out_path=out,
+    )
+
+
+@cli.command("ablation")
+@click.option("--bundle", required=True, type=click.Path(exists=True))
+@click.option(
+    "--questions",
+    default="eval/questions.json",
+    help="JSON file mapping qid -> question text.",
+)
+@click.option("--out", default="eval/results/ablations.jsonl")
+@click.option(
+    "--only-q",
+    multiple=True,
+    help="Restrict to specific qids (repeatable).",
+)
+@click.option(
+    "--only-config",
+    multiple=True,
+    help="Restrict to specific config names (repeatable).",
+)
+def run_ablation(
+    bundle: str,
+    questions: str,
+    out: str,
+    only_q: tuple[str, ...],
+    only_config: tuple[str, ...],
+) -> None:
+    """Run E3a ablation matrix on the bundle."""
+    from fermdocs_eval.ablation_configs import ALL_CONFIGS, ABLATION_QUESTIONS
+    from fermdocs_eval.suites import ablations
+
+    qids = tuple(only_q) if only_q else ABLATION_QUESTIONS
+    if only_config:
+        wanted = set(only_config)
+        cfgs = tuple(c for c in ALL_CONFIGS if c.name in wanted)
+        missing = wanted - {c.name for c in cfgs}
+        if missing:
+            raise click.ClickException(f"unknown configs: {sorted(missing)}")
+    else:
+        cfgs = ALL_CONFIGS
+
+    ablations.run(
+        bundle_dir=bundle,
+        questions_path=questions,
+        out_path=out,
+        questions=qids,
+        configs=cfgs,
     )
 
 

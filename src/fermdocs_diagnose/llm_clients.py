@@ -19,6 +19,41 @@ from typing import Any
 _GEMINI_DEFAULT_MODEL = "gemini-3-pro"
 _ANTHROPIC_DEFAULT_MODEL = "claude-opus-4-7"
 
+# Output token ceiling for the diagnosis emit. The multi-run bundle path can
+# produce large failures/trends/analysis arrays; an unset cap rode the model
+# default and truncated the JSON mid-value, surfacing as a JSONDecodeError.
+# Set high (Gemini 3 Pro tops out at 65536) and env-overridable.
+_DEFAULT_GEMINI_MAX_OUTPUT_TOKENS = 65536
+_DEFAULT_ANTHROPIC_MAX_OUTPUT_TOKENS = 32000
+
+
+def _gemini_max_output_tokens() -> int:
+    raw = os.environ.get("FERMDOCS_DIAGNOSIS_MAX_OUTPUT_TOKENS")
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+    return _DEFAULT_GEMINI_MAX_OUTPUT_TOKENS
+
+
+def _anthropic_max_output_tokens() -> int:
+    raw = os.environ.get("FERMDOCS_DIAGNOSIS_MAX_OUTPUT_TOKENS")
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+    return _DEFAULT_ANTHROPIC_MAX_OUTPUT_TOKENS
+
+
+class TruncatedDiagnosisResponse(RuntimeError):
+    """Raised when a provider truncates the diagnosis emit at the token cap.
+
+    Distinct from a JSONDecodeError so the agent loop can tell "the model ran
+    out of output budget" apart from "the model produced malformed JSON".
+    """
+
 
 class GeminiDiagnosisClient:
     """Implements DiagnosisLLMClient via Google Gemini structured output."""
@@ -54,6 +89,7 @@ class GeminiDiagnosisClient:
                 response_mime_type="application/json",
                 response_schema=_GEMINI_DIAGNOSIS_SCHEMA,
                 temperature=0.0,
+                max_output_tokens=_gemini_max_output_tokens(),
             ),
         )
         text = response.text
@@ -61,6 +97,19 @@ class GeminiDiagnosisClient:
             import sys
 
             print(f"[gemini-diagnosis] raw_response={text!r}", file=sys.stderr)
+        # Detect a hard output-token truncation before json.loads chokes on the
+        # half-written JSON. Raise a clear, typed error instead of a cryptic
+        # JSONDecodeError at some deep char offset.
+        finish_reason = None
+        candidates = getattr(response, "candidates", None) or []
+        if candidates:
+            finish_reason = getattr(candidates[0], "finish_reason", None)
+        if finish_reason is not None and str(finish_reason).upper().endswith("MAX_TOKENS"):
+            raise TruncatedDiagnosisResponse(
+                "Gemini diagnosis response hit the output token cap "
+                f"({_gemini_max_output_tokens()} tokens) and was truncated. "
+                "Raise FERMDOCS_DIAGNOSIS_MAX_OUTPUT_TOKENS or reduce emit size."
+            )
         if not text:
             raise ValueError("Gemini returned empty diagnosis response")
         return json.loads(text)
@@ -87,7 +136,7 @@ class AnthropicDiagnosisClient:
         client = Anthropic()
         response = client.messages.create(
             model=self._model,
-            max_tokens=4096,
+            max_tokens=_anthropic_max_output_tokens(),
             system=system,
             messages=messages,
             tools=[

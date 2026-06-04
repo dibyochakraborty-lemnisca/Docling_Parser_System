@@ -317,6 +317,8 @@ class SynapBackend:
             ctx = self._loop_thread.submit(  # type: ignore[union-attr]
                 self._sdk.user.context.fetch(
                     user_id=query.process_family,
+                    # Synap expects search_query as a list of query strings, not a
+                    # bare string (a string yields HTTP 422 list_type). Wrap it.
                     search_query=[query.semantic_query] if query.semantic_query else None,
                     max_results=query.top_k,
                 ),

@@ -238,6 +238,11 @@ def create_app() -> FastAPI:
         output = None
         if output_path and output_path.exists():
             output = json.loads(output_path.read_text())
+            
+        recommendation_output = None
+        if run.recommend_dir and (run.recommend_dir / "recommendation.json").exists():
+            recommendation_output = json.loads((run.recommend_dir / "recommendation.json").read_text())
+
         # PR-A2: surface follow-up state. `followups` is a list of
         # {followup_index, user_question_text, output, created_at}.
         # `bundle_followup_eligible` lets the frontend hide the textarea
@@ -262,9 +267,11 @@ def create_app() -> FastAPI:
             "created_at": run.created_at.isoformat(),
             "bundle_dir": str(run.bundle_dir) if run.bundle_dir else None,
             "hypothesis_dir": str(run.hypothesis_dir) if run.hypothesis_dir else None,
+            "recommend_dir": str(run.recommend_dir) if run.recommend_dir else None,
             "global_md": str(run.global_md) if run.global_md else None,
             "error": run.error,
             "output": output,
+            "recommendation_output": recommendation_output,
             "followups": followups,
             "followup_index": run.followup_index,
             "bundle_followup_eligible": run.bundle_followup_eligible,

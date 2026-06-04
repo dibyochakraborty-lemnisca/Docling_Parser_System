@@ -1,0 +1,44 @@
+{
+  "family": "penicillin_fedbatch",
+  "model_type": "surrogate_lstm_control_augmented",
+  "state_size": 1,
+  "input_size": 4,
+  "hidden_size": 96,
+  "stride": 5,
+  "control_channels": [
+    "Fs",
+    "Fg",
+    "RPM",
+    "Fpaa"
+  ],
+  "output_channels": [
+    "P"
+  ],
+  "u_mu": [
+    73.52900572899009,
+    64.6587816985282,
+    100.0,
+    7.58605221292022
+  ],
+  "u_sc": [
+    25.930390983194098,
+    12.70045512241511,
+    1.0,
+    3.8253491986903567
+  ],
+  "y_mu": [
+    12.282668319149439
+  ],
+  "y_sc": [
+    8.90249241451593
+  ],
+  "hyperparameters": {
+    "hidden": 96,
+    "lr": 0.001
+  },
+  "test_penicillin_r2_median": 0.9146550990905058,
+  "test_pct_above_0_75": 0.76,
+  "n_train": 500,
+  "n_val": 100,
+  "n_test": 100
+}

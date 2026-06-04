@@ -4,28 +4,15 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { Lemniscate } from "@/components/brand/Lemniscate";
+import { RunsMenu } from "@/components/RunsMenu";
 import {
   PROCESS_FAMILY_OPTIONS,
   createRun,
   listRuns,
   uploadFiles,
-  type RunStatus,
   type RunSummary,
 } from "@/lib/api";
-import { formatRelative } from "@/lib/utils";
-
-const STATUS_VARIANT: Record<RunStatus, "default" | "secondary" | "success" | "warning" | "destructive"> = {
-  pending: "secondary",
-  ingesting: "secondary",
-  characterizing: "secondary",
-  diagnosing: "secondary",
-  hypothesizing: "secondary",
-  paused: "warning",
-  resuming: "secondary",
-  done: "success",
-  failed: "destructive",
-};
 
 // Allowed file extensions, matched server-side in apps/api/fermdocs_api/main.py.
 // Keep these in sync with the API's ALLOWED_SUFFIXES set.
@@ -131,15 +118,40 @@ export default function Home() {
 
   return (
     <div className="space-y-8">
-      <Card>
+      {/* Top bar — recent runs live behind a top-right dropdown now. */}
+      <div className="flex items-center justify-end">
+        <RunsMenu runs={runs} onRefresh={refreshRuns} />
+      </div>
+
+      <div className="grid items-start gap-10 lg:grid-cols-[1fr_minmax(0,30rem)] lg:gap-14">
+        {/* LEFT — hero copy over the animated lemniscate motif. */}
+        <section className="relative isolate flex flex-col">
+          <p className="kicker kicker-accent">Fermentation hypothesis &amp; recommendation engine</p>
+          <h1 className="mt-4 max-w-[18ch] text-display-lg">
+            From raw batch data to tested hypotheses and{" "}
+            <span className="serif-accent text-accent">model-backed recommendations.</span>
+          </h1>
+          <p className="mt-5 max-w-prose text-body-lg text-ink-muted">
+            Upload a run bundle and the multi-agent pipeline ingests, characterizes,
+            diagnoses, and debates its way to ranked, evidence-cited hypotheses —
+            then fits models to recommend the change for your next run.
+          </p>
+          <div className="relative mt-10 lg:mt-14">
+            <div className="pointer-events-none absolute left-1/2 top-1/2 h-[300px] w-[560px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-accent-glow blur-3xl" />
+            <Lemniscate className="relative w-full max-w-[560px]" />
+          </div>
+        </section>
+
+        {/* RIGHT — upload well. */}
+        <Card>
         <CardHeader>
           <CardTitle>Upload</CardTitle>
           <CardDescription>
             Upload a <code>.csv</code>, <code>.xlsx</code>, or <code>.pdf</code> —
-            the full pipeline runs (ingest → characterize → diagnose → hypothesize).
-            Or upload a <code>.zip</code> of an existing diagnose bundle to jump
-            straight to the hypothesis stage. The system will ask you to answer
-            any open questions it raises.
+            the full pipeline runs (ingest → characterize → diagnose → hypothesize
+            → recommend). Or upload a <code>.zip</code> of an existing diagnose
+            bundle to jump straight to the hypothesis stage. The system will ask
+            you to answer any open questions it raises.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -158,7 +170,7 @@ export default function Home() {
               maxLength={2000}
               rows={3}
               disabled={submitting}
-              className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring resize-none"
+              className="w-full resize-none rounded-md border border-rule bg-surface-1 px-3 py-2 text-ui-base text-ink placeholder:text-ink-faint transition-colors focus:border-accent-deep focus:shadow-glow-soft focus:outline-none"
             />
             <p className="mt-1 text-xs text-muted-foreground">
               Leave empty to run as today. When provided, the system biases
@@ -184,7 +196,7 @@ export default function Home() {
               value={processFamily}
               onChange={(e) => setProcessFamily(e.target.value)}
               disabled={submitting}
-              className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              className="w-full rounded-md border border-rule bg-surface-1 px-3 py-2 text-ui-base text-ink transition-colors focus:border-accent-deep focus:shadow-glow-soft focus:outline-none"
             >
               {PROCESS_FAMILY_OPTIONS.map((opt) => (
                 <option key={opt.value} value={opt.value}>
@@ -221,7 +233,7 @@ export default function Home() {
             </div>
 
             {files.length > 0 && (
-              <ul className="divide-y rounded-md border bg-card text-sm">
+              <ul className="divide-y divide-rule rounded-md border border-rule bg-surface-1 text-sm">
                 {files.map((f, idx) => (
                   <li
                     key={`${f.name}-${idx}`}
@@ -273,48 +285,8 @@ export default function Home() {
             </div>
           </div>
         </CardContent>
-      </Card>
-
-      <section>
-        <div className="flex items-baseline justify-between mb-3">
-          <h2 className="text-lg font-semibold">Recent runs</h2>
-          <button
-            onClick={refreshRuns}
-            className="text-xs text-muted-foreground hover:text-foreground"
-          >
-            refresh
-          </button>
-        </div>
-        {runs.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            No runs yet. Upload a bundle above to start.
-          </p>
-        ) : (
-          <ul className="space-y-2">
-            {runs.map((r) => (
-              <li key={r.run_id}>
-                <a
-                  href={`/runs/${r.run_id}`}
-                  className="block rounded-md border bg-card px-4 py-3 hover:bg-accent transition-colors"
-                >
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="font-mono text-sm">{r.run_id.slice(0, 8)}</div>
-                      <div className="text-xs text-muted-foreground">
-                        started {formatRelative(r.created_at)}
-                      </div>
-                    </div>
-                    <Badge variant={STATUS_VARIANT[r.status]}>{r.status}</Badge>
-                  </div>
-                  {r.error && (
-                    <div className="mt-2 text-xs text-destructive">{r.error}</div>
-                  )}
-                </a>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+        </Card>
+      </div>
     </div>
   );
 }
