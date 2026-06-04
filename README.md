@@ -4,7 +4,8 @@ FASSO is a fermentation document intelligence pipeline. It ingests
 CSV, Excel, PDF, or pre-built bundle uploads; preserves raw observations
 with provenance; characterizes trajectories deterministically; runs an
 observational diagnosis agent; runs a multi-agent hypothesis stage with
-citations, charts, and recommendations; and now persists distilled
+citations and charts; fits/selects a process model and simulates the
+intervention to recommend for the next run; and persists distilled
 lessons to a managed memory layer so successive runs on the same
 process family compound rather than re-debate from scratch.
 
@@ -16,6 +17,7 @@ raw files or bundle zip
   -> characterize
   -> diagnose
   -> hypothesize  <-- reads/writes cross-run memory
+  -> recommend    <-- fits models, simulates interventions, or refuses
   -> FastAPI + Next.js UI
 ```
 
@@ -51,11 +53,18 @@ design, read [`ARCHITECTURE.md`](ARCHITECTURE.md).
   injected into the synthesizer/critic prompts as `[CROSS-RUN LESSONS]`.
   Memory is opt-in via `FERMDOCS_MEMORY=synap`; default is a noop.
 - Render deterministic Plotly charts from hypothesis `chart_specs`.
-- **Editorial Scientific frontend** — Phase 1 type + color foundations are
-  live (Fraunces + Hanken Grotesk, paper/ink/forest palette, light-only).
-  Phase 2 layouts + Phase 3 chart styling are scheduled.
+- **Model-based recommendation stage.** After the run is DONE, the
+  recommender bakes off candidate process models (mechanistic / surrogate /
+  hybrid, plus a pre-trained IndPenSim path for `penicillin_fedbatch`),
+  scores them on held-out runs with a pure deterministic rubric, and either
+  simulates the best intervention to apply next or **honestly refuses** when
+  no model is trustworthy. See [Recommendation Stage](#recommendation-stage).
+- **Lemnisca instrument-panel frontend** — dark "instrument panel" design
+  system: true-black canvas, signature teal accent (`#38AFD8`), hairline
+  rules, the lemniscate (∞) motif, and a Helvetica Neue / JetBrains Mono /
+  Newsreader type stack. See [Frontend](#frontend-lemnisca-instrument-panel).
 - Use a local FastAPI backend and Next.js frontend for upload, live events,
-  hypotheses, charts, follow-up, and browser print-to-PDF.
+  hypotheses, charts, recommendations, follow-up, and browser print-to-PDF.
 
 ## Repository Layout
 
@@ -65,6 +74,7 @@ design, read [`ARCHITECTURE.md`](ARCHITECTURE.md).
 |-- src/fermdocs_characterize/    deterministic characterization + optional analyzer
 |-- src/fermdocs_diagnose/        observational ReAct diagnosis agent
 |-- src/fermdocs_hypothesis/      multi-agent causal hypothesis stage
+|-- src/fermdocs_recommend/       model bake-off + intervention simulation + honest refusal
 |-- src/fermdocs_memory/          MemoryBackend Protocol + Noop/Stub/Synap adapters
 |-- apps/api/                     FastAPI local backend
 |-- apps/web/                     Next.js local frontend
@@ -170,6 +180,51 @@ exactly as it did before Phase 1 landed. Memory is fully opt-in.
 
 See `plans/2026-05-10-memory-layer.md` for the full roadmap and the
 [Synap onboarding markdown](plans/synap_setup/fermdocs-dev-usecase.md).
+
+## Recommendation Stage
+
+After a run reaches DONE, the API runs a fifth stage that turns the
+hypotheses into a concrete, tested recommendation for the next batch. It
+lives in `src/fermdocs_recommend/` and writes
+`<bundle>/recommend/recommendation.json`. It never flips a run to FAILED —
+on any error it logs and the run stays DONE.
+
+**What it does:**
+
+1. **Candidate bake-off.** A ReAct agent (`RecommendationAgent`) fits three
+   model families in a sandbox — **mechanistic** (ODE with fitted
+   parameters), **surrogate** (neural ODE / LSTM, no parameters to vet),
+   and **hybrid** (ODE + learned residual) — using a leave-one-run-out
+   split and held-out scoring.
+2. **Pre-trained IndPenSim path.** For `penicillin_fedbatch`, a
+   control-augmented LSTM pre-trained on the 800-batch IndPenSim dataset is
+   loaded directly (cached under `src/fermdocs_recommend/models/`,
+   held-out penicillin R² ≈ 0.91) and used as the surrogate candidate.
+3. **Deterministic rubric.** `rubric.py` — no LLM, no I/O — picks the
+   winner. Gates: good fit (R² > 0.75 on every eligible species and RMSE
+   within 2× the measurement floor), parameter plausibility (mechanistic /
+   hybrid only), and optimizer movement (loss must drop > 5%, else the data
+   doesn't constrain the model). A mechanistic model that passes wins unless
+   a challenger beats it on RMSE by > 10%.
+4. **Intervention simulation.** The winning model is used as an oracle: a
+   line-search over the relevant control knobs (e.g. `Fs`, `Fg`, `RPM`,
+   `Fpaa`) at 0.8–1.25× baseline, capped at mean + 3σ of the training titer
+   to prevent oracle extrapolation, reporting the change that maximizes
+   predicted peak titer.
+5. **Honest refusal.** If no candidate clears the rubric, the stage refuses
+   with a code (`poor_fit_all_models`, `insufficient_data`,
+   `implausible_parameters`, `mechanism_not_supported`,
+   `compute_budget_exhausted`, `brewtwin_not_installed`, `stage_error`) and
+   emits **zero** interventions. A schema-level validator enforces the
+   refusal ↔ no-interventions coherence.
+
+The output (`RecommendationOutput`) carries `recommended_model`,
+`confident`, `refusal_reason`, `selection_rationale`, the per-family
+`candidates` (with R²/RMSE, fit/plausibility verdicts, offending params),
+and the `interventions` (knob, baseline → predicted, delta, in-coverage
+flag, caveat). The web run page renders this as the **Recommendation**
+card. See [`ARCHITECTURE.md`](ARCHITECTURE.md#8-recommendation-output) for
+the rubric constants and refusal codes.
 
 ## Setup at a Glance
 
@@ -381,8 +436,24 @@ structured contract.
 The CLI uses `NoopBackend` for memory by default. The API runner reads
 `FERMDOCS_MEMORY=synap` to enable the live memory backend.
 
+### 5. Recommend
 
-### 4. Human-in-the-Loop (HITL) Interaction
+Bake off process models and simulate the next-batch intervention:
+
+```bash
+fermdocs-recommend \
+  --bundle out/bundle_<id> \
+  --hypothesis-output out/hypothesis/<hyp_run_id>/hypothesis_output.json \
+  --provider gemini
+```
+
+`--hypothesis-output` is optional — it points the recommender at the final
+hypotheses so interventions stay grounded in `affected_variables`. Output
+defaults to `<bundle>/recommend/recommendation.json`; override with
+`--output`. In the live app this stage runs automatically once a run is
+DONE, so the CLI is mainly for offline reproduction and debugging.
+
+### 6. Human-in-the-Loop (HITL) Interaction
 
 When running the hypothesis stage, you can explicitly enable HITL mode. If the agents encounter ambiguity and emit `open_questions`, the system will pause and ask the operator for ground-truth answers.
 
@@ -416,21 +487,41 @@ POST /api/runs/{run_id}/followup
 The API is local-only by design. It has no auth, no tenancy model, and no
 durable job queue.
 
-## Frontend (Editorial Scientific)
+`GET /api/runs/{run_id}` returns the full run detail, including the
+hypothesis `output`, any `followups`, and — once the recommend stage has
+run — a `recommendation_output` object (`recommended_model`, `confident`,
+`refusal_reason`, `selection_rationale`, `candidates`, `interventions`).
+The recommendation is a field on the run detail, not a separate endpoint.
 
-The web UI is being redesigned in the Editorial Scientific direction —
-Quanta/Nature register, generous whitespace, single forest accent,
-asymmetric two-column grid. Phase 1 (typography + color tokens) is
-live as of `frontend-styling` branch. Phase 2 (layouts) and Phase 3
-(editorial chart styling) are scheduled.
+## Frontend (Lemnisca instrument panel)
 
-Type stack: **Fraunces** (variable serif) + **Hanken Grotesk** (UI).
-Both free, hosted via `next/font/google`. Color: paper #FBFAF7, ink
-#0F1B2D, forest accent #1B4D3E. Light-only — dark mode was dropped
-for v1.
+The web UI uses the **Lemnisca design system** — a dark "instrument
+panel" aesthetic, replacing the earlier light editorial direction.
 
-See `plans/2026-05-11-frontend-redesign-editorial.md` for the full
-design doc.
+Type stack (via `next/font/google` + system grotesk):
+
+- **Helvetica Neue** — body + headings (system grotesk).
+- **JetBrains Mono** (`--font-ui`) — every label, eyebrow, tag, stat.
+- **Newsreader** (`--font-display`) — sparing serif-italic accents.
+
+Palette (CSS variables in `apps/web/src/app/globals.css`):
+
+```text
+--color-bg        #000000   true-black canvas
+--color-surface-1 #0b0c0d   card surfaces (2/3 for hover, wells)
+--color-ink       #f4f5f6   primary text (ramp down to #62686c)
+--color-rule      rgba(255,255,255,0.10)  hairline dividers
+--color-accent    #38AFD8   signature teal — used sparingly
+--color-ok/-warn/-error      #3fbfa6 / #e3a552 / #e5484d
+```
+
+Signature elements: the animated **lemniscate (∞)** motif on the home
+hero, teal **glow** instead of drop shadows, a scroll-progress bar, and
+the run-page **debate stream** where each specialist agent gets a colored
+avatar + live token count and contributes dialog bubbles. Final
+hypotheses render two-up (reasoning left, charts right). Accent and
+semantic colors expose RGB-channel triples so Tailwind alpha modifiers
+(`/10`, `/40`) work on tinted fills and borders.
 
 ## Configuration Cheat Sheet
 
@@ -469,6 +560,15 @@ FERMDOCS_DIAGNOSIS_MODEL=gemini-3-pro
 FERMDOCS_HYPOTHESIS_PROVIDER=gemini
 FERMDOCS_HYPOTHESIS_MODEL=gemini-3-pro
 FERMDOCS_QUESTION_CLASSIFIER_MODEL=gemini-3-flash
+
+# Recommendation stage (falls back to hypothesis/mapper provider when unset)
+FERMDOCS_RECOMMEND_PROVIDER=gemini       # gemini | anthropic
+FERMDOCS_RECOMMEND_MODEL=gemini-3-pro    # falls back to FERMDOCS_GEMINI_MODEL
+FERMDOCS_RECOMMEND_MAX_OUTPUT_TOKENS=    # optional override
+
+# Unit-mislabel guard: if a "g/L"-tagged column actually holds mg/L, values
+# inflate 1000x; this rejects conversions beyond N x the nominal range.
+FERMDOCS_UNIT_PLAUSIBILITY_FACTOR=50
 
 # Memory layer
 FERMDOCS_MEMORY=synap                 # noop (default) | synap
@@ -544,6 +644,12 @@ keys and will cost tokens.
   questions do.
 - User questions are a lens over the evidence, not a replacement for the
   bottom-up analysis.
+- **The recommendation rubric is deterministic and authoritative.** The LLM
+  fits models and self-reports, but `rubric.py` (no LLM) makes the final
+  call. A model that lies about its fit is overruled.
+- **Honest refusal is a feature.** When no model clears the rubric, the
+  recommender emits a refusal code and zero interventions rather than a
+  confident-sounding guess. Schema-level coherence is enforced.
 - Specialist routing is intentionally static while there are only three
   specialists. Add routing when there is a fourth specialist.
 - **Memory is opt-in and gated on a closed-vocab `process_family`.**
@@ -591,6 +697,10 @@ src/fermdocs_diagnose/agent.py
 src/fermdocs_hypothesis/schema.py
 src/fermdocs_hypothesis/runner.py
 src/fermdocs_hypothesis/projector.py
+src/fermdocs_recommend/schema.py
+src/fermdocs_recommend/agent.py
+src/fermdocs_recommend/rubric.py
+src/fermdocs_recommend/registry.py
 src/fermdocs_memory/base.py
 src/fermdocs_memory/synap.py
 apps/api/fermdocs_api/runner_pipeline.py

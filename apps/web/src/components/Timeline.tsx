@@ -1,6 +1,12 @@
 "use client";
 
-import { Badge } from "@/components/ui/badge";
+// Debate stream — renders the hypothesis-stage event log as a conversation
+// between the specialist agents. Each contribution is a dialog bubble next
+// to the speaker's colored avatar; per-agent token spend accumulates on the
+// left rail. Synthesis lands as a neutral card, verdicts as status banners,
+// and orchestration events as quiet centered breadcrumbs.
+
+import { agentFor, type AgentIdentity } from "@/lib/agents";
 
 interface Event {
   type: string;
@@ -9,139 +15,279 @@ interface Event {
   [k: string]: any;
 }
 
-const TYPE_COLOR: Record<string, "default" | "secondary" | "success" | "warning" | "destructive"> = {
-  stage_started: "secondary",
-  topic_selected: "secondary",
-  facet_contributed: "default",
-  hypothesis_synthesized: "default",
-  critique_filed: "warning",
-  judge_ruling: "warning",
-  hypothesis_accepted: "success",
-  hypothesis_rejected: "destructive",
-  question_added: "secondary",
-  question_resolved: "success",
-  human_input_received: "secondary",
-  stage_paused: "warning",
-  stage_exited: "secondary",
-  tokens_used: "outline" as any,
-};
-
-function eventLabel(ev: Event): string {
-  switch (ev.type) {
-    case "stage_started":
-      return "Stage started";
-    case "topic_selected":
-      return `Topic ${ev.topic_id}`;
-    case "facet_contributed":
-      return `Facet (${ev.specialist})`;
-    case "hypothesis_synthesized":
-      return `Synthesized ${ev.hyp_id}`;
-    case "critique_filed":
-      return `Critique ${ev.flag.toUpperCase()} on ${ev.hyp_id}`;
-    case "judge_ruling":
-      return `Judge: criticism ${ev.criticism_valid ? "valid" : "invalid"}`;
-    case "hypothesis_accepted":
-      return `Accepted ${ev.hyp_id}`;
-    case "hypothesis_rejected":
-      return `Rejected ${ev.hyp_id}`;
-    case "question_added":
-      return `Question ${ev.qid}`;
-    case "question_resolved":
-      return `Resolved ${ev.qid}`;
-    case "human_input_received":
-      return `Human input (${ev.input_type})`;
-    case "stage_paused":
-      return "Stage paused";
-    case "stage_exited":
-      return `Stage exited (${ev.reason})`;
-    case "tokens_used":
-      return `Tokens (${ev.agent})`;
-    default:
-      return ev.type;
-  }
+function timeOf(ts: string): string {
+  return new Date(ts).toLocaleTimeString();
 }
+
+// ---- avatar + token rail -------------------------------------------------
+
+function Avatar({ agent, size = 36 }: { agent: AgentIdentity; size?: number }) {
+  return (
+    <span
+      className="flex shrink-0 items-center justify-center rounded-full font-ui font-semibold"
+      style={{
+        width: size,
+        height: size,
+        fontSize: size * 0.34,
+        color: agent.color,
+        backgroundColor: agent.color + "1f", // ~12% tint
+        border: `1px solid ${agent.color}66`,
+        boxShadow: `0 0 14px ${agent.color}33`,
+      }}
+      title={agent.label}
+      aria-hidden="true"
+    >
+      {agent.short}
+    </span>
+  );
+}
+
+function Rail({ agent, tokens }: { agent: AgentIdentity; tokens: number }) {
+  return (
+    <div className="flex w-16 shrink-0 flex-col items-center gap-1">
+      <Avatar agent={agent} />
+      {tokens > 0 && (
+        <span className="font-ui text-[10px] tabular-nums text-ink-faint" title="tokens spent by this agent so far">
+          {tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : tokens}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// ---- per-event body ------------------------------------------------------
 
 function eventBody(ev: Event): React.ReactNode {
   switch (ev.type) {
-    case "topic_selected":
-      // Full text — operators need to read the topic to evaluate the
-      // debate. Truncating here was hiding agent reasoning. Cards
-      // grow vertically instead; that's the right trade-off for a
-      // research / debug UI. Use whitespace-pre-wrap so newlines and
-      // long lines render readably.
-      return (
-        ev.summary && (
-          <span className="whitespace-pre-wrap">{ev.summary}</span>
-        )
-      );
     case "facet_contributed":
     case "hypothesis_synthesized":
-      return (
-        ev.summary && (
-          <span className="whitespace-pre-wrap">{ev.summary}</span>
-        )
-      );
+    case "topic_selected":
+      return ev.summary ? <span className="whitespace-pre-wrap">{ev.summary}</span> : null;
     case "critique_filed":
       return ev.reasons?.length > 0 ? (
-        <ul className="list-disc pl-4 space-y-1">
+        <ul className="list-disc space-y-1 pl-4">
           {ev.reasons.map((r: string, i: number) => (
-            <li key={i} className="whitespace-pre-wrap">
-              {r}
-            </li>
+            <li key={i} className="whitespace-pre-wrap">{r}</li>
           ))}
         </ul>
       ) : null;
     case "judge_ruling":
-      return (
-        ev.rationale && (
-          <span className="whitespace-pre-wrap">{ev.rationale}</span>
-        )
-      );
+      return ev.rationale ? <span className="whitespace-pre-wrap">{ev.rationale}</span> : null;
     case "question_added":
-      return ev.question && <span>{ev.question}</span>;
+      return ev.question ? <span>{ev.question}</span> : null;
     case "question_resolved":
-      return ev.resolution && <span>{ev.resolution}</span>;
-    case "tokens_used":
-      return (
-        <span className="text-xs text-muted-foreground font-mono">
-          {ev.input.toLocaleString()} in / {ev.output.toLocaleString()} out
-        </span>
-      );
+      return ev.resolution ? <span>{ev.resolution}</span> : null;
     default:
       return null;
   }
 }
 
+// ---- row renderers -------------------------------------------------------
+
+function Bubble({
+  agent,
+  tokens,
+  title,
+  body,
+  ts,
+  tone,
+}: {
+  agent: AgentIdentity;
+  tokens: number;
+  title: string;
+  body: React.ReactNode;
+  ts: string;
+  tone?: string; // override accent (e.g. critic red, judge neutral)
+}) {
+  const c = tone ?? agent.color;
+  return (
+    <li className="flex items-start gap-3">
+      <Rail agent={agent} tokens={tokens} />
+      <div className="relative min-w-0 flex-1">
+        {/* dialog tail pointing back at the avatar */}
+        <span
+          className="absolute -left-[7px] top-4 h-3 w-3 rotate-45 border-b border-l"
+          style={{ backgroundColor: c + "14", borderColor: c + "55" }}
+          aria-hidden="true"
+        />
+        <div
+          className="rounded-xl border px-4 py-3"
+          style={{ backgroundColor: c + "14", borderColor: c + "44" }}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <span className="font-ui text-ui-xs uppercase tracking-[0.1em]" style={{ color: c }}>
+              {agent.label}
+              <span className="ml-2 normal-case tracking-normal text-ink-faint">{title}</span>
+            </span>
+            <span className="font-ui text-ui-xs tabular-nums text-ink-faint">{timeOf(ts)}</span>
+          </div>
+          {body && <div className="mt-2 text-sm text-ink-secondary">{body}</div>}
+        </div>
+      </div>
+    </li>
+  );
+}
+
+function SynthesisRow({
+  agent,
+  tokens,
+  ev,
+}: {
+  agent: AgentIdentity;
+  tokens: number;
+  ev: Event;
+}) {
+  return (
+    <li className="flex items-start gap-3">
+      <Rail agent={agent} tokens={tokens} />
+      <div className="min-w-0 flex-1 rounded-xl border border-rule bg-surface-2 px-4 py-3">
+        <div className="flex items-center justify-between gap-3">
+          <span className="font-ui text-ui-xs uppercase tracking-[0.1em] text-ink-muted">
+            Synthesized
+            <span className="ml-2 font-mono normal-case tracking-normal text-ink-faint">{ev.hyp_id}</span>
+          </span>
+          <span className="font-ui text-ui-xs tabular-nums text-ink-faint">{timeOf(ev.ts)}</span>
+        </div>
+        {ev.summary && (
+          <p className="mt-2 whitespace-pre-wrap text-sm text-ink-secondary">{ev.summary}</p>
+        )}
+      </div>
+    </li>
+  );
+}
+
+function VerdictRow({ ev }: { ev: Event }) {
+  const accepted = ev.type === "hypothesis_accepted";
+  const color = accepted ? "var(--color-ok)" : "var(--color-error)";
+  return (
+    <li className="flex justify-center py-1">
+      <span
+        className="inline-flex items-center gap-2 rounded-full border px-3 py-1 font-ui text-ui-xs uppercase tracking-[0.12em]"
+        style={{ color, borderColor: "currentColor" }}
+      >
+        <span aria-hidden="true">{accepted ? "✓" : "✕"}</span>
+        {accepted ? "Accepted" : "Rejected"}
+        <span className="font-mono normal-case tracking-normal opacity-70">{ev.hyp_id}</span>
+      </span>
+    </li>
+  );
+}
+
+function MarkerRow({ ev }: { ev: Event }) {
+  const text =
+    ev.type === "topic_selected"
+      ? `Topic ${ev.topic_id}`
+      : ev.type === "stage_started"
+      ? "Debate started"
+      : ev.type === "stage_paused"
+      ? "Paused"
+      : ev.type === "stage_exited"
+      ? `Exited — ${ev.reason}`
+      : ev.type === "question_added"
+      ? `Open question ${ev.qid}`
+      : ev.type === "question_resolved"
+      ? `Resolved ${ev.qid}`
+      : ev.type === "human_input_received"
+      ? `Human input (${ev.input_type})`
+      : ev.type.replace(/_/g, " ");
+  const body = eventBody(ev);
+  return (
+    <li className="py-1">
+      <div className="flex items-center gap-3">
+        <span className="h-px flex-1 bg-rule" />
+        <span className="font-ui text-ui-xs uppercase tracking-[0.14em] text-ink-faint">{text}</span>
+        <span className="h-px flex-1 bg-rule" />
+      </div>
+      {body && (
+        <p className="mx-auto mt-2 max-w-2xl text-center text-xs text-ink-muted">{body}</p>
+      )}
+    </li>
+  );
+}
+
+// ---- timeline ------------------------------------------------------------
+
 export function Timeline({ events }: { events: Event[] }) {
   if (events.length === 0) {
     return (
-      <p className="text-sm text-muted-foreground">
+      <p className="text-sm text-ink-muted">
         Waiting for events… (the debate runs in the background; events stream
         in as they happen)
       </p>
     );
   }
+
+  // Accumulate per-agent token spend across the stream. tokens_used events
+  // carry the spend; we fold them into a running tally instead of rendering
+  // them as their own rows, then snapshot the tally onto each visible row.
+  const tally: Record<string, number> = {};
+
   return (
-    <ol className="ml-2 space-y-3 border-l border-rule pl-6">
-      {events.map((ev, i) => (
-        <li key={i} className="relative">
-          <span className="absolute -left-[31px] top-2 h-2 w-2 rounded-full bg-accent shadow-glow" />
-          <div className="rounded-md border border-rule bg-surface-1 px-4 py-3 transition-colors hover:border-rule-strong">
-            <div className="flex items-center justify-between gap-4">
-              <div className="flex items-center gap-2">
-                <Badge variant={TYPE_COLOR[ev.type] ?? "outline"}>
-                  {eventLabel(ev)}
-                </Badge>
-                <span className="font-ui text-ui-xs text-ink-muted">turn {ev.turn}</span>
-              </div>
-              <span className="font-ui text-ui-xs tabular-nums text-ink-muted">
-                {new Date(ev.ts).toLocaleTimeString()}
-              </span>
-            </div>
-            <div className="mt-2 text-sm">{eventBody(ev)}</div>
-          </div>
-        </li>
-      ))}
+    <ol className="space-y-4">
+      {events.map((ev, i) => {
+        if (ev.type === "tokens_used") {
+          const key = ev.agent ?? "system";
+          tally[key] = (tally[key] ?? 0) + (ev.input ?? 0) + (ev.output ?? 0);
+          return null; // folded into the rail, no standalone row
+        }
+
+        switch (ev.type) {
+          case "facet_contributed": {
+            const agent = agentFor(ev.specialist);
+            return (
+              <Bubble
+                key={i}
+                agent={agent}
+                tokens={tally[agent.key] ?? 0}
+                title="facet"
+                body={eventBody(ev)}
+                ts={ev.ts}
+              />
+            );
+          }
+          case "critique_filed": {
+            const agent = agentFor("critic");
+            return (
+              <Bubble
+                key={i}
+                agent={agent}
+                tokens={tally.critic ?? 0}
+                title={`flag ${String(ev.flag ?? "").toUpperCase()} · ${ev.hyp_id}`}
+                body={eventBody(ev)}
+                ts={ev.ts}
+              />
+            );
+          }
+          case "judge_ruling": {
+            const agent = agentFor("judge");
+            return (
+              <Bubble
+                key={i}
+                agent={agent}
+                tokens={tally.judge ?? 0}
+                title={`criticism ${ev.criticism_valid ? "valid" : "invalid"}`}
+                body={eventBody(ev)}
+                ts={ev.ts}
+                tone={ev.criticism_valid ? "var(--color-warn)" : agent.color}
+              />
+            );
+          }
+          case "hypothesis_synthesized":
+            return (
+              <SynthesisRow
+                key={i}
+                agent={agentFor("synthesizer")}
+                tokens={tally.synthesizer ?? 0}
+                ev={ev}
+              />
+            );
+          case "hypothesis_accepted":
+          case "hypothesis_rejected":
+            return <VerdictRow key={i} ev={ev} />;
+          default:
+            return <MarkerRow key={i} ev={ev} />;
+        }
+      })}
     </ol>
   );
 }
