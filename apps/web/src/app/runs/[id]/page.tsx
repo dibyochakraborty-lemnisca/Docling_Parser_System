@@ -15,6 +15,7 @@ import {
 } from "@/lib/api";
 import { Timeline } from "@/components/Timeline";
 import { FinalHypothesisCard } from "@/components/FinalHypothesisCard";
+import { OptimizationPanel } from "@/components/OptimizationPanel";
 
 export default function RunPage({ params }: { params: { id: string } }) {
   const runId = params.id;
@@ -141,6 +142,9 @@ export default function RunPage({ params }: { params: { id: string } }) {
           <p className="mt-1 font-ui text-ui-xs text-ink-muted">{run.run_id}</p>
         </div>
         <div className="flex items-center gap-2 print:hidden">
+          <Badge variant="outline">
+            {run.workflow === "optimization" ? "Optimization" : "Fault finding"}
+          </Badge>
           <Badge>{statusLabel}</Badge>
           {run.status === "done" && (
             <Button
@@ -162,6 +166,11 @@ export default function RunPage({ params }: { params: { id: string } }) {
             <pre className="text-xs mt-2 whitespace-pre-wrap">{run.error}</pre>
           </CardContent>
         </Card>
+      )}
+
+      {/* Optimization Panel — debated levers + model log (how the agent uses the model). */}
+      {run.optimization_output && (
+        <OptimizationPanel opt={run.optimization_output} />
       )}
 
       {/* Recommendation Panel */}

@@ -35,10 +35,22 @@ class RunStatus(str, Enum):
     DIAGNOSING = "diagnosing"
     HYPOTHESIZING = "hypothesizing"
     RECOMMENDING = "recommending"
+    # Optimization workflow stages.
+    DEBATING_OPPORTUNITIES = "debating_opportunities"
+    OPTIMIZING = "optimizing"
     PAUSED = "paused"
     RESUMING = "resuming"
     DONE = "done"
     FAILED = "failed"
+
+
+class WorkflowKind(str, Enum):
+    """Which pipeline a run executes. DIAGNOSTIC is the existing fault-finding
+    path; OPTIMIZATION runs the opportunity debate (+ closed-loop optimizer where
+    a process simulator is available)."""
+
+    DIAGNOSTIC = "diagnostic"
+    OPTIMIZATION = "optimization"
 
 
 @dataclass
@@ -95,12 +107,17 @@ class Run:
     run_id: str
     upload_id: str
     status: RunStatus = RunStatus.PENDING
+    workflow: WorkflowKind = WorkflowKind.DIAGNOSTIC
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     bundle_dir: Path | None = None
     hypothesis_dir: Path | None = None
     recommend_dir: Path | None = None
+    optimize_dir: Path | None = None
     global_md: Path | None = None
     error: str | None = None
+    # Optimization workflow result (OptimizationOutput-shaped dict). None on
+    # diagnostic runs and before the optimization stage completes.
+    optimization_output: Any | None = None
     # PR-A on caisc-hitl: optional human-typed question that biases the
     # debate. Empty string and None both mean "no question, run as today".
     user_question_text: str | None = None
@@ -217,14 +234,19 @@ class RunStore:
     # ---- runs ----
 
     def create_run(
-        self, upload_id: str, *, user_question_text: str | None = None
+        self,
+        upload_id: str,
+        *,
+        user_question_text: str | None = None,
+        workflow: WorkflowKind = WorkflowKind.DIAGNOSTIC,
     ) -> Run:
         run_id = str(uuid.uuid4())
         # Empty/whitespace string = legacy run (no question), normalize to None
         # so downstream code only checks `is None`.
         cleaned = (user_question_text or "").strip() or None
         run = Run(
-            run_id=run_id, upload_id=upload_id, user_question_text=cleaned
+            run_id=run_id, upload_id=upload_id, user_question_text=cleaned,
+            workflow=workflow,
         )
         self._runs[run_id] = run
         return run

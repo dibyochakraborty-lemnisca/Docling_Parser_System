@@ -51,7 +51,7 @@ from fermdocs_hypothesis.schema import (
     PriorHypothesisRef,
 )
 
-from fermdocs_api.state import FollowupResult, Run, RunStatus, RunStore
+from fermdocs_api.state import FollowupResult, Run, RunStatus, RunStore, Upload
 
 from fermdocs_recommend.agent import RecommendationAgent
 from fermdocs_recommend.llm_clients import build_recommend_client
@@ -164,6 +164,81 @@ async def execute_run(
         await store.publish(
             run.run_id,
             {"type": "error", "status": run.status.value, "error": run.error},
+        )
+
+
+async def execute_optimization_run(
+    *,
+    store: RunStore,
+    run: Run,
+    upload: Upload,
+) -> None:
+    """Optimization workflow: ingest/characterize the upload, run the opportunity
+    debate (reuses the debate engine — Gemini), then build the optimization result.
+
+    The closed-loop optimizer (fit → propose → simulate-on-oracle) only runs when a
+    real process simulator is configured (see `_optimizer_simulator_available`);
+    otherwise the debated levers stand as the optimization plan. Either way the
+    result carries a MODEL LOG (the governing equations + any fits) so the UI can
+    show how the agent uses the model.
+    """
+    try:
+        run.status = RunStatus.PENDING
+        await store.publish(run.run_id, {"type": "status", "status": run.status.value,
+                                         "workflow": run.workflow.value})
+
+        bundle_dir = await _prepare_bundle_dir(upload=upload, store=store, run=run)
+        run.bundle_dir = bundle_dir
+
+        # Opportunity debate. Reuse the global.md tailer so events stream live.
+        run.status = RunStatus.DEBATING_OPPORTUNITIES
+        opt_dir = store.runs_root / run.run_id
+        opt_dir.mkdir(parents=True, exist_ok=True)
+        global_md = opt_dir / "global.md"
+        run.optimize_dir = opt_dir
+        run.global_md = global_md
+        await store.publish(run.run_id, {
+            "type": "status", "status": run.status.value,
+            "bundle_dir": str(bundle_dir), "optimize_dir": str(opt_dir),
+        })
+
+        watcher_task = asyncio.create_task(
+            _watch_global_md(store=store, run=run, global_md=global_md)
+        )
+        debate_result = await asyncio.to_thread(
+            _run_opportunity_debate_blocking, bundle_dir, global_md
+        )
+        watcher_task.cancel()
+        try:
+            await watcher_task
+        except asyncio.CancelledError:
+            pass
+
+        (opt_dir / "optimization_debate.json").write_text(
+            json.dumps(debate_result.output.model_dump(mode="json"), indent=2, default=str)
+        )
+
+        # Assemble the optimization output (levers + model log; closed loop if a
+        # simulator is available). Status flips to OPTIMIZING for that phase.
+        run.status = RunStatus.OPTIMIZING
+        await store.publish(run.run_id, {"type": "status", "status": run.status.value})
+        opt_output = await asyncio.to_thread(
+            _assemble_optimization_output, bundle_dir, debate_result, run.run_id
+        )
+        run.optimization_output = opt_output
+        (opt_dir / "optimization.json").write_text(json.dumps(opt_output, indent=2, default=str))
+
+        run.status = RunStatus.DONE
+        await store.publish(run.run_id, {
+            "type": "result", "status": run.status.value,
+            "optimization_output": opt_output,
+        })
+    except Exception as e:
+        _log.exception("optimization run %s failed", run.run_id)
+        run.status = RunStatus.FAILED
+        run.error = f"{type(e).__name__}: {e}"
+        await store.publish(
+            run.run_id, {"type": "error", "status": run.status.value, "error": run.error}
         )
 
 
@@ -840,6 +915,316 @@ def _run_hypothesis_blocking(
         validate=True,
         now_factory=lambda: datetime.now(timezone.utc),
     )
+
+
+# ---------- optimization-workflow blocking helpers ----------
+
+
+def _run_opportunity_debate_blocking(bundle_dir: Path, global_md: Path):
+    """Run the opportunity debate over a bundle (reuses the debate engine)."""
+    from fermdocs_optimize_debate.loader import load_optimization_bundle
+    from fermdocs_optimize_debate.run import run_optimization_debate
+
+    loaded = load_optimization_bundle(bundle_dir)
+    return run_optimization_debate(
+        loaded, global_md_path=global_md, provider="gemini",
+        budget=_API_BUDGET, validate=True,
+    )
+
+
+def _optimizer_simulator_available(bundle_dir: Path) -> bool:
+    """True iff the closed-loop optimizer can run: a process simulator (oracle)
+    is configured. Today that means the LABS `generate-batches` CLI on PATH plus
+    a mech-params file via FERMDOCS_OPTIMIZE_MECH_PARAMS. Absent → debate-only
+    (the honest default; we never optimize against a fake oracle)."""
+    import shutil
+
+    mech = os.environ.get("FERMDOCS_OPTIMIZE_MECH_PARAMS")
+    gen_bin = os.environ.get("FERMDOCS_GENERATE_BATCHES_BIN", "generate-batches")
+    return bool(mech and Path(mech).exists() and shutil.which(gen_bin))
+
+
+def _assemble_optimization_output(bundle_dir: Path, debate_result, run_id: str) -> dict:
+    """Build the OptimizationOutput-shaped dict the frontend renders.
+
+    Always: the debated levers + a MODEL LOG (governing equations). When a real
+    simulator is configured, also runs the closed-loop optimizer and folds in its
+    achieved titer + per-round fit logs."""
+    from fermdocs_optimize.models.mechanistic import MechanisticModel
+    from fermdocs_optimize_debate.schema import levers_from_output
+
+    levers = [lev.model_dump() for lev in levers_from_output(debate_result.output)]
+    base = {
+        "meta": {"run_id": run_id, "stage": "opportunity_debate"},
+        "best_candidate": None, "best_achieved_titer": None,
+        "baseline_titer": None, "improvement": None,
+        "levers": levers,
+        "simulator_available": _optimizer_simulator_available(bundle_dir),
+    }
+
+    if base["simulator_available"]:
+        try:
+            out = {**base, **_run_closed_loop_optimizer(bundle_dir, run_id, levers)}
+            # Equation discovery: agent writes the ODE structure, oracle refines it,
+            # scipy searches the equation, oracle verifies. Best-effort: a failure
+            # here never sinks the optimizer result.
+            if os.environ.get("FERMDOCS_OPTIMIZE_DISCOVERY", "1") != "0":
+                try:
+                    out["discovery"] = _run_equation_discovery(bundle_dir)
+                except Exception as exc:  # noqa: BLE001
+                    _log.exception("equation discovery failed; omitting from output")
+                    out.setdefault("meta", {})["discovery_error"] = f"{type(exc).__name__}: {exc}"
+            return out
+        except Exception as exc:  # noqa: BLE001 — fall back to debate-only, never fail the run
+            _log.exception("closed-loop optimizer failed; reporting debate levers only")
+            base["meta"]["optimizer_error"] = f"{type(exc).__name__}: {exc}"
+
+    # Debate-only: still show the equations the agent's model uses.
+    model_log = [MechanisticModel.model_card(), {
+        "kind": "note",
+        "title": "Closed-loop optimizer not run",
+        "detail": ("No process simulator (oracle) is configured for this experiment, "
+                   "so the agent reported the debated levers as the optimization plan. "
+                   "With a simulator, the loop would fit the model above, propose knob "
+                   "settings, and verify the achieved titer on the oracle."),
+    }]
+    summary = getattr(debate_result.output, "debate_summary", "") or \
+        "Opportunity debate complete. Prioritized levers are listed below."
+    return {
+        **base,
+        "confident": bool(levers),
+        "refusal_reason": None if levers else "no_levers",
+        "selection_rationale": summary,
+        "model_log": model_log,
+    }
+
+
+def _seed_training_from_bundle(bundle_dir: Path):
+    """Best-effort seed batches from the uploaded experiment.
+
+    Looks for a wide-schema observations CSV (batch/run_id, t, X, S, P, M, V) in
+    the bundle. Returns a DataFrame in the optimizer's training schema, or None
+    when the columns aren't present (caller falls back to a configured CSV). We
+    deliberately do NOT pivot long-format here — a wrong reshape would silently
+    corrupt the seed; better to fall back."""
+    import pandas as pd
+
+    candidates = [
+        bundle_dir / "characterization" / "observations.csv",
+        bundle_dir / "observations.csv",
+    ]
+    needed = {"t", "X", "S", "P", "M", "V"}
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            df = pd.read_csv(path)
+        except Exception:  # noqa: BLE001
+            continue
+        cols = set(df.columns)
+        if "batch" not in cols and "run_id" in cols:
+            df = df.rename(columns={"run_id": "batch"})
+            cols = set(df.columns)
+        if needed <= cols and "batch" in cols:
+            keep = ["batch", "t", "X", "S", "P", "M", "V"]
+            return df[keep].copy()
+    return None
+
+
+def _run_closed_loop_optimizer(bundle_dir: Path, run_id: str, levers: list[dict]) -> dict:
+    """Run the closed-loop optimizer against a configured simulator. Returns the
+    fields that overlay the debate-only base. Requires LABS + mech-params (gated
+    upstream by `_optimizer_simulator_available`)."""
+    import pandas as pd
+
+    from fermdocs_optimize.agent import OptimizerAgent
+    from fermdocs_optimize.llm_clients import build_optimize_client
+    from fermdocs_optimize.schema import Box
+    from fermdocs_optimize.simulators.labs import LABSSimulator
+
+    mech = os.environ["FERMDOCS_OPTIMIZE_MECH_PARAMS"]
+    gen_bin = os.environ.get("FERMDOCS_GENERATE_BATCHES_BIN", "generate-batches")
+    box_cfg = os.environ.get("FERMDOCS_OPTIMIZE_BOX")  # config.json with var_params
+    if not box_cfg:
+        raise RuntimeError("FERMDOCS_OPTIMIZE_BOX must be set (config.json with var_params)")
+
+    import json as _json
+    vp = _json.loads(Path(box_cfg).read_text()).get("var_params")
+    box = Box(**{k: (vp[k]["lb"], vp[k]["ub"]) for k in
+                 ("biomass", "total_sub", "malt_frac", "dilution")})
+
+    # Seed data: prefer the uploaded experiment (bundle), fall back to a
+    # configured train CSV. The bundle data IS the experiment we're optimizing.
+    train = _seed_training_from_bundle(bundle_dir)
+    if train is None:
+        train_csv = os.environ.get("FERMDOCS_OPTIMIZE_TRAIN")
+        if not train_csv:
+            raise RuntimeError(
+                "no seed batches: bundle has no wide-schema observations and "
+                "FERMDOCS_OPTIMIZE_TRAIN is unset")
+        train = pd.read_csv(train_csv)
+
+    simulator = LABSSimulator(mech, generate_batches_bin=gen_bin)
+    client = build_optimize_client(os.environ.get("FERMDOCS_OPTIMIZE_PROVIDER", "none"))
+    agent = OptimizerAgent(client, provider=os.environ.get("FERMDOCS_OPTIMIZE_PROVIDER", "none") if client else "none")
+    out = agent.optimize(training_data=train, box=box, simulator=simulator)
+    return {
+        "confident": out.confident,
+        "refusal_reason": out.refusal_reason,
+        "selection_rationale": out.selection_rationale,
+        "best_candidate": out.best_candidate.knobs() if out.best_candidate else None,
+        "best_achieved_titer": out.best_achieved_titer,
+        "baseline_titer": out.baseline_titer,
+        "improvement": out.improvement,
+        "model_log": out.model_log,
+    }
+
+
+def _optimizer_box_and_train(bundle_dir: Path):
+    """Shared loader: the search box (from config var_params) + seed batches
+    (uploaded bundle, falling back to a configured CSV). Used by the closed-loop
+    optimizer and equation discovery."""
+    import json as _json
+
+    import pandas as pd
+
+    from fermdocs_optimize.schema import Box
+
+    box_cfg = os.environ.get("FERMDOCS_OPTIMIZE_BOX")
+    if not box_cfg:
+        raise RuntimeError("FERMDOCS_OPTIMIZE_BOX must be set (config.json with var_params)")
+    vp = _json.loads(Path(box_cfg).read_text()).get("var_params")
+    box = Box(**{k: (vp[k]["lb"], vp[k]["ub"]) for k in
+                 ("biomass", "total_sub", "malt_frac", "dilution")})
+    train = _seed_training_from_bundle(bundle_dir)
+    if train is None:
+        train_csv = os.environ.get("FERMDOCS_OPTIMIZE_TRAIN")
+        if not train_csv:
+            raise RuntimeError("no seed batches and FERMDOCS_OPTIMIZE_TRAIN is unset")
+        train = pd.read_csv(train_csv)[["batch", "t", "X", "S", "P", "M", "V"]]
+    return box, train
+
+
+def _append_setpoint_to_training(setpoint_df, knobs) -> dict | None:
+    """Append the recommended setpoint's oracle trajectory to the training CSV as
+    a NEW batch, so the next run learns from (recommended condition -> LABS titer).
+
+    This is the active-learning accumulation the operator asked for: every run the
+    agent proposes a next condition, the oracle says what titer it gives, and that
+    real (condition, outcome) batch is folded into train.csv for next time. No-op
+    if no persistent training CSV is configured (e.g. bundle-only runs)."""
+    import pandas as pd
+
+    train_csv = os.environ.get("FERMDOCS_OPTIMIZE_TRAIN")
+    if not train_csv or not Path(train_csv).exists():
+        return None
+    existing = pd.read_csv(train_csv)
+    ids = pd.to_numeric(existing["batch"], errors="coerce")
+    next_id = int(ids.max()) + 1 if ids.notna().any() else 0
+    new = setpoint_df.copy()
+    new["batch"] = next_id
+    for col in existing.columns:  # align to the train schema; fill gaps with NaN
+        if col not in new.columns:
+            new[col] = float("nan")
+    new = new[existing.columns]
+    pd.concat([existing, new], ignore_index=True).to_csv(train_csv, index=False)
+    _log.info("appended recommended setpoint to %s as batch %d (peak %.2f g/L)",
+              train_csv, next_id, float(setpoint_df["P"].max()))
+    return {
+        "path": train_csv, "batch_id": next_id, "rows": int(len(new)),
+        "peak_titer": round(float(setpoint_df["P"].max()), 3),
+        "total_batches": int(existing["batch"].nunique()) + 1,
+        "knobs": {k: round(float(getattr(knobs, k)), 5) for k in
+                  ("biomass", "total_sub", "malt_frac", "dilution")},
+    }
+
+
+def _run_equation_discovery(bundle_dir: Path) -> dict:
+    """The discover -> scipy-search -> oracle-verify pattern, shaped for the UI.
+
+    The agent (gemini by default; set FERMDOCS_OPTIMIZE_DISCOVERY_PROPOSER=template
+    for the deterministic structural search) proposes the ODE structure, the
+    oracle scores each structure, scipy.optimize searches the best equation, and
+    the predicted setpoint is verified back on the oracle."""
+    from fermdocs_optimize.discovery import CandidateModel, discover_model
+    from fermdocs_optimize.discovery.proposers import LLMSpecProposer, TemplateProposer
+    from fermdocs_optimize.oracle_search import oracle_global_search
+    from fermdocs_optimize.schema import KNOB_NAMES
+    from fermdocs_optimize.scipy_search import scipy_global_search
+    from fermdocs_optimize.simulators.labs import LABSSimulator
+    from fermdocs_optimize.simulators.model_backed import ModelSimulator
+
+    mech = os.environ["FERMDOCS_OPTIMIZE_MECH_PARAMS"]
+    gen_bin = os.environ.get("FERMDOCS_GENERATE_BATCHES_BIN", "generate-batches")
+    box, train = _optimizer_box_and_train(bundle_dir)
+    oracle = LABSSimulator(mech, generate_batches_bin=gen_bin)
+
+    use_llm = os.environ.get("FERMDOCS_OPTIMIZE_DISCOVERY_PROPOSER", "llm").lower() == "llm"
+    proposer = LLMSpecProposer() if use_llm else TemplateProposer()
+    rounds = int(os.environ.get("FERMDOCS_OPTIMIZE_DISCOVERY_ROUNDS", "5"))
+    probes = int(os.environ.get("FERMDOCS_OPTIMIZE_DISCOVERY_PROBES", "14"))
+
+    # 1. discover + refine the equation against the oracle
+    rep = discover_model(training_data=train, simulator=oracle, box=box,
+                         proposer=proposer, max_rounds=rounds, n_probes=probes)
+    if rep.best_spec is None:
+        raise RuntimeError("discovery produced no compilable equation")
+
+    # 2. scipy global search ON the discovered equation (cheap, vectorized)
+    best_model = CandidateModel(rep.best_spec); best_model.fit(train)
+    search = scipy_global_search(ModelSimulator(best_model), box, method="de",
+                                 maxiter=30, popsize=15)
+    c = search.best_candidate
+
+    # 3. verify the predicted setpoint on the oracle + reference true max
+    setpoint_df = oracle.simulate([c], v0=10.0)
+    verified = float(setpoint_df["P"].max())
+    try:
+        ref = oracle_global_search(oracle, box, v0=10.0, n_lhs=120, refine_iters=6)
+        true_max = ref.best_titer
+        capture = round(100.0 * verified / true_max, 1) if true_max else None
+    except Exception:  # noqa: BLE001
+        true_max, capture = None, None
+
+    # 4. ACTIVE LEARNING: fold the recommended (condition -> LABS titer) batch back
+    # into the training data so the next run learns from it.
+    appended = None
+    if os.environ.get("FERMDOCS_OPTIMIZE_APPEND_RECOMMENDATIONS", "1") != "0":
+        try:
+            appended = _append_setpoint_to_training(setpoint_df, c)
+        except Exception:  # noqa: BLE001 — accumulation must never sink the run
+            _log.exception("appending recommended setpoint to training data failed")
+
+    def _eqs(spec):
+        return [f"{k} = {v}" for k, v in spec.aux.items()] + \
+               [f"d{k}/dt = {v}" for k, v in spec.odes.items()]
+
+    return {
+        "proposer": "llm" if use_llm else "template",
+        "rounds": [{
+            "round_index": r.round_index, "name": r.spec.name,
+            "oracle_peak_rmse": r.oracle_peak_rmse, "oracle_peak_r2": r.oracle_peak_r2,
+            "compile_ok": r.compile_ok, "mu": r.spec.aux.get("mu", ""),
+            "equations": _eqs(r.spec),
+            "fitted_params": {k: round(v, 5) for k, v in r.fitted_params.items()},
+            "notes": r.spec.notes or "",
+            "error": r.error or "",
+        } for r in rep.rounds],
+        "best_name": rep.best_spec.name,
+        "best_equations": _eqs(rep.best_spec),
+        "best_fitted_params": {k: round(v, 5) for k, v in best_model.fitted_params.items()},
+        "best_oracle_peak_rmse": rep.oracle_peak_rmse,
+        "best_oracle_peak_r2": rep.oracle_peak_r2,
+        "search_method": "scipy differential_evolution (vectorized)",
+        "search_evals": search.n_oracle_evals,
+        "predicted_optimum_titer": search.best_titer,
+        "predicted_knobs": {k: round(getattr(c, k), 5) for k in KNOB_NAMES},
+        "oracle_verified_titer": round(verified, 3),
+        "oracle_true_max": true_max,
+        "capture_pct": capture,
+        "knobs_on_boundary": search.knobs_on_boundary,
+        "appended_to_training": appended,
+    }
 
 
 def _resume_hypothesis_blocking(

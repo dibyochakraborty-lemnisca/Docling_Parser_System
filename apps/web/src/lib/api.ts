@@ -9,10 +9,19 @@ export type RunStatus =
   | "characterizing"
   | "diagnosing"
   | "hypothesizing"
+  | "recommending"
+  | "debating_opportunities"
+  | "optimizing"
   | "paused"
   | "resuming"
   | "done"
   | "failed";
+
+// Which workflow the user picked on the input card. "diagnostic" is the
+// fault-finding pipeline (ingest→characterize→diagnose→hypothesize→recommend);
+// "optimization" runs the opportunity debate (and, where a process simulator
+// exists, the closed-loop optimizer).
+export type WorkflowKind = "diagnostic" | "optimization";
 
 export interface RunSummary {
   run_id: string;
@@ -20,6 +29,7 @@ export interface RunSummary {
   status: RunStatus;
   created_at: string;
   error: string | null;
+  workflow?: WorkflowKind;
 }
 
 export interface FollowupResultDTO {
@@ -69,6 +79,87 @@ export interface RecommendationOutput {
   grounding_hyp_ids: string[];
 }
 
+// One governing-equation / fit log entry — "how the agent is using the models".
+// Streamed during an optimization run and stored on the result.
+export interface ModelLogEntry {
+  kind: "equations" | "fit" | "propose" | "simulate" | "note";
+  title: string;
+  detail: string;
+  // present on "fit" entries: the model's own fitted parameters + fit quality
+  fitted_params?: Record<string, number> | null;
+  r2_by_species?: Record<string, number> | null;
+  method?: string | null;
+}
+
+export interface OptimizationLever {
+  lever_id: string;
+  summary: string;
+  knobs: string[];
+  affected_variables: string[];
+  actionable_recommendation: string | null;
+  confidence: number;
+  supporting_specialists: string[];
+}
+
+// One round of equation discovery: a structure the agent proposed and how wrong
+// it was against the oracle.
+export interface DiscoveryRoundDTO {
+  round_index: number;
+  name: string;
+  oracle_peak_rmse: number;
+  oracle_peak_r2: number;
+  compile_ok: boolean;
+  mu: string; // the growth-rate rate law it wrote
+  equations: string[]; // full ODE system this round (aux rate laws + dX..dM)
+  fitted_params: Record<string, number>;
+  notes?: string; // the agent's reasoning for this structure
+  error?: string;
+}
+
+// The discover -> scipy-search -> oracle-verify pattern, surfaced for the UI.
+export interface EquationDiscovery {
+  proposer: string; // "template" | "llm"
+  rounds: DiscoveryRoundDTO[];
+  best_name: string;
+  best_equations: string[]; // pretty "dX/dt = ..." lines, incl. aux rate laws
+  best_fitted_params: Record<string, number>;
+  best_oracle_peak_rmse: number;
+  best_oracle_peak_r2: number;
+  search_method: string; // e.g. "scipy differential_evolution (vectorized)"
+  search_evals: number;
+  predicted_optimum_titer: number; // equation's predicted peak at its optimum
+  predicted_knobs: Record<string, number>;
+  oracle_verified_titer: number; // oracle truth at those knobs
+  oracle_true_max: number | null; // reference: oracle's own best
+  capture_pct: number | null; // verified / true_max
+  knobs_on_boundary: Record<string, string>;
+  // active learning: the recommended (condition -> LABS titer) batch appended to
+  // the training data for the next run. null if accumulation is off / no CSV.
+  appended_to_training: {
+    path: string;
+    batch_id: number;
+    rows: number;
+    peak_titer: number;
+    total_batches: number;
+    knobs: Record<string, number>;
+  } | null;
+}
+
+export interface OptimizationOutput {
+  meta: Record<string, unknown>;
+  confident: boolean;
+  refusal_reason: string | null;
+  selection_rationale: string;
+  best_candidate: Record<string, number> | null;
+  best_achieved_titer: number | null;
+  baseline_titer: number | null;
+  improvement: number | null;
+  levers: OptimizationLever[];
+  model_log: ModelLogEntry[];
+  simulator_available: boolean;
+  discovery?: EquationDiscovery | null;
+}
+
 export interface RunDetail extends RunSummary {
   bundle_dir: string | null;
   hypothesis_dir: string | null;
@@ -76,6 +167,7 @@ export interface RunDetail extends RunSummary {
   global_md: string | null;
   output: HypothesisOutput | null;
   recommendation_output: RecommendationOutput | null;
+  optimization_output: OptimizationOutput | null;
   // PR-A2 drive posture: follow-up question history + eligibility flag.
   // Legacy runs (pre-PR-A2) return [] / 0 / true-when-bundle-present.
   followups?: FollowupResultDTO[];
@@ -254,8 +346,9 @@ export async function uploadFiles(
 export async function createRun(
   uploadId: string,
   userQuestion?: string,
-): Promise<{ run_id: string; user_question?: string | null }> {
-  const body: Record<string, unknown> = { upload_id: uploadId };
+  workflow: WorkflowKind = "diagnostic",
+): Promise<{ run_id: string; user_question?: string | null; workflow?: WorkflowKind }> {
+  const body: Record<string, unknown> = { upload_id: uploadId, workflow };
   if (userQuestion && userQuestion.trim()) {
     body.user_question = userQuestion.trim();
   }

@@ -39,10 +39,11 @@ from pydantic import BaseModel, Field
 
 from fermdocs_api.runner_pipeline import (
     execute_followup_run,
+    execute_optimization_run,
     execute_resume,
     execute_run,
 )
-from fermdocs_api.state import RunStatus, RunStore
+from fermdocs_api.state import RunStatus, RunStore, WorkflowKind
 
 
 # Pydantic request/response models — defined at module scope so FastAPI's
@@ -58,6 +59,9 @@ class CreateRunRequest(BaseModel):
     # today". Capped at 2000 chars per UserQuestion schema; FastAPI rejects
     # longer with 422.
     user_question: str | None = Field(default=None, max_length=2000)
+    # Workflow selector on the input card. Defaults to the fault-finding
+    # pipeline so existing clients (no field) keep their behavior.
+    workflow: WorkflowKind = WorkflowKind.DIAGNOSTIC
 
 
 class Answer(BaseModel):
@@ -201,12 +205,20 @@ def create_app() -> FastAPI:
         if upload is None:
             raise HTTPException(404, f"upload {body.upload_id} not found")
         run = STORE.create_run(
-            body.upload_id, user_question_text=body.user_question
+            body.upload_id,
+            user_question_text=body.user_question,
+            workflow=body.workflow,
         )
-        background.add_task(execute_run, store=STORE, run=run, upload=upload)
+        if body.workflow == WorkflowKind.OPTIMIZATION:
+            background.add_task(
+                execute_optimization_run, store=STORE, run=run, upload=upload
+            )
+        else:
+            background.add_task(execute_run, store=STORE, run=run, upload=upload)
         return {
             "run_id": run.run_id,
             "status": run.status.value,
+            "workflow": run.workflow.value,
             "user_question": run.user_question_text,
         }
 
@@ -218,6 +230,7 @@ def create_app() -> FastAPI:
                     "run_id": r.run_id,
                     "upload_id": r.upload_id,
                     "status": r.status.value,
+                    "workflow": r.workflow.value,
                     "created_at": r.created_at.isoformat(),
                     "error": r.error,
                 }
@@ -264,6 +277,7 @@ def create_app() -> FastAPI:
             "run_id": run.run_id,
             "upload_id": run.upload_id,
             "status": run.status.value,
+            "workflow": run.workflow.value,
             "created_at": run.created_at.isoformat(),
             "bundle_dir": str(run.bundle_dir) if run.bundle_dir else None,
             "hypothesis_dir": str(run.hypothesis_dir) if run.hypothesis_dir else None,
@@ -272,6 +286,7 @@ def create_app() -> FastAPI:
             "error": run.error,
             "output": output,
             "recommendation_output": recommendation_output,
+            "optimization_output": run.optimization_output,
             "followups": followups,
             "followup_index": run.followup_index,
             "bundle_followup_eligible": run.bundle_followup_eligible,

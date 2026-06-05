@@ -12,6 +12,7 @@ import {
   listRuns,
   uploadFiles,
   type RunSummary,
+  type WorkflowKind,
 } from "@/lib/api";
 
 // Allowed file extensions, matched server-side in apps/api/fermdocs_api/main.py.
@@ -64,6 +65,10 @@ export default function Home() {
   // dossier carries the canonical name immediately. Critical for
   // CSV-only uploads where the LLM extractor has nothing to read.
   const [processFamily, setProcessFamily] = useState<string>("auto-detect");
+  // Which workflow the run uses. Fault-finding is the existing diagnose →
+  // hypothesize → recommend pipeline; optimization runs the opportunity debate
+  // (and the closed-loop optimizer where a process simulator exists).
+  const [workflow, setWorkflow] = useState<WorkflowKind>("diagnostic");
 
   async function refreshRuns() {
     try {
@@ -108,7 +113,7 @@ export default function Home() {
       // Empty question = legacy run. Trim before sending so a textarea
       // full of whitespace doesn't trip the "non-empty" gate downstream.
       const trimmed = userQuestion.trim();
-      const run = await createRun(up.upload_id, trimmed || undefined);
+      const run = await createRun(up.upload_id, trimmed || undefined, workflow);
       router.push(`/runs/${run.run_id}`);
     } catch (e: any) {
       setError(String(e.message ?? e));
@@ -155,6 +160,59 @@ export default function Home() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {/* Workflow selector — two checkboxes, mutually exclusive. Picks
+              which pipeline the run uses. */}
+          <div>
+            <span className="block text-sm font-medium mb-2">Workflow</span>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {([
+                {
+                  value: "diagnostic" as WorkflowKind,
+                  title: "Fault finding",
+                  desc: "Diagnose what went wrong and recommend a fix.",
+                },
+                {
+                  value: "optimization" as WorkflowKind,
+                  title: "Optimization",
+                  desc: "Find levers to push the target variable higher — even on a healthy run.",
+                },
+              ]).map((opt) => {
+                const checked = workflow === opt.value;
+                return (
+                  <button
+                    type="button"
+                    key={opt.value}
+                    role="checkbox"
+                    aria-checked={checked}
+                    disabled={submitting}
+                    onClick={() => setWorkflow(opt.value)}
+                    className={`flex items-start gap-3 rounded-md border px-3 py-2 text-left transition-colors disabled:opacity-50 ${
+                      checked
+                        ? "border-accent-deep bg-accent-glow/20 shadow-glow-soft"
+                        : "border-rule bg-surface-1 hover:border-accent-deep/60"
+                    }`}
+                  >
+                    <span
+                      aria-hidden
+                      className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px] border text-[10px] font-bold ${
+                        checked
+                          ? "border-accent-deep bg-accent text-surface-0"
+                          : "border-rule text-transparent"
+                      }`}
+                    >
+                      ✓
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block text-ui-base font-medium text-ink">
+                        {opt.title}
+                      </span>
+                      <span className="block text-xs text-ink-muted">{opt.desc}</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
           <div>
             <label
               htmlFor="user-question"
