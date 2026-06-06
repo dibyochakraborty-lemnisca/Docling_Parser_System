@@ -153,6 +153,7 @@ def discover_model_from_data(
     seed: int = 7,
     v0: float = 10.0,
     rmse_tol: float = 0.5,
+    target_peak_r2: float | None = None,
 ) -> DiscoveryReport:
     """Discover the ODE structure with NO oracle: fit candidates on a training
     split of REAL batches and score peak prediction on a held-out split. The
@@ -208,6 +209,9 @@ def discover_model_from_data(
             best = rd
         if best.oracle_peak_rmse <= rmse_tol:
             exit_reason = "converged"; break
+        # held-out peak R² is good enough -> stop discovering, go optimize
+        if target_peak_r2 is not None and best.oracle_peak_r2 >= target_peak_r2:
+            exit_reason = "r2_target_reached"; break
 
     return DiscoveryReport(
         best_spec=best.spec if best else None,

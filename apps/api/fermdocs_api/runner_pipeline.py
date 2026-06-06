@@ -964,19 +964,11 @@ def _assemble_optimization_output(bundle_dir: Path, debate_result, run_id: str) 
 
     if base["simulator_available"]:
         try:
-            out = {**base, **_run_closed_loop_optimizer(bundle_dir, run_id, levers)}
-            # Equation discovery: agent writes the ODE structure, oracle refines it,
-            # scipy searches the equation, oracle verifies. Best-effort: a failure
-            # here never sinks the optimizer result.
-            if os.environ.get("FERMDOCS_OPTIMIZE_DISCOVERY", "1") != "0":
-                try:
-                    out["discovery"] = _run_equation_discovery(bundle_dir)
-                except Exception as exc:  # noqa: BLE001
-                    _log.exception("equation discovery failed; omitting from output")
-                    out.setdefault("meta", {})["discovery_error"] = f"{type(exc).__name__}: {exc}"
-            return out
+            # Active-learning optimization: discover a model on the data, optimize
+            # it, verify the optimum on the oracle, augment + re-discover on error.
+            return {**base, **_run_active_optimization(bundle_dir)}
         except Exception as exc:  # noqa: BLE001 — fall back to debate-only, never fail the run
-            _log.exception("closed-loop optimizer failed; reporting debate levers only")
+            _log.exception("active optimization failed; reporting debate levers only")
             base["meta"]["optimizer_error"] = f"{type(exc).__name__}: {exc}"
 
     # Debate-only: still show the equations the agent's model uses.
@@ -1090,18 +1082,37 @@ def _optimizer_box_and_train(bundle_dir: Path):
 
     from fermdocs_optimize.schema import Box
 
-    box_cfg = os.environ.get("FERMDOCS_OPTIMIZE_BOX")
-    if not box_cfg:
-        raise RuntimeError("FERMDOCS_OPTIMIZE_BOX must be set (config.json with var_params)")
-    vp = _json.loads(Path(box_cfg).read_text()).get("var_params")
-    box = Box(**{k: (vp[k]["lb"], vp[k]["ub"]) for k in
-                 ("biomass", "total_sub", "malt_frac", "dilution")})
+    # seed batches (uploaded bundle, falling back to a configured CSV)
     train = _seed_training_from_bundle(bundle_dir)
     if train is None:
         train_csv = os.environ.get("FERMDOCS_OPTIMIZE_TRAIN")
         if not train_csv:
             raise RuntimeError("no seed batches and FERMDOCS_OPTIMIZE_TRAIN is unset")
         train = pd.read_csv(train_csv)[["batch", "t", "X", "S", "P", "M", "V"]]
+
+    # physical box from config (now OPTIONAL — used as a hard cap on the auto-box)
+    physical = None
+    box_cfg = os.environ.get("FERMDOCS_OPTIMIZE_BOX")
+    if box_cfg:
+        vp = _json.loads(Path(box_cfg).read_text()).get("var_params")
+        physical = Box(**{k: (vp[k]["lb"], vp[k]["ub"]) for k in
+                          ("biomass", "total_sub", "malt_frac", "dilution")})
+
+    # AUTO-BOX (default on): the agent derives the search box from the data
+    # envelope (+ margin), intersected with the physical cap if one is configured.
+    # This keeps the search where the model has evidence instead of extrapolating
+    # into no-data regions the hardcoded config would otherwise allow.
+    if os.environ.get("FERMDOCS_OPTIMIZE_AUTO_BOX", "1") != "0":
+        from fermdocs_optimize.search_space import box_from_data
+        # margin=0 => search only within the observed data envelope (no
+        # extrapolation); raise it to allow controlled exploration past the data.
+        margin = float(os.environ.get("FERMDOCS_OPTIMIZE_BOX_MARGIN", "0.0"))
+        box = box_from_data(train, margin=margin, physical=physical)
+    elif physical is not None:
+        box = physical
+    else:
+        raise RuntimeError(
+            "set FERMDOCS_OPTIMIZE_BOX (config) or keep FERMDOCS_OPTIMIZE_AUTO_BOX on")
     return box, train
 
 
@@ -1224,6 +1235,117 @@ def _run_equation_discovery(bundle_dir: Path) -> dict:
         "capture_pct": capture,
         "knobs_on_boundary": search.knobs_on_boundary,
         "appended_to_training": appended,
+    }
+
+
+def _persist_new_batches(new_df) -> dict | None:
+    """Append oracle-verified batches from the active loop to the training CSV,
+    re-numbering their ids to follow the file. No-op if no train CSV is set."""
+    import pandas as pd
+
+    train_csv = os.environ.get("FERMDOCS_OPTIMIZE_TRAIN")
+    if not train_csv or not Path(train_csv).exists() or new_df is None or len(new_df) == 0:
+        return None
+    existing = pd.read_csv(train_csv)
+    ids = pd.to_numeric(existing["batch"], errors="coerce")
+    nxt = int(ids.max()) + 1 if ids.notna().any() else 0
+    df = new_df.copy()
+    uniq = sorted(df["batch"].unique())
+    df["batch"] = df["batch"].map({old: nxt + i for i, old in enumerate(uniq)})
+    for col in existing.columns:
+        if col not in df.columns:
+            df[col] = float("nan")
+    df = df[existing.columns]
+    pd.concat([existing, df], ignore_index=True).to_csv(train_csv, index=False)
+    return {"batches": len(uniq), "total_batches": int(existing["batch"].nunique()) + len(uniq)}
+
+
+def _run_active_optimization(bundle_dir: Path) -> dict:
+    """Active-learning optimization shaped for the UI: discover a model on the
+    data, optimize it, verify the optimum on the oracle, and fold the verified
+    point(s) back in until the model's prediction matches the oracle (or the cycle
+    budget is hit). The recommendation is always the best ORACLE-VERIFIED setpoint."""
+    import pandas as pd
+
+    from fermdocs_optimize.active_optimize import active_optimize
+    from fermdocs_optimize.discovery.proposers import LLMSpecProposer, TemplateProposer
+    from fermdocs_optimize.simulators.labs import LABSSimulator
+
+    mech = os.environ["FERMDOCS_OPTIMIZE_MECH_PARAMS"]
+    gen_bin = os.environ.get("FERMDOCS_GENERATE_BATCHES_BIN", "generate-batches")
+
+    train = _seed_training_from_bundle(bundle_dir)
+    if train is None:
+        train = pd.read_csv(os.environ["FERMDOCS_OPTIMIZE_TRAIN"])[
+            ["batch", "t", "X", "S", "P", "M", "V"]]
+
+    use_llm = os.environ.get("FERMDOCS_OPTIMIZE_DISCOVERY_PROPOSER", "llm").lower() == "llm"
+    factory = (lambda: LLMSpecProposer()) if use_llm else (lambda: TemplateProposer())
+
+    # The agent decides the search box from the data (free to extend beyond the
+    # observed range — the oracle verify is the safety net). No hardcoded/config
+    # bounds. Falls back to a generous data-derived box if the agent declines.
+    box_fn = None
+    if use_llm:
+        from fermdocs_optimize.agent_box import propose_search_box
+        box_fn = lambda d: propose_search_box(d, objective_species="P")  # noqa: E731
+
+    rep, new_df = active_optimize(
+        data=train, simulator=LABSSimulator(mech, generate_batches_bin=gen_bin),
+        physical=None, proposer_factory=factory, box_fn=box_fn,
+        box_margin=float(os.environ.get("FERMDOCS_OPTIMIZE_BOX_MARGIN", "0.25")),
+        target_peak_r2=float(os.environ.get("FERMDOCS_OPTIMIZE_R2_TARGET", "0.8")),
+        inner_max_rounds=int(os.environ.get("FERMDOCS_OPTIMIZE_DISCOVERY_ROUNDS", "5")),
+        error_threshold=float(os.environ.get("FERMDOCS_OPTIMIZE_ERROR_THRESHOLD", "5.0")),
+        max_outer=int(os.environ.get("FERMDOCS_OPTIMIZE_MAX_CYCLES", "3")))
+
+    appended = None
+    if os.environ.get("FERMDOCS_OPTIMIZE_APPEND_RECOMMENDATIONS", "1") != "0":
+        try:
+            appended = _persist_new_batches(new_df)
+        except Exception:  # noqa: BLE001
+            _log.exception("persisting active-learning batches failed")
+
+    baseline = float(train.groupby("batch")["P"].max().max())
+    verified = rep.oracle_titer
+    improvement = round(verified - baseline, 3)
+
+    # boundary flags now come from the agent's own search box (which knobs the
+    # recommended optimum pinned to the edge the AGENT chose).
+    boundary = dict(rep.knobs_on_boundary)
+
+    optimization = {
+        "proposer": "llm" if use_llm else "template",
+        "converged": rep.converged,
+        "cycles": rep.n_outer,
+        "recommended_knobs": rep.best_knobs,
+        "oracle_verified_titer": verified,
+        "model_predicted_titer": rep.predicted_titer,
+        "final_error": rep.error,
+        "baseline_titer": round(baseline, 3),
+        "improvement": improvement,
+        "knobs_on_boundary": boundary,
+        "batches_added": appended["batches"] if appended else 0,
+        "total_batches": appended["total_batches"] if appended
+        else int(train["batch"].nunique()),
+        "iterations": [{
+            "cycle": it.iteration, "predicted": it.predicted_titer,
+            "oracle_verified": it.oracle_titer, "error": it.error,
+            "converged": it.converged,
+        } for it in rep.iterations],
+        "equations": rep.best_equations,
+        "model_name": rep.best_spec_name,
+        "oracle_evals": rep.n_oracle_evals,
+    }
+    return {
+        "confident": True, "refusal_reason": None,
+        "selection_rationale": "",
+        "best_candidate": rep.best_knobs,
+        "best_achieved_titer": verified,
+        "baseline_titer": round(baseline, 3),
+        "improvement": improvement,
+        "model_log": [],
+        "optimization": optimization,
     }
 
 

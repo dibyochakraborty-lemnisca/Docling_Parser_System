@@ -101,48 +101,34 @@ export interface OptimizationLever {
   supporting_specialists: string[];
 }
 
-// One round of equation discovery: a structure the agent proposed and how wrong
-// it was against the oracle.
-export interface DiscoveryRoundDTO {
-  round_index: number;
-  name: string;
-  oracle_peak_rmse: number;
-  oracle_peak_r2: number;
-  compile_ok: boolean;
-  mu: string; // the growth-rate rate law it wrote
-  equations: string[]; // full ODE system this round (aux rate laws + dX..dM)
-  fitted_params: Record<string, number>;
-  notes?: string; // the agent's reasoning for this structure
-  error?: string;
+// One active-learning cycle: the agent proposed a setpoint, predicted its titer,
+// and the simulator measured the truth there.
+export interface OptimizationCycle {
+  cycle: number;
+  predicted: number; // model's predicted titer at its optimum
+  oracle_verified: number; // what the simulator actually measured there
+  error: number; // |predicted - measured|
+  converged: boolean;
 }
 
-// The discover -> scipy-search -> oracle-verify pattern, surfaced for the UI.
-export interface EquationDiscovery {
-  proposer: string; // "template" | "llm"
-  rounds: DiscoveryRoundDTO[];
-  best_name: string;
-  best_equations: string[]; // pretty "dX/dt = ..." lines, incl. aux rate laws
-  best_fitted_params: Record<string, number>;
-  best_oracle_peak_rmse: number;
-  best_oracle_peak_r2: number;
-  search_method: string; // e.g. "scipy differential_evolution (vectorized)"
-  search_evals: number;
-  predicted_optimum_titer: number; // equation's predicted peak at its optimum
-  predicted_knobs: Record<string, number>;
-  oracle_verified_titer: number; // oracle truth at those knobs
-  oracle_true_max: number | null; // reference: oracle's own best
-  capture_pct: number | null; // verified / true_max
+// The active-learning optimization result, surfaced for the UI.
+export interface ActiveOptimization {
+  proposer: string; // "llm" | "template"
+  converged: boolean;
+  cycles: number;
+  recommended_knobs: Record<string, number>;
+  oracle_verified_titer: number; // the number to trust
+  model_predicted_titer: number; // the model's guess (for context only)
+  final_error: number;
+  baseline_titer: number;
+  improvement: number;
   knobs_on_boundary: Record<string, string>;
-  // active learning: the recommended (condition -> LABS titer) batch appended to
-  // the training data for the next run. null if accumulation is off / no CSV.
-  appended_to_training: {
-    path: string;
-    batch_id: number;
-    rows: number;
-    peak_titer: number;
-    total_batches: number;
-    knobs: Record<string, number>;
-  } | null;
+  batches_added: number; // simulator-verified experiments folded into the data
+  total_batches: number;
+  iterations: OptimizationCycle[];
+  equations: string[]; // the model the agent built (collapsed in the UI)
+  model_name: string;
+  oracle_evals: number;
 }
 
 export interface OptimizationOutput {
@@ -157,7 +143,7 @@ export interface OptimizationOutput {
   levers: OptimizationLever[];
   model_log: ModelLogEntry[];
   simulator_available: boolean;
-  discovery?: EquationDiscovery | null;
+  optimization?: ActiveOptimization | null;
 }
 
 export interface RunDetail extends RunSummary {
