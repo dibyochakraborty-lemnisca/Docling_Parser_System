@@ -47,11 +47,9 @@ def extract_opportunity_topics(
     for lever in levers:
         counter += 1
         cited_findings, cited_trajs = _evidence_for(findings, trajectories, lever.effect_variables)
-        if not cited_findings and not cited_trajs:
-            # No finding/trajectory matched this lever's variables. Every topic
-            # must cite ≥1 piece of evidence (downstream facets inherit it), so
-            # fall back to the objective-species trajectory, which always exists.
-            cited_findings, cited_trajs = _fallback_cite(findings, trajectories, objective_species)
+        # If nothing matched, the topic stays uncited — downstream facets are
+        # flagged schema_only and the critic judges them. We do not fabricate a
+        # citation just to satisfy validation (flag-don't-fake).
         topics.append(SeedTopic(
             topic_id=_topic_id(counter),
             summary=lever.question.format(obj=objective_species),
@@ -80,8 +78,6 @@ def extract_opportunity_topics(
         fvars = list(getattr(f, "variables_involved", []) or [])
         cf = [getattr(f, "finding_id")] if getattr(f, "finding_id", None) else []
         ct = _trajs_for(trajectories, fvars)
-        if not cf and not ct:
-            cf, ct = _fallback_cite(findings, trajectories, objective_species)
         topics.append(SeedTopic(
             topic_id=_topic_id(counter),
             summary=f"Observed: {getattr(f, 'summary', '')[:160]} — is there headroom to raise peak "
@@ -106,22 +102,6 @@ def _evidence_for(findings, trajectories, variables) -> tuple[list[str], list[Tr
         if getattr(f, "finding_id", None) and set(getattr(f, "variables_involved", []) or []) & vs
     ]
     return cited_findings, _trajs_for(trajectories, variables)
-
-
-def _fallback_cite(findings, trajectories, objective_species):
-    """Guarantee a topic cites ≥1 piece of evidence when nothing matched its
-    variables: prefer the objective-species trajectory, then any trajectory, then
-    any finding. Returns (finding_ids, trajectory_refs)."""
-    pref = [t for t in trajectories
-            if getattr(t, "variable", None) == objective_species and getattr(t, "run_id", None)]
-    pool = pref or [t for t in trajectories
-                    if getattr(t, "run_id", None) and getattr(t, "variable", None)]
-    if pool:
-        t = pool[0]
-        return [], [TrajectoryRef(run_id=getattr(t, "run_id"), variable=getattr(t, "variable"))]
-    fid = next((getattr(f, "finding_id") for f in findings
-                if getattr(f, "finding_id", None)), None)
-    return ([fid] if fid else []), []
 
 
 def _trajs_for(trajectories, variables) -> list[TrajectoryRef]:

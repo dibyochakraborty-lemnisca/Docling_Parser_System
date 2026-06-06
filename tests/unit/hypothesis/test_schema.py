@@ -25,32 +25,39 @@ def test_seed_topic_id_shape():
         make_seed_topic(topic_id="bad")
 
 
-def test_facet_must_cite_something():
-    with pytest.raises(ValueError, match="must cite"):
-        FacetFull(
-            facet_id="FCT-0001",
-            specialist="kinetics",
-            summary="x",
-            cited_finding_ids=[],
-            cited_narrative_ids=[],
-            cited_trajectories=[],
-            confidence=0.5,
-            confidence_basis=ConfidenceBasis.SCHEMA_ONLY,
-        )
+def test_uncited_facet_is_flagged_not_rejected():
+    """An uncited facet is kept but flagged un-grounded (schema_only, confidence
+    capped) so the critic can judge it — instead of crashing the run."""
+    f = FacetFull(
+        facet_id="FCT-0001",
+        specialist="kinetics",
+        summary="x",
+        cited_finding_ids=[],
+        cited_narrative_ids=[],
+        cited_trajectories=[],
+        confidence=0.8,
+        confidence_basis=ConfidenceBasis.STATISTICAL_TOOLKIT,
+    )
+    assert f.confidence_basis == ConfidenceBasis.SCHEMA_ONLY
+    assert f.confidence <= 0.4
 
 
-def test_hypothesis_must_cite_something():
-    with pytest.raises(ValueError, match="must cite"):
-        HypothesisFull(
-            hyp_id="H-0001",
-            summary="x",
-            facet_ids=["FCT-0001"],
-            cited_finding_ids=[],
-            cited_narrative_ids=[],
-            cited_trajectories=[],
-            confidence=0.5,
-            confidence_basis=ConfidenceBasis.SCHEMA_ONLY,
-        )
+def test_uncited_hypothesis_is_flagged_not_rejected():
+    """An uncited hypothesis is downgraded (provenance_downgraded, schema_only,
+    confidence capped) rather than rejected at the schema layer."""
+    h = HypothesisFull(
+        hyp_id="H-0001",
+        summary="x",
+        facet_ids=["FCT-0001"],
+        cited_finding_ids=[],
+        cited_narrative_ids=[],
+        cited_trajectories=[],
+        confidence=0.8,
+        confidence_basis=ConfidenceBasis.STATISTICAL_TOOLKIT,
+    )
+    assert h.provenance_downgraded is True
+    assert h.confidence_basis == ConfidenceBasis.SCHEMA_ONLY
+    assert h.confidence <= 0.4
 
 
 def test_red_flag_critique_requires_reasons():

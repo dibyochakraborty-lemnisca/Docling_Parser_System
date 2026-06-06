@@ -234,20 +234,12 @@ class SpecialistAgent:
         ]
 
         if not cited_findings and not cited_narratives and not cited_trajs:
+            # Inherit the topic's REAL evidence when the specialist cited nothing.
+            # If the topic itself is uncited, the facet stays uncited and FacetFull
+            # flags it schema_only (we do NOT fabricate a citation — flag-don't-fake).
             cited_findings = list(view.current_topic.cited_finding_ids)
             cited_narratives = list(view.current_topic.cited_narrative_ids)
             cited_trajs = list(view.current_topic.cited_trajectories)
-
-        # Last-resort safety net: a facet MUST cite ≥1 item or FacetFull rejects it
-        # and the whole run crashes. If neither the specialist nor the topic cited
-        # anything, borrow a relevant trajectory/finding from the view so one bad
-        # contribution degrades to a thin (but valid) facet instead of a hard fail.
-        if not cited_findings and not cited_narratives and not cited_trajs:
-            if view.relevant_trajectories:
-                tr = view.relevant_trajectories[0]
-                cited_trajs = [TrajectoryRef(run_id=tr.run_id, variable=tr.variable)]
-            elif view.relevant_findings:
-                cited_findings = [view.relevant_findings[0].finding_id]
 
         affected = list(parsed.get("affected_variables") or []) or list(
             view.current_topic.affected_variables

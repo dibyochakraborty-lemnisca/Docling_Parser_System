@@ -236,18 +236,27 @@ class FacetFull(BaseModel):
             raise ValueError(f"facet_id must match FCT-NNNN, got {v!r}")
         return v
 
-    @model_validator(mode="after")
-    def _has_citation(self) -> FacetFull:
-        if (
-            not self.cited_finding_ids
-            and not self.cited_narrative_ids
-            and not self.cited_trajectories
-        ):
-            raise ValueError(
-                f"{self.facet_id}: facet must cite ≥1 finding, narrative,"
-                " or trajectory"
+    @model_validator(mode="before")
+    @classmethod
+    def _flag_if_uncited(cls, data):
+        """A facet that cites no finding/narrative/trajectory is NOT rejected —
+        it's kept but flagged un-grounded (schema_only basis, confidence capped),
+        so the critic can judge it on merit and red-flag weak provenance instead
+        of the whole run crashing. (flag-don't-fake: we never fabricate a citation
+        just to pass validation.)"""
+        if isinstance(data, dict):
+            grounded = bool(
+                data.get("cited_finding_ids")
+                or data.get("cited_narrative_ids")
+                or data.get("cited_trajectories")
             )
-        return self
+            if not grounded:
+                data = {
+                    **data,
+                    "confidence_basis": ConfidenceBasis.SCHEMA_ONLY,
+                    "confidence": min(float(data.get("confidence") or 0.0), 0.4),
+                }
+        return data
 
 
 class HypothesisFull(BaseModel):
@@ -317,18 +326,27 @@ class HypothesisFull(BaseModel):
             raise ValueError(f"hyp_id must match H-NNNN, got {v!r}")
         return v
 
-    @model_validator(mode="after")
-    def _has_citation(self) -> HypothesisFull:
-        if (
-            not self.cited_finding_ids
-            and not self.cited_narrative_ids
-            and not self.cited_trajectories
-        ):
-            raise ValueError(
-                f"{self.hyp_id}: hypothesis must cite ≥1 finding, narrative,"
-                " or trajectory"
+    @model_validator(mode="before")
+    @classmethod
+    def _flag_if_uncited(cls, data):
+        """An uncited hypothesis is kept but flagged (provenance_downgraded,
+        schema_only basis, confidence capped) rather than rejected — the critic
+        then judges its weak grounding and can red-flag it. We never fabricate a
+        citation to pass validation (flag-don't-fake)."""
+        if isinstance(data, dict):
+            grounded = bool(
+                data.get("cited_finding_ids")
+                or data.get("cited_narrative_ids")
+                or data.get("cited_trajectories")
             )
-        return self
+            if not grounded:
+                data = {
+                    **data,
+                    "provenance_downgraded": True,
+                    "confidence_basis": ConfidenceBasis.SCHEMA_ONLY,
+                    "confidence": min(float(data.get("confidence") or 0.0), 0.4),
+                }
+        return data
 
 
 class CritiqueFull(BaseModel):
