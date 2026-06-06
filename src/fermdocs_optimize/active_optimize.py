@@ -1,6 +1,6 @@
 """Active-learning optimization (EGO-style) with the oracle spent only at the optimum.
 
-    discover model on DATA (held-out scored) until peak R2 >= target
+    discover model on DATA (k-fold CV scored) until pooled peak R2 >= target
         │
         ▼
     optimize the model (scipy) -> proposed optimum + predicted titer
@@ -107,7 +107,7 @@ def active_optimize(
     v0: float = 10.0,
     target_peak_r2: float = 0.8,
     inner_max_rounds: int = 6,
-    holdout: float = 0.3,
+    k_folds: int = 5,
     error_threshold: float = 5.0,
     max_outer: int = 4,
     n_neighbors: int = 3,
@@ -141,7 +141,7 @@ def active_optimize(
             box = box_from_data(work, margin=box_margin, physical=physical)
         rep = discover_model_from_data(
             data=work, proposer=proposer_factory(), max_rounds=inner_max_rounds,
-            holdout=holdout, seed=seed, v0=v0, target_peak_r2=target_peak_r2)
+            k_folds=k_folds, seed=seed, v0=v0, target_peak_r2=target_peak_r2)
         if rep.best_spec is None:
             log.warning("outer %d: discovery produced no compilable model", it)
             break

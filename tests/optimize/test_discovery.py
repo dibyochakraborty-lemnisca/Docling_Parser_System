@@ -119,18 +119,22 @@ def test_discovery_survives_a_broken_proposal():
     assert rep.best_round == 1  # the broken one is never chosen
 
 
-def test_discover_from_data_no_oracle_scores_on_holdout():
-    """No-oracle mode: equations are scored on HELD-OUT real batches, not a
-    simulator. The best structure beats the fixed mechanistic baseline."""
+def test_discover_from_data_no_oracle_scores_on_cv():
+    """No-oracle mode: equations are scored by k-fold CV on real batches, not a
+    simulator. The best structure beats the fixed mechanistic baseline, and each
+    round carries CV diagnostics (fold count, worst-fold R^2)."""
     sim = StubSimulator(); box = _box()
     data = _seed(sim, box, n=16, seed=1)  # stand-in for real lab batches
     rep = discover_model_from_data(data=data, proposer=TemplateProposer(),
-                                   max_rounds=5, holdout=0.3, seed=2)
+                                   max_rounds=5, k_folds=4, seed=2)
     assert rep.best_spec is not None
     assert rep.n_oracle_evals == 0  # truly no oracle was queried
     assert rep.baseline_peak_rmse is not None
     compiled = [r for r in rep.rounds if r.compile_ok]
     assert rep.oracle_peak_rmse == min(r.oracle_peak_rmse for r in compiled)
+    # CV diagnostics are populated on the scored rounds
+    assert all(r.cv_folds == 4 for r in compiled)
+    assert all(r.cv_worst_fold_r2 is not None for r in compiled)
 
 
 def test_model_simulator_lets_search_run_on_the_equation():

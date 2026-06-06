@@ -1296,6 +1296,7 @@ def _run_active_optimization(bundle_dir: Path) -> dict:
         box_margin=float(os.environ.get("FERMDOCS_OPTIMIZE_BOX_MARGIN", "0.25")),
         target_peak_r2=float(os.environ.get("FERMDOCS_OPTIMIZE_R2_TARGET", "0.8")),
         inner_max_rounds=int(os.environ.get("FERMDOCS_OPTIMIZE_DISCOVERY_ROUNDS", "5")),
+        k_folds=int(os.environ.get("FERMDOCS_OPTIMIZE_CV_FOLDS", "5")),
         error_threshold=float(os.environ.get("FERMDOCS_OPTIMIZE_ERROR_THRESHOLD", "5.0")),
         max_outer=int(os.environ.get("FERMDOCS_OPTIMIZE_MAX_CYCLES", "3")))
 

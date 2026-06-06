@@ -102,46 +102,97 @@ def _reconstruct_pairs(df):
     return [b[0] for b in batches], [b[1] for b in batches]
 
 
-def _split_batches(df: pd.DataFrame, holdout: float, seed: int):
-    ids = sorted(df["batch"].unique(),
-                 key=lambda x: int("".join(c for c in str(x) if c.isdigit()) or 0))
-    rng = np.random.default_rng(seed)
-    perm = rng.permutation(len(ids))
-    n_test = max(2, int(round(len(ids) * holdout)))
-    test_ids = {ids[i] for i in perm[:n_test]}
-    train = df[~df["batch"].isin(test_ids)].copy()
-    test = df[df["batch"].isin(test_ids)].copy()
-    return train, test
+def _r2(obs: np.ndarray, pred: np.ndarray) -> float:
+    sst = float(np.sum((obs - obs.mean()) ** 2))
+    return 1.0 - float(np.sum((obs - pred) ** 2)) / sst if sst > 0 else float("nan")
 
 
-def _score_on_data(model, truths, v0_default):
-    """Peak RMSE/R^2 + trajectory R^2 of a model vs held-out REAL batches."""
-    pred_peaks, obs_peaks, traj_res, traj_obs = [], [], [], []
-    for cand, peak, t, p_traj, v0 in truths:
-        traj = model.predict_P_trajectory(cand, v0=v0, t_end=float(t[-1]), n=len(t)) \
+def _collect_preds(model, truths, v0):
+    """Per-batch predicted vs observed peaks and P-trajectories for held-out
+    batches. Batches the model can't integrate (non-finite) are dropped. Returns
+    four parallel lists: (pred_peaks, obs_peaks, pred_trajs, obs_trajs)."""
+    pred_peaks, obs_peaks, pred_trajs, obs_trajs = [], [], [], []
+    for cand, peak, t, p_traj, v0b in truths:
+        traj = model.predict_P_trajectory(cand, v0=v0b, t_end=float(t[-1]), n=len(t)) \
             if hasattr(model, "predict_P_trajectory") else None
         if traj is None:
-            pp = model.predict_peak_titer(cand, v0=v0)
+            pp = model.predict_peak_titer(cand, v0=v0b)
         else:
             if not np.all(np.isfinite(traj)) or traj.max() < -1e5:
                 continue
             pp = float(traj.max())
-            traj_res.append(traj); traj_obs.append(p_traj)
+            pred_trajs.append(traj); obs_trajs.append(p_traj)
         if not np.isfinite(pp) or pp < -1e5:
             continue
         pred_peaks.append(pp); obs_peaks.append(peak)
+    return pred_peaks, obs_peaks, pred_trajs, obs_trajs
+
+
+def _metrics(pred_peaks, obs_peaks, pred_trajs, obs_trajs):
+    """Peak RMSE/R^2 + trajectory R^2 from collected predictions (needs >=2 points)."""
     if len(pred_peaks) < 2:
         return 1e6, -1e9, -1e9
     pp = np.array(pred_peaks); op = np.array(obs_peaks)
     rmse = float(np.sqrt(np.mean((pp - op) ** 2)))
-    sst = float(np.sum((op - op.mean()) ** 2))
-    peak_r2 = 1.0 - float(np.sum((op - pp) ** 2)) / sst if sst > 0 else float("nan")
+    peak_r2 = _r2(op, pp)
     traj_r2 = float("nan")
-    if traj_res:
-        ot = np.concatenate(traj_obs); pt = np.concatenate(traj_res)
-        tt = float(np.sum((ot - ot.mean()) ** 2))
-        traj_r2 = 1.0 - float(np.sum((ot - pt) ** 2)) / tt if tt > 0 else float("nan")
+    if pred_trajs:
+        traj_r2 = _r2(np.concatenate(obs_trajs), np.concatenate(pred_trajs))
     return rmse, peak_r2, traj_r2
+
+
+def _kfold_assignments(df: pd.DataFrame, k: int, seed: int) -> list[list]:
+    """Partition batch ids into k held-out folds (round-robin over a shuffled
+    order so folds are balanced). k is floored at 2 and capped at the batch count.
+    """
+    ids = sorted(df["batch"].unique(),
+                 key=lambda x: int("".join(c for c in str(x) if c.isdigit()) or 0))
+    k = max(2, min(k, len(ids)))
+    rng = np.random.default_rng(seed)
+    perm = rng.permutation(len(ids))
+    folds: list[list] = [[] for _ in range(k)]
+    for slot, idx in enumerate(perm):
+        folds[slot % k].append(ids[idx])
+    return folds
+
+
+def _cv_score(build_model, df: pd.DataFrame, folds: list[list], v0: float):
+    """Cross-validated generalization of a structure: each fold is predicted by a
+    model fit on the OTHER folds. Out-of-fold predictions are POOLED into one peak
+    R^2/RMSE — far more stable than averaging tiny per-fold R^2s on a small dataset.
+
+    Also returns the worst single-fold R^2 (a structure that overfits one operating
+    regime shows a worst-fold far below the pooled R^2), the spread across folds,
+    and how many folds failed to fit/predict (a robustness penalty signal).
+
+    `build_model` is a 0-arg factory so each fold gets a FRESH unfitted model.
+    Returns (cv_rmse, cv_peak_r2, cv_traj_r2, worst_fold_r2, fold_r2_std, n_failed).
+    """
+    all_pp, all_op, all_pt, all_ot = [], [], [], []
+    fold_r2s: list[float] = []
+    n_failed = 0
+    for held in folds:
+        held_set = set(held)
+        train_df = df[~df["batch"].isin(held_set)].copy()
+        test_df = df[df["batch"].isin(held_set)].copy()
+        try:
+            model = build_model()
+            model.fit(train_df)
+            pp, op, pt, ot = _collect_preds(model, _batch_truth(test_df), v0)
+        except Exception as exc:  # noqa: BLE001 — a fold that won't fit IS the signal
+            log.debug("CV fold failed to fit: %s", exc)
+            n_failed += 1
+            continue
+        if len(pp) < 1:
+            n_failed += 1
+            continue
+        all_pp += pp; all_op += op; all_pt += pt; all_ot += ot
+        if len(pp) >= 2:  # per-fold R^2 only meaningful with >=2 held-out points
+            fold_r2s.append(_r2(np.array(op), np.array(pp)))
+    cv_rmse, cv_peak_r2, cv_traj_r2 = _metrics(all_pp, all_op, all_pt, all_ot)
+    worst = min(fold_r2s) if fold_r2s else cv_peak_r2
+    spread = float(np.std(fold_r2s)) if len(fold_r2s) >= 2 else 0.0
+    return cv_rmse, cv_peak_r2, cv_traj_r2, worst, spread, n_failed
 
 
 def discover_model_from_data(
@@ -149,31 +200,37 @@ def discover_model_from_data(
     data: pd.DataFrame,
     proposer: SpecProposer | None = None,
     max_rounds: int = 5,
-    holdout: float = 0.3,
+    k_folds: int = 5,
     seed: int = 7,
     v0: float = 10.0,
     rmse_tol: float = 0.5,
     target_peak_r2: float | None = None,
 ) -> DiscoveryReport:
-    """Discover the ODE structure with NO oracle: fit candidates on a training
-    split of REAL batches and score peak prediction on a held-out split. The
-    held-out data is the only ground truth available. The best structure is then
-    what you search for an optimum (via ModelSimulator)."""
-    proposer = proposer or TemplateProposer()
-    train_df, test_df = _split_batches(data, holdout, seed)
-    truths = _batch_truth(test_df)
+    """Discover the ODE structure with NO oracle. Each proposed structure is graded
+    by K-FOLD cross-validation on the REAL batches: every batch is predicted by a
+    model fit without it, and the POOLED out-of-fold peak R^2 is the gate.
 
-    base = MechanisticModel(); base.fit(train_df)
-    base_rmse, _, _ = _score_on_data(base, truths, v0)
+    On a small dataset (~40 batches) a single 70/30 holdout is high-variance — the
+    target_peak_r2 gate can pass or fail on the luck of the split. CV removes that:
+    the gate fires on structures that actually generalize, which keeps the outer
+    loop from spending an oracle call on a model that only got a lucky split.
+
+    The representative model (params reported, and what the caller refits for
+    optimization) is fit on ALL the data — CV only judges the structure."""
+    proposer = proposer or TemplateProposer()
+    folds = _kfold_assignments(data, k_folds, seed)
+    actual_k = len(folds)
+
+    # Baseline: the fixed hand-written mechanistic model, CV-scored on the same folds.
+    base_rmse, *_ = _cv_score(lambda: MechanisticModel(), data, folds, v0)
 
     data_summary = {
-        "n_train_batches": int(train_df["batch"].nunique()),
-        "n_test_batches": int(test_df["batch"].nunique()),
+        "n_batches": int(data["batch"].nunique()),
+        "cv_folds": actual_k,
         "P_range": [round(float(data["P"].min()), 2), round(float(data["P"].max()), 2)],
-        "test_peak_P_range": [round(min(t[1] for t in truths), 2),
-                              round(max(t[1] for t in truths), 2)],
         "species": ["X", "S", "P", "M"], "knobs": list(KNOB_NAMES),
-        "baseline_peak_rmse": round(base_rmse, 3), "scored_against": "held_out_real_batches",
+        "baseline_peak_rmse": round(base_rmse, 3),
+        "scored_against": f"{actual_k}fold_cv_real_batches",
     }
 
     rounds: list[DiscoveryRound] = []
@@ -188,28 +245,33 @@ def discover_model_from_data(
         if spec is None:
             exit_reason = "proposer_done"; break
         try:
-            model = CandidateModel(spec); r2 = model.fit(train_df)
-            rmse, peak_r2, traj_r2 = _score_on_data(model, truths, v0)
+            model = CandidateModel(spec); r2 = model.fit(data)  # representative fit on ALL data
+            cv_rmse, cv_r2, cv_traj, worst, spread, failed = _cv_score(
+                lambda spec=spec: CandidateModel(spec), data, folds, v0)
             rd = DiscoveryRound(
                 round_index=r, spec=spec, fitted_params=model.fitted_params,
                 r2_by_species={k: round(v, 4) for k, v in r2.items()},
-                oracle_peak_rmse=round(rmse, 4), oracle_peak_r2=round(peak_r2, 4),
-                oracle_traj_r2=round(traj_r2, 4), score=round(-rmse, 4), compile_ok=True)
+                oracle_peak_rmse=round(cv_rmse, 4), oracle_peak_r2=round(cv_r2, 4),
+                oracle_traj_r2=round(cv_traj, 4), score=round(-cv_rmse, 4), compile_ok=True,
+                cv_folds=actual_k, cv_worst_fold_r2=round(worst, 4),
+                cv_fold_r2_std=round(spread, 4), cv_failed_folds=failed)
         except Exception as exc:  # noqa: BLE001
             log.warning("discovery (data) round %d failed: %s", r, exc)
             rd = DiscoveryRound(
                 round_index=r, spec=spec, fitted_params={}, r2_by_species={},
                 oracle_peak_rmse=1e6, oracle_peak_r2=-1e9, oracle_traj_r2=-1e9,
-                score=-1e6, compile_ok=False, error=f"{type(exc).__name__}: {exc}")
+                score=-1e6, compile_ok=False, error=f"{type(exc).__name__}: {exc}",
+                cv_folds=actual_k)
         rounds.append(rd)
-        log.info("round %d '%s': held-out peak RMSE=%.3f R2=%.3f (train P R2=%.3f)",
-                 r, spec.name, rd.oracle_peak_rmse, rd.oracle_peak_r2,
-                 rd.r2_by_species.get("P", float("nan")))
+        log.info("round %d '%s': CV(%d) peak RMSE=%.3f R2=%.3f worst-fold=%.3f failed=%d (full P R2=%.3f)",
+                 r, spec.name, actual_k, rd.oracle_peak_rmse, rd.oracle_peak_r2,
+                 rd.cv_worst_fold_r2 if rd.cv_worst_fold_r2 is not None else float("nan"),
+                 rd.cv_failed_folds, rd.r2_by_species.get("P", float("nan")))
         if best is None or rd.oracle_peak_rmse < best.oracle_peak_rmse:
             best = rd
         if best.oracle_peak_rmse <= rmse_tol:
             exit_reason = "converged"; break
-        # held-out peak R² is good enough -> stop discovering, go optimize
+        # cross-validated peak R² is good enough -> stop discovering, go optimize
         if target_peak_r2 is not None and best.oracle_peak_r2 >= target_peak_r2:
             exit_reason = "r2_target_reached"; break
 

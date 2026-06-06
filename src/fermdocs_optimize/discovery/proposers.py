@@ -102,8 +102,11 @@ fixed constants K_O2,q_O2_max,O2_sat,kLa,C_FEED; plus any parameters you declare
 Functions allowed: Max, Min, exp, log, sqrt, Abs, Pow (use ** for powers).
 
 Each round you see your current equations, how well they fit the DATA (per-species \
-R^2), and how wrong they are versus the ORACLE on held-out conditions (peak-titer \
-RMSE in g/L and R^2). Revise the STRUCTURE to shrink the oracle peak RMSE: change \
+R^2), and how wrong they are on held-out conditions (peak-titer RMSE in g/L and \
+R^2). When scored by cross-validation you also get a worst-fold R^2 and the spread \
+across folds: a worst-fold far below the pooled R^2 means the structure generalizes \
+on average but fails one operating regime — fix that regime, not just the mean. \
+Revise the STRUCTURE to shrink the held-out peak RMSE: change \
 rate laws, inhibition order, coupling terms, add/remove parameters. You may keep \
 parameters; their values are re-fit from data automatically — do not try to guess \
 the oracle's true parameter values, you cannot see them.
@@ -167,16 +170,25 @@ class LLMSpecProposer:
                     "Propose your first kinetic ODE structure as the JSON spec.")
         r = history[-1]  # the round just scored
         msg = (f"Result of your round {r.round_index} '{r.spec.name}': "
-               f"oracle_peak_RMSE={r.oracle_peak_rmse:.2f} g/L, "
-               f"oracle_peak_R2={r.oracle_peak_r2:.3f}, "
-               f"data_P_R2={r.r2_by_species.get('P', float('nan')):.3f}"
-               + ("" if r.compile_ok else f" [COMPILE ERROR: {r.error}]") + ".")
+               f"CV peak_RMSE={r.oracle_peak_rmse:.2f} g/L, "
+               f"CV peak_R2={r.oracle_peak_r2:.3f}")
+        if r.cv_worst_fold_r2 is not None:
+            # worst-fold << pooled R2 means the structure overfits one regime: a
+            # richer signal than the average for the model to act on.
+            msg += (f" (worst-fold R2={r.cv_worst_fold_r2:.3f}, "
+                    f"spread={(r.cv_fold_r2_std or 0.0):.3f})")
+        if r.cv_failed_folds:
+            msg += f", {r.cv_failed_folds} fold(s) failed to fit (unstable structure)"
+        msg += (f", data_P_R2={r.r2_by_species.get('P', float('nan')):.3f}"
+                + ("" if r.compile_ok else f" [COMPILE ERROR: {r.error}]") + ".")
         best = min((h for h in history if h.compile_ok),
                    key=lambda h: h.oracle_peak_rmse, default=None)
         if best is not None:
             msg += f" Best so far: '{best.spec.name}' (RMSE={best.oracle_peak_rmse:.2f})."
-        msg += (" Reason about WHY that helped or hurt, then revise the STRUCTURE to "
-                "lower the oracle peak RMSE. Return the JSON spec.")
+        msg += (" Reason about WHY that helped or hurt — if the worst fold is much "
+                "worse than the average, the structure overfits one operating regime; "
+                "fix that, not just the mean. Then revise the STRUCTURE to lower the "
+                "CV peak RMSE. Return the JSON spec.")
         return msg
 
     def propose(self, *, round_index, history, data_summary):

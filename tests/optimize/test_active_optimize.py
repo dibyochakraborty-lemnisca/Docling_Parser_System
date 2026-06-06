@@ -32,7 +32,7 @@ def test_converges_and_oracle_only_at_optimum():
     sim = StubSimulator(); box = _box(); data = _seed(sim, box)
     rep, new = active_optimize(
         data=data, simulator=sim, physical=box, proposer_factory=lambda: TemplateProposer(),
-        target_peak_r2=0.8, inner_max_rounds=5, holdout=0.3, error_threshold=5.0,
+        target_peak_r2=0.8, inner_max_rounds=5, k_folds=4, error_threshold=5.0,
         max_outer=3, n_neighbors=2, seed=1)
     assert rep.converged is True
     assert rep.error <= 5.0
@@ -64,7 +64,7 @@ def test_augments_data_when_model_is_wrong():
     sim = StubSimulator(); box = _box(); data = _seed(sim, box)
     rep, new = active_optimize(
         data=data, simulator=sim, physical=box, proposer_factory=lambda: TemplateProposer(),
-        target_peak_r2=0.99, inner_max_rounds=2, holdout=0.3,
+        target_peak_r2=0.99, inner_max_rounds=2, k_folds=4,
         error_threshold=1e-6, max_outer=2, n_neighbors=2, seed=3)
     # with an impossibly tight threshold it should run multiple outer iters and
     # append oracle-verified batches to the data
