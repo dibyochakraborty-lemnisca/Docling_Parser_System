@@ -71,10 +71,11 @@ def test_nominal_and_std_dev_optional():
 
 def test_production_yaml_loads_as_v2():
     schema = load_schema()
-    # v2.1: dropped static nominal/std_dev for fed-batch dynamic variables
-    # (substrate_g_l, volume_l, weight_kg) — these grow / spike legitimately
-    # in fed-batch processes and produced false range_violation findings.
-    # See plans/2026-05-03-hypothesis-debate-v0.md IndPenSim postmortem.
+    # The schema carries NO hardcoded nominal/std_dev for any variable. Static
+    # "expected value" specs encoded a process's assumed normals (e.g. pH 6.5)
+    # and produced false "below spec" findings on processes that legitimately
+    # differ (lactic-acid runs are acidic by design). Expectations are now
+    # derived from the data, never baked into the schema.
     assert schema.version == "2.1"
     by_name = schema.by_name()
     expected_variables = {
@@ -82,19 +83,11 @@ def test_production_yaml_loads_as_v2():
         "dissolved_o2_mg_l", "volume_l", "weight_kg", "ph", "temperature_k",
         "paa_mg_l", "nh3_mg_l", "alpha_kla",
     }
-    # Vars that intentionally have no static bounds in v2.1.
-    fed_batch_dynamic = {"substrate_g_l", "volume_l", "weight_kg"}
     for var in expected_variables:
         assert var in by_name, f"missing variable {var} in v2 schema"
         col = by_name[var]
-        if var in fed_batch_dynamic:
-            assert col.nominal is None, (
-                f"{var} should have no nominal (fed-batch dynamic) in v2.1"
-            )
-            assert col.std_dev is None
-        else:
-            assert col.nominal is not None, f"{var} missing nominal in production YAML"
-            assert col.std_dev is not None, f"{var} missing std_dev in production YAML"
+        assert col.nominal is None, f"{var} must carry no hardcoded nominal"
+        assert col.std_dev is None, f"{var} must carry no hardcoded std_dev"
 
 
 def test_production_yaml_identifier_columns_have_no_specs():
@@ -238,13 +231,12 @@ def test_overrides_dossier_partial_without_required_fields_falls_back_to_schema(
 
 
 def test_production_yaml_via_overrides_with_empty_dossier():
-    """Smoke: real production schema works through the override path."""
+    """With no hardcoded schema specs and no dossier _specs overrides, there
+    are no specs at all — expectations come from the data, not the schema."""
     schema = load_schema()
     provider = DictSpecsProvider.from_schema_with_overrides(schema, {})
     for var in ("biomass_g_l", "ph", "alpha_kla"):
-        spec = provider.get(var)
-        assert spec is not None
-        assert spec.provenance == "schema"
+        assert provider.get(var) is None
 
 
 # ---------- schema_version on Observation ----------

@@ -83,14 +83,30 @@ def build_summary(
                 )
                 continue
 
+            # A non-numeric value/time (e.g. a stray "-" missing marker that
+            # slipped through ingestion) must not crash the whole stage; drop
+            # the single observation and keep going.
+            try:
+                f_time = float(time)
+                f_value = float(value)
+            except (TypeError, ValueError):
+                dropped.append(
+                    DroppedObservation(
+                        observation_id=str(obs_id),
+                        variable=variable,
+                        reason="non-numeric value or timestamp",
+                    )
+                )
+                continue
+
             spec = specs.get(variable)
             rows.append(
                 SummaryRow(
                     observation_id=str(obs_id),
                     run_id=str(run_id),
-                    time=float(time),
+                    time=f_time,
                     variable=variable,
-                    value=float(value),
+                    value=f_value,
                     unit=str(unit),
                     expected=spec.nominal if spec else None,
                     expected_std_dev=spec.std_dev if spec else None,

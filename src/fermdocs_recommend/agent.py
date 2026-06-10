@@ -31,7 +31,7 @@ from fermdocs_recommend.tools_bundle.factory import make_recommend_tools
 _log = logging.getLogger(__name__)
 
 DEFAULT_MAX_STEPS = 20
-_MODEL_TYPES = ("mechanistic", "surrogate", "hybrid")
+_MODEL_TYPES = ("mechanistic", "surrogate", "hybrid", "mechanistic_discovered")
 
 
 _PROMPT_TEMPLATE = '''You are a bioprocess modeling agent. Goal: given confirmed hypotheses about a
@@ -146,6 +146,10 @@ class RecommendationAgent:
     ) -> RecommendationOutput:
         rec_id = recommendation_id or uuid.uuid4()
         ts = generation_timestamp or datetime.now(timezone.utc)
+        # Reset per-call complements so a prior run's analysis can't leak into
+        # this output (the cached path below doesn't set them).
+        self._discovered = None
+        self._cross_run = None
 
         # Routing: data-rich families with a cached base model (IndPenSim) use the
         # pre-trained path (no on-the-fly fitting, no LLM needed). Everything else
@@ -161,6 +165,18 @@ class RecommendationAgent:
 
         if self._client is None:
             return self._error_output(rec_id, ts, run_id, error="no_llm_client")
+
+        # Complementary mechanistic-discovery family: an improvement loop that fits
+        # ONE ODE structure across all runs (leave-runs-out, product-gated). Runs
+        # alongside the agent's brewtwin bake-off; injected into the candidate pool
+        # in _build_output. Never breaks the stage.
+        self._discovered = self._discover_complementary(bundle)
+
+        # Cross-run comparative levers: relate per-run operating-condition knobs
+        # (from dossier["run_conditions"]) to the run outcome across all runs.
+        # This is the actionable path when per-run dynamic fits are
+        # unidentifiable. Deterministic; never breaks the stage.
+        self._cross_run = self._cross_run_analysis(bundle)
 
         try:
             return self._run_loop(bundle, hypothesis_output_path, rec_id, ts, run_id)
@@ -284,9 +300,67 @@ class RecommendationAgent:
         return src if isinstance(src, dict) else {}
 
     # ------------------------------------------------------------------
+    def _discover_complementary(self, bundle) -> dict | None:
+        """Run the mechanistic improvement loop on the bundle's observations and
+        return a rubric-shaped candidate (or None). Wrapped so it never breaks the
+        stage; LLM proposer with a deterministic template fallback."""
+        import os
+
+        import pandas as pd
+
+        try:
+            obs_path = Path(bundle.dir) / "characterization" / "observations.csv"
+            if not obs_path.exists():
+                return None
+            obs = pd.read_csv(obs_path)
+            from fermdocs_recommend.mech_discovery import (
+                LLMMechProposer,
+                TemplateMechProposer,
+                discover_mechanistic,
+            )
+            rounds = int(os.environ.get("FERMDOCS_RECOMMEND_MECH_ROUNDS", "5"))
+            use_llm = (os.environ.get("FERMDOCS_RECOMMEND_MECH_PROPOSER", "llm").lower() == "llm"
+                       and os.environ.get("GEMINI_API_KEY"))
+            if use_llm:
+                try:
+                    return discover_mechanistic(obs, proposer=LLMMechProposer(), max_rounds=rounds)
+                except Exception:  # noqa: BLE001 — fall back to the deterministic walk
+                    _log.exception("mech discovery (LLM) failed; template fallback")
+            return discover_mechanistic(obs, proposer=TemplateMechProposer(), max_rounds=rounds)
+        except Exception:  # noqa: BLE001 — complementary family must never break the stage
+            _log.exception("complementary mechanistic discovery failed")
+            return None
+
+    def _cross_run_analysis(self, bundle) -> dict | None:
+        """Run the deterministic cross-run comparative engine on the bundle's
+        per-run conditions + observations. Returns a result dict (or None).
+        Wrapped so it never breaks the stage."""
+        import pandas as pd
+
+        try:
+            obs_path = Path(bundle.dir) / "characterization" / "observations.csv"
+            if not obs_path.exists():
+                return None
+            try:
+                dossier = bundle.get_dossier()
+            except Exception:  # noqa: BLE001 — no dossier => no conditions
+                return None
+            from fermdocs_recommend import cross_run
+
+            return cross_run.analyze(dossier, pd.read_csv(obs_path))
+        except Exception:  # noqa: BLE001 — comparative path must never break the stage
+            _log.exception("cross-run comparative analysis failed")
+            return None
+
     def _build_output(self, payload: dict, rec_id, ts, run_id) -> RecommendationOutput:
         raw_candidates = payload.get("candidates", []) or []
         normalized = self._normalize_candidates(raw_candidates)
+        # Inject the complementary discovered-mechanistic candidate into the pool so
+        # the rubric scores it head-to-head with the brewtwin families.
+        disc = getattr(self, "_discovered", None)
+        if isinstance(disc, dict) and disc.get("model_type") == "mechanistic_discovered":
+            normalized = [disc if c["model_type"] == "mechanistic_discovered" else c
+                          for c in normalized]
 
         # The rubric is authoritative for the verdict.
         verdict = rubric.select(normalized, objective_in_coverage=True)
@@ -317,11 +391,41 @@ class RecommendationAgent:
             )
 
         recommended = verdict["recommended_model"]
+        confident = verdict["confident"]
+        refusal_reason = verdict["refusal_reason"]
+        rationale = verdict["selection_rationale"]
+
         interventions: list[Intervention] = []
         if recommended != "none":
             interventions = self._coerce_interventions(payload.get("interventions", []))
 
-        rationale = verdict["selection_rationale"]
+        # Cross-run comparative path. When the dynamic bake-off refused but the
+        # comparative engine cleared its gate, the actionable answer is the
+        # cross-run levers — promote it to the recommendation. When a dynamic
+        # model won, attach the cross-run levers as supplementary interventions.
+        cr = getattr(self, "_cross_run", None)
+        if isinstance(cr, dict) and cr.get("interventions"):
+            cr_interventions = self._coerce_interventions(cr["interventions"])
+            if recommended == "none" and cr.get("cleared"):
+                recommended = "cross_run_comparative"
+                confident = True
+                refusal_reason = None
+                rationale = cr.get("summary") or "cross-run comparative recommendation"
+                interventions = cr_interventions
+                candidates.append(
+                    CandidateReport(
+                        model_type="cross_run_comparative",
+                        attempted=True,
+                        good_fit=True,
+                        good_fit_reason=(
+                            f"comparative association over {cr.get('n_runs')} runs"
+                        ),
+                        eligible_species=[cr.get("objective")],
+                    )
+                )
+            elif recommended != "none":
+                interventions = interventions + cr_interventions
+
         llm_note = (payload.get("selection_rationale") or "").strip()
         if llm_note:
             rationale = f"{rationale} | agent note: {llm_note[:400]}"
@@ -329,8 +433,8 @@ class RecommendationAgent:
         return RecommendationOutput(
             meta=self._meta(rec_id, ts, run_id),
             recommended_model=recommended,
-            confident=verdict["confident"],
-            refusal_reason=verdict["refusal_reason"],
+            confident=confident,
+            refusal_reason=refusal_reason,
             selection_rationale=rationale,
             candidates=candidates,
             interventions=interventions,

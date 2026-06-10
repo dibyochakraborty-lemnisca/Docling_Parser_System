@@ -79,6 +79,36 @@ def build_narrative_extractor(
     return LLMNarrativeExtractor(provider=provider)
 
 
+def build_layout_detector(provider: str | None = None):
+    """Build a LayoutDetector for structure-agnostic table ingestion.
+
+    Returns None for 'fake'/'none' so the pipeline keeps the legacy naive
+    parser-table path (used by tests and offline runs). Resolution:
+    explicit arg > FERMDOCS_LAYOUT_PROVIDER > FERMDOCS_MAPPER_PROVIDER >
+    'gemini'.
+    """
+    from fermdocs.mapping.layout_detector import LayoutDetector
+
+    name = (
+        provider
+        or os.environ.get("FERMDOCS_LAYOUT_PROVIDER")
+        or os.environ.get("FERMDOCS_MAPPER_PROVIDER", "gemini")
+    ).lower()
+    if name in ("fake", "none"):
+        return None
+    if name == "gemini":
+        from fermdocs.mapping.layout_detector import GeminiLayoutClient
+
+        return LayoutDetector(GeminiLayoutClient())
+    if name == "anthropic":
+        from fermdocs.mapping.layout_detector import AnthropicLayoutClient
+
+        return LayoutDetector(AnthropicLayoutClient())
+    raise UnknownProviderError(
+        f"unknown layout provider: {name!r} (expected 'anthropic', 'gemini', 'fake', or 'none')"
+    )
+
+
 def build_segmenter(provider: str | None = None):
     """Build a DocumentSegmenter for PDF run-id assignment.
 

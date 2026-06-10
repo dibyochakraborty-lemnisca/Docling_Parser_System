@@ -41,8 +41,6 @@ columns:
     description: Biomass concentration (X).
     data_type: float
     canonical_unit: g/L
-    nominal: 0.5
-    std_dev: 0.05
     synonyms: [biomass, X, cell_concentration, cell_density, DCW, dry_cell_weight]
     examples:
       - {raw_header: "Biomass (X)"}
@@ -53,8 +51,6 @@ columns:
     description: Maximum specific growth rate.
     data_type: float
     canonical_unit: h^-1
-    nominal: 0.41
-    std_dev: 0.025
     synonyms: [mu_x, mu_x_max, mu_max, max_specific_growth_rate, mumax]
     examples:
       - {raw_header: "mu_x (max)"}
@@ -65,8 +61,6 @@ columns:
     description: Maximum specific product formation rate.
     data_type: float
     canonical_unit: h^-1
-    nominal: 0.041
-    std_dev: 0.0025
     synonyms: [mu_p, mu_p_max, q_p_max, max_specific_product_rate]
     examples:
       - {raw_header: "mu_p (max)"}
@@ -87,12 +81,24 @@ columns:
       - {raw_header: "S [g/L]"}
       - {raw_header: "Glucose (g/L)"}
 
+  - name: product_g_l
+    # No nominal/std_dev: product titer rises monotonically through the run, so
+    # static bounds would fire false range_violation findings (same reasoning as
+    # substrate_g_l / volume_l above). The objective trajectory for most processes.
+    description: Product (titer) concentration (P). Static bounds intentionally omitted (rises through run).
+    data_type: float
+    canonical_unit: g/L
+    synonyms: [product, titer, P, target_product, lactate, lactic_acid, ethanol_titer]
+    examples:
+      - {raw_header: "Product (g/L)"}
+      - {raw_header: "Titer (g/L)"}
+      - {raw_header: "Lactic Acid (g/L)"}
+      - {raw_header: "P [g/L]"}
+
   - name: dissolved_o2_mg_l
     description: Dissolved oxygen concentration.
     data_type: float
     canonical_unit: mg/L
-    nominal: 15.0
-    std_dev: 0.5
     synonyms: [DO, dissolved_oxygen, dO2, DO_mg_l]
     examples:
       - {raw_header: "Dissolved O2"}
@@ -129,8 +135,6 @@ columns:
     description: Broth pH.
     data_type: float
     canonical_unit: pH
-    nominal: 6.5
-    std_dev: 0.1
     synonyms: [pH, pH_setpoint, pH_sp, pH_target]
     examples:
       - {raw_header: "pH"}
@@ -140,8 +144,6 @@ columns:
     description: Cultivation temperature.
     data_type: float
     canonical_unit: K
-    nominal: 297.0
-    std_dev: 0.5
     synonyms: [temp, temperature, T, cultivation_temp]
     examples:
       - {raw_header: "Temperature"}
@@ -152,8 +154,6 @@ columns:
     description: Phenylacetic acid concentration.
     data_type: float
     canonical_unit: mg/L
-    nominal: 1400.0
-    std_dev: 50.0
     synonyms: [PAA, phenylacetic_acid, phenylacetate]
     examples:
       - {raw_header: "PAA"}
@@ -164,8 +164,6 @@ columns:
     description: Ammonia concentration in broth.
     data_type: float
     canonical_unit: mg/L
-    nominal: 1700.0
-    std_dev: 50.0
     synonyms: [NH3, ammonia, NH3_conc]
     examples:
       - {raw_header: "NH3"}
@@ -176,8 +174,6 @@ columns:
     description: Oxygen mass-transfer coefficient scaling factor.
     data_type: float
     canonical_unit: null
-    nominal: 85.0
-    std_dev: 10.0
     synonyms: [alpha_kla, alphaKLa, alpha_kLa, kla_alpha]
     examples:
       - {raw_header: "alpha_kla"}
@@ -200,8 +196,6 @@ columns:
     description: Oxygen Uptake Rate. Universal aerobic metabolic indicator.
     data_type: float
     canonical_unit: mmol/L/h
-    nominal: null
-    std_dev: null
     synonyms: [OUR, oxygen_uptake_rate, qO2, q_O2, OUR_mmol]
     examples:
       - {raw_header: "OUR"}
@@ -212,8 +206,6 @@ columns:
     description: Carbon Evolution Rate (CO2 production). Pairs with OUR for RQ.
     data_type: float
     canonical_unit: mmol/L/h
-    nominal: null
-    std_dev: null
     synonyms: [CER, carbon_evolution_rate, qCO2, q_CO2, CO2_evolution]
     examples:
       - {raw_header: "CER"}
@@ -224,8 +216,6 @@ columns:
     description: Respiratory Quotient (CER / OUR). Indicates metabolic regime.
     data_type: float
     canonical_unit: "1"
-    nominal: null
-    std_dev: null
     synonyms: [RQ, respiratory_quotient, RQ_value]
     examples:
       - {raw_header: "RQ"}
@@ -235,8 +225,6 @@ columns:
     description: Broth viscosity. Critical for mycelial / non-Newtonian cultures.
     data_type: float
     canonical_unit: cP
-    nominal: null
-    std_dev: null
     synonyms: [viscosity, mu, broth_viscosity, apparent_viscosity]
     examples:
       - {raw_header: "Viscosity"}
@@ -247,8 +235,6 @@ columns:
     description: Impeller agitation speed.
     data_type: float
     canonical_unit: rpm
-    nominal: null
-    std_dev: null
     synonyms: [RPM, rpm, agitation, impeller_speed, stirrer_rpm]
     examples:
       - {raw_header: "RPM"}
@@ -259,8 +245,6 @@ columns:
     description: Headspace pressure in the bioreactor.
     data_type: float
     canonical_unit: bar
-    nominal: null
-    std_dev: null
     synonyms: [pressure, head_pressure, headspace_pressure, P_head]
     examples:
       - {raw_header: "Pressure"}
@@ -271,8 +255,6 @@ columns:
     description: Aeration / sparge gas flow rate. Universal across aerobic processes.
     data_type: float
     canonical_unit: L/min
-    nominal: null
-    std_dev: null
     synonyms: [gas_flow, aeration_rate, Fg, sparge_rate, air_flow, vvm_flow]
     examples:
       - {raw_header: "Fg"}
@@ -283,8 +265,6 @@ columns:
     description: Substrate feed rate (generic). Process-specific feed identities (PAA, IPTG, antifoam) belong in process_priors when that lands.
     data_type: float
     canonical_unit: L/h
-    nominal: null
-    std_dev: null
     synonyms: [feed_rate, F_s, substrate_feed_rate, glucose_feed_rate, carbon_feed]
     examples:
       - {raw_header: "Fs"}
@@ -306,8 +286,6 @@ columns:
     description: Optical density at 600 nm. Universal proxy for biomass; converts to g/L only with strain-specific calibration.
     data_type: float
     canonical_unit: au
-    nominal: null
-    std_dev: null
     synonyms: [OD600, OD_600, OD, optical_density, OD600nm]
     examples:
       - {raw_header: "OD600"}
@@ -318,8 +296,6 @@ columns:
     description: Dissolved oxygen as percent of air saturation. Distinct from dissolved_o2_mg_l (absolute concentration); industrial probes typically report this.
     data_type: float
     canonical_unit: "%"
-    nominal: null
-    std_dev: null
     synonyms: [pO2, pO2_pct, DO_pct, DO_percent, dissolved_oxygen_pct]
     examples:
       - {raw_header: "pO2"}
@@ -330,8 +306,6 @@ columns:
     description: Viable cell fraction as percent. Drops in late phase indicate cell death; pigment loss in carotenoid yeast manifests here too.
     data_type: float
     canonical_unit: "%"
-    nominal: null
-    std_dev: null
     synonyms: [viability, viable_pct, viable_fraction, cell_viability]
     examples:
       - {raw_header: "Viability"}
@@ -343,8 +317,6 @@ columns:
     description: Ethanol concentration. Crabtree-positive yeast overflow metabolism marker; the primary diagnostic signal for S. cerevisiae overfeeding.
     data_type: float
     canonical_unit: g/L
-    nominal: null
-    std_dev: null
     synonyms: [ethanol, EtOH, ethanol_conc]
     examples:
       - {raw_header: "Ethanol"}
@@ -355,8 +327,6 @@ columns:
     description: Glycerol concentration. Common alternative carbon source for yeast (especially Pichia) and a byproduct/intermediate in some processes.
     data_type: float
     canonical_unit: g/L
-    nominal: null
-    std_dev: null
     synonyms: [glycerol, Gly, glycerol_conc]
     examples:
       - {raw_header: "Glycerol"}
@@ -366,8 +336,6 @@ columns:
     description: Wet cell weight. Distinct from biomass_g_l (dry); WCW ≈ 4-5x DCW for yeast and bacteria. Industrial reports often use this.
     data_type: float
     canonical_unit: g/L
-    nominal: null
-    std_dev: null
     synonyms: [WCW, wet_cell_weight, wet_weight, wet_biomass]
     examples:
       - {raw_header: "WCW"}
@@ -379,8 +347,6 @@ columns:
     description: Acetate concentration. Acetate overflow is the E. coli equivalent of ethanol overflow; >5 g/L typically inhibits growth.
     data_type: float
     canonical_unit: g/L
-    nominal: null
-    std_dev: null
     synonyms: [acetate, acetic_acid, AcOH, acetate_conc]
     examples:
       - {raw_header: "Acetate"}
@@ -391,8 +357,6 @@ columns:
     description: IPTG inducer concentration. Trajectory shape pre/post induction is the E. coli protein-production diagnostic anchor.
     data_type: float
     canonical_unit: mM
-    nominal: null
-    std_dev: null
     synonyms: [IPTG, IPTG_conc, isopropyl_thiogalactoside]
     examples:
       - {raw_header: "IPTG"}
@@ -403,8 +367,6 @@ columns:
     description: Lactose inducer / carbon source. Auto-induction systems use lactose; trajectory complements IPTG diagnostics.
     data_type: float
     canonical_unit: g/L
-    nominal: null
-    std_dev: null
     synonyms: [lactose, Lac, lactose_conc]
     examples:
       - {raw_header: "Lactose"}

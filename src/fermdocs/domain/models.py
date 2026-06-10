@@ -222,6 +222,13 @@ class ParseResult(BaseModel):
     tables: list[ParsedTable] = Field(default_factory=list)
     narrative_blocks: list["NarrativeBlock"] = Field(default_factory=list)
     feed_plan_tables: list[ParsedTable] = Field(default_factory=list)
+    # Raw, header-less cell grids keyed by source id ("file#sheet"). The
+    # naive `tables` above assume row 0 is the header (pandas default),
+    # which is wrong for metadata-heavy lab sheets. The layout detector
+    # reads these grids to locate the real header row + data span. CSV /
+    # Excel parsers populate this; PDF leaves it empty (PDF has its own
+    # segmenter).
+    raw_grids: dict[str, list[list[Any]]] = Field(default_factory=dict)
 
 
 class MappingEntry(BaseModel):
@@ -328,6 +335,13 @@ class ResidualPayload(BaseModel):
     # into runs?" — e.g. diagnose can cite "BATCH-04 REPORT (page 9)" when
     # surfacing a finding.
     document_map: dict[str, Any] | None = None
+    # Per-run operating-condition knobs extracted from sheet metadata blocks
+    # by the layout detector (initial substrate, base, inoculum, setpoints).
+    # Keyed by run_id -> {knob_name: {value, unit, label, confidence,
+    # source_cell}}. These are the controllable conditions the cross-run
+    # recommendation engine reasons over; they are NOT time-series
+    # measurements so they stay out of the observation stream.
+    run_conditions: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class IngestionFileResult(BaseModel):
@@ -341,6 +355,13 @@ class IngestionFileResult(BaseModel):
     narrative_extractions_kept: int = 0
     narrative_extractions_rejected: int = 0
     narrative_extractions_deduped: int = 0
+    # Observations flagged for human review (low layout confidence or
+    # values that failed physical-plausibility). Distinct from rejected.
+    observations_needing_review: int = 0
+    # Loud signal for a silent ingestion failure: set when the file parsed
+    # but yielded zero observations despite carrying tabular data, or when
+    # the layout detector was uncertain. None means a clean ingest.
+    ingestion_warning: str | None = None
 
 
 class IngestionResult(BaseModel):

@@ -41,6 +41,9 @@ class GeminiHeaderMapper:
                 response_mime_type="application/json",
                 response_schema=_GEMINI_RESPONSE_SCHEMA,
                 temperature=0.0,
+                max_output_tokens=int(
+                    os.environ.get("FERMDOCS_MAPPER_MAX_TOKENS", "16384")
+                ),
             ),
         )
         text = response.text
@@ -51,7 +54,27 @@ class GeminiHeaderMapper:
             print(f"[gemini] raw_response={text!r}", file=sys.stderr)
         if not text:
             raise ValueError("Gemini returned empty response")
-        payload = json.loads(text)
+        from fermdocs.json_utils import loads_lenient
+
+        try:
+            payload = loads_lenient(text)
+        except json.JSONDecodeError:
+            # Truncated/malformed structured output (e.g. the response hit the
+            # token cap mid-string). Degrade to no mapping for these tables --
+            # their columns fall to residual and the pipeline's coverage gate
+            # flags it -- rather than crashing the whole run with a raw
+            # JSONDecodeError. The dedupe in the pipeline keeps responses small
+            # so this is a backstop, not the common path.
+            import sys
+
+            print(
+                f"[gemini] mapper response not valid JSON (len={len(text)}); "
+                "returning empty mapping for these tables",
+                file=sys.stderr,
+            )
+            return MappingResult(
+                tables=[TableMapping(table_id=t.table_id, entries=[]) for t in tables]
+            )
         return _parse_response(payload)
 
 

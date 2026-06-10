@@ -128,6 +128,12 @@ function RefinementCard({ a }: { a: ActiveOptimization }) {
               <span className="flex-1">
                 model guessed <span className="font-mono">{fmt(it.predicted)}</span>, simulator measured{" "}
                 <span className="font-mono text-accent">{fmt(it.oracle_verified)}</span>
+                {(it.box_expansions ?? 0) > 0 && (
+                  <span className="ml-1 text-ink-faint">
+                    · searched beyond the starting range
+                    {(it.box_expansions ?? 0) > 1 ? ` (widened ${it.box_expansions}×)` : ""}
+                  </span>
+                )}
               </span>
               {it.converged ? (
                 <Badge variant="success" className="text-[10px]">matched</Badge>

@@ -67,7 +67,11 @@ def test_good_mechanistic_is_recommended(tmp_path):
     out = agent.recommend(_DummyReader(tmp_path))
     assert out.recommended_model == "mechanistic"
     assert out.confident is True
-    assert len(out.candidates) == 3
+    # 4 families now: the 3 brewtwin + the complementary mechanistic_discovered
+    # (here "not attempted" — _DummyReader has no observations.csv to discover on).
+    assert len(out.candidates) == 4
+    disc = [c for c in out.candidates if c.model_type == "mechanistic_discovered"]
+    assert len(disc) == 1 and disc[0].attempted is False
     assert len(out.interventions) == 1
 
 

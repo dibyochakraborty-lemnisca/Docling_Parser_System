@@ -10,11 +10,6 @@ import pint
 
 _log = logging.getLogger(__name__)
 
-# A converted value this many times the variable's nominal is treated as a
-# suspected unit mislabel (e.g. a column tagged g/L whose values are really
-# mg/L, inflating by 1000x). Override via FERMDOCS_UNIT_PLAUSIBILITY_FACTOR.
-_DEFAULT_PLAUSIBILITY_FACTOR = 50.0
-
 from fermdocs.domain.models import ConversionStatus
 from fermdocs.units.normalizer import (
     NormalizationAction,
@@ -45,58 +40,11 @@ class UnitConverter:
         unit_raw: str | None,
         canonical_unit: str | None,
         normalizer: UnitNormalizer | None = None,
-        nominal: float | None = None,
     ) -> ConversionResult:
         result = self._convert_with_pint(value, unit_raw, canonical_unit)
         if result.status == ConversionStatus.FAILED and normalizer is not None and unit_raw:
             hint = normalizer.normalize(unit_raw, canonical_unit or "", value)
             result = self.apply_hint(value, unit_raw, canonical_unit, hint)
-        return self._correct_mislabeled_unit(result, value, unit_raw, canonical_unit, nominal)
-
-    def _correct_mislabeled_unit(
-        self,
-        result: ConversionResult,
-        value: Any,
-        unit_raw: str | None,
-        canonical_unit: str | None,
-        nominal: float | None,
-    ) -> ConversionResult:
-        """Undo a unit conversion that produced a physically implausible value.
-
-        When a source column's declared unit is wrong (e.g. IndPenSim's PAA/NH3
-        offline columns tagged 'g/L' but holding mg/L values), pint faithfully
-        scales by the conversion factor and emits an absurd magnitude that
-        characterization then flags as a fake anomaly. If the variable has a
-        nominal and the converted value is >FACTOR x nominal while the
-        UN-converted value is plausible, the label was almost certainly wrong by
-        exactly that factor: treat the source value as already canonical.
-        """
-        if (
-            result.status != ConversionStatus.OK
-            or result.value_canonical is None
-            or not nominal
-            or unit_raw is None
-            or canonical_unit is None
-            or unit_raw == canonical_unit
-        ):
-            return result
-        try:
-            raw = float(value)
-        except (TypeError, ValueError):
-            return result
-        try:
-            factor = float(os.environ.get("FERMDOCS_UNIT_PLAUSIBILITY_FACTOR", "") or _DEFAULT_PLAUSIBILITY_FACTOR)
-        except ValueError:
-            factor = _DEFAULT_PLAUSIBILITY_FACTOR
-        ceiling = abs(nominal) * factor
-        converted = abs(result.value_canonical)
-        if converted > ceiling and abs(raw) <= ceiling:
-            _log.warning(
-                "unit-normalizer: %r->%r yielded %.4g (>%.0fx nominal %.4g) but the source "
-                "value %.4g is plausible; treating it as already %s (suspected mislabeled unit)",
-                unit_raw, canonical_unit, result.value_canonical, factor, nominal, raw, canonical_unit,
-            )
-            return replace(result, value_canonical=raw, via="unit_corrected")
         return result
 
     def apply_hint(

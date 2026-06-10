@@ -18,8 +18,13 @@ from pydantic import BaseModel, Field, model_validator
 RECOMMENDATION_SCHEMA_VERSION = "1.0.0"
 RECOMMENDATION_AGENT_VERSION = "0.1.0"
 
-ModelType = Literal["mechanistic", "surrogate", "hybrid"]
-RecommendedModel = Literal["mechanistic", "surrogate", "hybrid", "none"]
+ModelType = Literal[
+    "mechanistic", "surrogate", "hybrid", "mechanistic_discovered", "cross_run_comparative"
+]
+RecommendedModel = Literal[
+    "mechanistic", "surrogate", "hybrid", "mechanistic_discovered",
+    "cross_run_comparative", "none",
+]
 
 
 class RecommendationMeta(BaseModel):

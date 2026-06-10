@@ -13,6 +13,7 @@ from fermdocs.file_store.local import LocalFileStore
 from fermdocs.mapping.client import dump_response_schema
 from fermdocs.mapping.factory import (
     build_identity_client,
+    build_layout_detector,
     build_mapper,
     build_narrative_extractor,
     build_segmenter,
@@ -98,11 +99,21 @@ def _build_pipeline(
     )
     document_segmenter = build_segmenter(provider=segmenter_provider)
 
+    # Layout detector (LLM-driven). Locates the real header row + data span
+    # on messy CSV/Excel so ingestion is structure-agnostic. Default ON;
+    # fake_mapper / FERMDOCS_LAYOUT_PROVIDER=none disables (legacy naive
+    # parser-table path).
+    layout_provider = os.environ.get("FERMDOCS_LAYOUT_PROVIDER") or (
+        "none" if use_fake_mapper else (provider or "gemini")
+    )
+    layout_detector = build_layout_detector(provider=layout_provider)
+
     return (
         IngestionPipeline(
             router, mapper, converter, repo, file_store, schema,
             normalizer, narrative_extractor,
             document_segmenter=document_segmenter,
+            layout_detector=layout_detector,
         ),
         repo,
     )

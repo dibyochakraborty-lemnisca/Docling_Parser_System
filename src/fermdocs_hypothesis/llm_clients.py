@@ -122,8 +122,10 @@ class GeminiHypothesisClient:
             print(f"[gemini-hypothesis] raw_response={text!r}", file=sys.stderr)
         if not text:
             raise ValueError("Gemini returned empty hypothesis response")
+        from fermdocs.json_utils import loads_lenient
+
         try:
-            parsed = json.loads(text)
+            parsed = loads_lenient(text)
         except json.JSONDecodeError:
             # One retry on malformed JSON. Truncation under heavy load
             # appears non-deterministic (different runs land different
@@ -133,7 +135,7 @@ class GeminiHypothesisClient:
             response, text = _one_call()
             if not text:
                 raise
-            parsed = json.loads(text)
+            parsed = loads_lenient(text)
         in_tok, out_tok = _extract_usage(response, system, user_text, text)
         return parsed, in_tok, out_tok
 

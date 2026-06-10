@@ -123,30 +123,29 @@ def _empty_output() -> CharacterizationOutput:
     )
 
 
-def test_agent_context_picks_up_schema_specs_for_real_dossier():
-    """variables_with_specs must populate from the schema YAML for ingestion
-    dossiers that lack _specs. This is the IndPenSim regression: every
-    measurement variable was incorrectly classified as 'no specs'.
-    """
+def test_agent_context_has_no_schema_specs_without_dossier_overrides():
+    """The schema carries no hardcoded specs, so an ingestion dossier that
+    lacks _specs has NO variables_with_specs — expectations come from the
+    data, not baked-in nominals. Specs appear only when a dossier supplies
+    _specs overrides (see test_explicit_specs_provider_still_wins)."""
     dossier = _real_ingestion_dossier_shape()
     output = _empty_output()
 
     ctx = build_agent_context(dossier, output)
 
-    # biomass_g_l and ph both have nominal+std_dev in golden_schema.yaml
-    assert "biomass_g_l" in ctx.variables_with_specs
-    assert "ph" in ctx.variables_with_specs
-    assert ctx.variables_without_specs == []
+    assert ctx.variables_with_specs == []
+    assert "biomass_g_l" in ctx.variables_without_specs
+    assert "ph" in ctx.variables_without_specs
 
 
-def test_specs_mostly_missing_flag_does_not_fire_when_schema_provides():
-    """Regression: with schema-based specs, the SPECS_MOSTLY_MISSING flag
-    must not fire on a dossier that has no _specs. Pre-fix it always fired.
-    """
+def test_specs_mostly_missing_flag_fires_without_hardcoded_specs():
+    """With no hardcoded schema specs, an ingestion dossier with no _specs has
+    no specs at all, so SPECS_MOSTLY_MISSING fires — the intended steady state
+    now (agents reason from data, not from baked-in expected values)."""
     dossier = _real_ingestion_dossier_shape()
     output = _empty_output()
     ctx = build_agent_context(dossier, output)
-    assert ProcessFlag.SPECS_MOSTLY_MISSING not in ctx.flags
+    assert ProcessFlag.SPECS_MOSTLY_MISSING in ctx.flags
 
 
 def test_explicit_specs_provider_still_wins():

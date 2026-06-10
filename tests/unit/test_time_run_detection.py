@@ -43,9 +43,20 @@ def test_whitespace_trimmed():
     assert _detect_time_column(headers) == 0
 
 
+def test_detects_time_with_unit_annotation():
+    # Regression (praaj run e01ab295): "Time (Hours)" was undetected because
+    # the matcher compared the whole header, not the unit-stripped base. That
+    # left observations without a timestamp -> empty observations.csv.
+    assert _detect_time_column(["Indent No", "Sample Name", "Time (Hours)"]) == 2
+    assert _detect_time_column(["Time [min]"]) == 0
+    assert _detect_time_column(["Elapsed Time (h)"]) == 0
+
+
 def test_no_match_returns_none():
     headers = ["x", "y", "z"]
     assert _detect_time_column(headers) is None
+    # a unit annotation must not turn a non-time column into one
+    assert _detect_time_column(["Temperature (C)", "Sugar (%w/w)"]) is None
 
 
 def test_empty_headers():

@@ -10,12 +10,20 @@ Integrity: fits on observation data ONLY. Never reads the oracle's parameters.
 """
 from __future__ import annotations
 
+import os
 import warnings
 
 import numpy as np
 import pandas as pd
 from scipy.integrate import odeint
 from scipy.optimize import least_squares
+
+# Per-integration step cap. Stiff LLM-proposed structures otherwise grind to the
+# old 2000-step ceiling on every one of hundreds of fit/search evaluations, which
+# is what makes a run take hours. 500 is scipy's own default and is exactly what
+# the trusted hand-written MechanisticModel runs at, so healthy structures are
+# unaffected; only pathological ones bail sooner and get scored worst.
+_MXSTEP = int(os.environ.get("FERMDOCS_OPTIMIZE_ODE_MXSTEP", "500"))
 
 from fermdocs_optimize.discovery.expr import CompiledModel, compile_spec
 from fermdocs_optimize.discovery.spec import ModelSpec
@@ -58,7 +66,28 @@ class CandidateModel:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             return odeint(self._compiled.rhs, y0, exp["t"],
-                          args=(theta, cond, self._const), mxstep=2000)
+                          args=(theta, cond, self._const), mxstep=_MXSTEP)
+
+    def _integrable(self, batches, theta, *, min_ok_frac: float = 0.5) -> bool:
+        """Cheap pre-flight: can this structure even be integrated at `theta`?
+
+        A stiff/divergent structure otherwise costs up to max_nfev * n_batches
+        full integrations before least_squares gives up. This runs ONE capped
+        integration per batch and bails the whole candidate if too many fail to
+        converge — milliseconds to reject garbage instead of minutes."""
+        ok = 0
+        for exp, _ in batches:
+            y0 = list(exp["y0"]); y0[4] = self._o2["O2_sat"]
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                sol, info = odeint(
+                    self._compiled.rhs, y0, exp["t"],
+                    args=(theta, self._cond(exp), self._const),
+                    mxstep=_MXSTEP, full_output=True)
+            if str(info.get("message", "")).startswith("Integration successful") \
+                    and np.all(np.isfinite(sol)):
+                ok += 1
+        return ok >= max(1, int(min_ok_frac * len(batches)))
 
     def _residuals(self, theta, batches):
         res = []
@@ -80,6 +109,9 @@ class CandidateModel:
         x0 = np.array([p[n].init for n in self.spec.param_names()], float)
         lb = np.array([p[n].lb for n in self.spec.param_names()], float)
         ub = np.array([p[n].ub for n in self.spec.param_names()], float)
+        if not self._integrable(batches, x0):
+            raise RuntimeError(
+                "candidate structure not integrable (stiff/non-convergent at init)")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             sol = least_squares(self._residuals, x0, bounds=(lb, ub), method="trf",

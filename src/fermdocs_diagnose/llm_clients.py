@@ -112,7 +112,10 @@ class GeminiDiagnosisClient:
             )
         if not text:
             raise ValueError("Gemini returned empty diagnosis response")
-        return json.loads(text)
+        from fermdocs.json_utils import loads_lenient
+
+        # Truncation is handled above; here tolerate invalid backslash escapes.
+        return loads_lenient(text)
 
 
 class AnthropicDiagnosisClient:

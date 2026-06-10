@@ -18,6 +18,8 @@ import json
 import os
 from typing import Any
 
+from fermdocs.json_utils import loads_lenient
+
 _GEMINI_DEFAULT_MODEL = "gemini-3-pro"
 
 
@@ -75,7 +77,9 @@ class GeminiCharacterizeClient:
             print(f"[gemini-characterize] raw_response={text!r}", file=sys.stderr)
         if not text:
             raise ValueError("Gemini returned empty characterize response")
-        parsed = json.loads(text)
+        # Lenient parse: tolerate invalid backslash escapes (e.g. chemical
+        # names / units in finding text) that would otherwise crash the stage.
+        parsed = loads_lenient(text)
         in_tok, out_tok = _extract_usage(response, system, user_text, text)
         return parsed, in_tok, out_tok
 

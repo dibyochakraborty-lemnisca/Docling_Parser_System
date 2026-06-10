@@ -298,6 +298,14 @@ def build_dossier(
 
     rehydrated_blocks = _residual_narrative_blocks(residuals)
 
+    # Per-run operating-condition knobs (layout detector, metadata blocks),
+    # merged across residual records by run_id. The cross-run recommendation
+    # engine reads dossier["run_conditions"] to relate conditions -> outcome.
+    run_conditions: dict[str, Any] = {}
+    for r in residuals:
+        for run_id, knobs in (r.payload.get("run_conditions") or {}).items():
+            run_conditions.setdefault(str(run_id), {}).update(knobs)
+
     identity = _resolve_identity(
         manifest_path=manifest_path,
         llm_client=identity_llm_client,
@@ -342,6 +350,7 @@ def build_dossier(
             ],
         },
         "golden_columns": golden_columns,
+        "run_conditions": run_conditions,
         "residual": {
             "summary": {
                 "residual_records": len(residuals),

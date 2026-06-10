@@ -109,6 +109,7 @@ export interface OptimizationCycle {
   oracle_verified: number; // what the simulator actually measured there
   error: number; // |predicted - measured|
   converged: boolean;
+  box_expansions?: number; // times the search box was widened to chase an out-of-range optimum
 }
 
 // The active-learning optimization result, surfaced for the UI.

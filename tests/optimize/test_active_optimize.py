@@ -6,7 +6,11 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from fermdocs_optimize.active_optimize import active_optimize
+from fermdocs_optimize.active_optimize import (
+    _grow_box,
+    _search_beyond_bounds,
+    active_optimize,
+)
 from fermdocs_optimize.discovery.proposers import TemplateProposer
 from fermdocs_optimize.schema import Box, Candidate
 from fermdocs_optimize.simulators.stub import StubSimulator
@@ -15,6 +19,15 @@ from fermdocs_optimize.simulators.stub import StubSimulator
 def _box() -> Box:
     return Box(biomass=(0.5, 5.0), total_sub=(10.0, 100.0),
                malt_frac=(0.05, 0.95), dilution=(0.005, 0.1))
+
+
+class _RampModel:
+    """Fake fitted model whose peak P rises monotonically with total_sub, so the
+    optimizer always wants to push total_sub past the box's upper edge — the
+    out-of-bounds-optimum case the expansion is built for."""
+
+    def predict_P_trajectory(self, c, *, v0, t_end, n):
+        return np.full(n, 0.5 * c.total_sub)
 
 
 def _seed(sim, box, n=12, seed=0):
@@ -32,7 +45,7 @@ def test_converges_and_oracle_only_at_optimum():
     sim = StubSimulator(); box = _box(); data = _seed(sim, box)
     rep, new = active_optimize(
         data=data, simulator=sim, physical=box, proposer_factory=lambda: TemplateProposer(),
-        target_peak_r2=0.8, inner_max_rounds=5, k_folds=4, error_threshold=5.0,
+        target_peak_r2=0.8, inner_max_rounds=5, holdout=0.3, error_threshold=5.0,
         max_outer=3, n_neighbors=2, seed=1)
     assert rep.converged is True
     assert rep.error <= 5.0
@@ -64,7 +77,7 @@ def test_augments_data_when_model_is_wrong():
     sim = StubSimulator(); box = _box(); data = _seed(sim, box)
     rep, new = active_optimize(
         data=data, simulator=sim, physical=box, proposer_factory=lambda: TemplateProposer(),
-        target_peak_r2=0.99, inner_max_rounds=2, k_folds=4,
+        target_peak_r2=0.99, inner_max_rounds=2, holdout=0.3,
         error_threshold=1e-6, max_outer=2, n_neighbors=2, seed=3)
     # with an impossibly tight threshold it should run multiple outer iters and
     # append oracle-verified batches to the data
@@ -72,3 +85,47 @@ def test_augments_data_when_model_is_wrong():
         assert rep.n_outer >= 2
         assert rep.batches_added > 0
         assert len(new) > 0  # new batches returned for the caller to persist
+
+
+def test_grow_box_pushes_pinned_edges_and_respects_floors():
+    """A pinned edge moves out by grow*span; the 0 floor and untouched knobs hold."""
+    box = Box(biomass=(0.0, 5.0), total_sub=(10.0, 100.0),
+              malt_frac=(0.05, 0.95), dilution=(0.005, 0.1))
+    grown = _grow_box(box, {"total_sub": "upper", "biomass": "lower"}, None, 0.5)
+    assert grown.total_sub[1] == 100.0 + 0.5 * 90.0     # upper grew by 0.5*span
+    assert grown.biomass[0] == 0.0                       # lower already at floor, can't go below 0
+    assert grown.dilution == box.dilution               # untouched knob unchanged
+
+
+def test_grow_box_returns_equal_when_pinned_edge_is_capped():
+    """If the pinned edge is already at the physical cap, the box can't grow — the
+    loop relies on this equality to stop expanding."""
+    box = Box(biomass=(0.5, 5.0), total_sub=(10.0, 100.0),
+              malt_frac=(0.05, 0.95), dilution=(0.005, 0.1))
+    physical = Box(biomass=(0.0, 5.0), total_sub=(0.0, 100.0),
+                   malt_frac=(0.0, 1.0), dilution=(0.0, 0.1))
+    grown = _grow_box(box, {"total_sub": "upper"}, physical, 0.5)
+    assert grown == box
+
+
+def test_search_expands_box_to_reach_out_of_bounds_optimum():
+    """The optimum rises with total_sub past the box edge: the search pushes the
+    edge out and re-searches, spending the whole expansion budget."""
+    box = _box()
+    search, final_box, n_exp = _search_beyond_bounds(
+        _RampModel(), box, None, objective_species="P", v0=10.0, seed=1,
+        max_expansions=4, grow=0.5)
+    assert n_exp == 4
+    assert final_box.total_sub[1] > 100.0               # box grew past the original ceiling
+    assert search.best_titer > 0.5 * 100.0              # optimum beats the original-box best
+
+
+def test_search_does_not_expand_when_capped_at_physical():
+    """With a physical cap at the start box, the pinned optimum can't escape, so no
+    expansion happens (and the oracle is never pulled out to a no-data region)."""
+    box = _box()
+    search, final_box, n_exp = _search_beyond_bounds(
+        _RampModel(), box, box, objective_species="P", v0=10.0, seed=1,
+        max_expansions=4, grow=0.5)
+    assert n_exp == 0
+    assert final_box == box

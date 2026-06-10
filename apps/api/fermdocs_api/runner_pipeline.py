@@ -66,7 +66,11 @@ def _run_recommendation_blocking(
 
     reader = BundleReader(bundle_dir)
     client = build_recommend_client()
-    agent = RecommendationAgent(client=client)
+    # 4x the agent's default step budget (20 -> 80): the recommendation ReAct loop
+    # was exhausting steps before calling submit_recommendation on rich multi-run
+    # bundles. Env-tunable.
+    max_steps = int(os.environ.get("FERMDOCS_RECOMMEND_MAX_STEPS", "80"))
+    agent = RecommendationAgent(client=client, max_steps=max_steps)
     return agent.recommend(
         reader, hypothesis_output_path=hypothesis_output_path, run_id=run_id
     )
@@ -1296,8 +1300,10 @@ def _run_active_optimization(bundle_dir: Path) -> dict:
         box_margin=float(os.environ.get("FERMDOCS_OPTIMIZE_BOX_MARGIN", "0.25")),
         target_peak_r2=float(os.environ.get("FERMDOCS_OPTIMIZE_R2_TARGET", "0.8")),
         inner_max_rounds=int(os.environ.get("FERMDOCS_OPTIMIZE_DISCOVERY_ROUNDS", "5")),
-        k_folds=int(os.environ.get("FERMDOCS_OPTIMIZE_CV_FOLDS", "5")),
+        holdout=float(os.environ.get("FERMDOCS_OPTIMIZE_HOLDOUT", "0.3")),
         error_threshold=float(os.environ.get("FERMDOCS_OPTIMIZE_ERROR_THRESHOLD", "5.0")),
+        max_expansions=int(os.environ.get("FERMDOCS_OPTIMIZE_MAX_EXPANSIONS", "4")),
+        expand_grow=float(os.environ.get("FERMDOCS_OPTIMIZE_EXPAND_GROW", "0.5")),
         max_outer=int(os.environ.get("FERMDOCS_OPTIMIZE_MAX_CYCLES", "3")))
 
     appended = None
@@ -1333,6 +1339,7 @@ def _run_active_optimization(bundle_dir: Path) -> dict:
             "cycle": it.iteration, "predicted": it.predicted_titer,
             "oracle_verified": it.oracle_titer, "error": it.error,
             "converged": it.converged,
+            "box_expansions": it.n_box_expansions,
         } for it in rep.iterations],
         "equations": rep.best_equations,
         "model_name": rep.best_spec_name,

@@ -63,6 +63,10 @@ def propose_search_box(data, *, objective_species: str = "P",
                 system_instruction=_SYSTEM.format(obj=objective_species),
                 response_mime_type="application/json", temperature=0.2))
         raw = _extract_json(resp.text)
+        # Gemini occasionally leaves stray quotes/whitespace on keys (e.g. the
+        # key '"biomass"' instead of 'biomass'), which turns a normal lookup into
+        # a KeyError. Normalize keys so the bounds still resolve.
+        raw = {str(k).strip().strip('"').strip("'"): v for k, v in raw.items()}
     except Exception as exc:  # noqa: BLE001
         log.warning("agent search-box call failed (%s); using data-derived box", exc)
         return None
