@@ -223,6 +223,71 @@ def _gather_knob_pairs(
     return knob_pairs
 
 
+def _value_key(v: Any):
+    """Stable grouping key: rounded float for numbers, str otherwise."""
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return round(float(v), 9)
+    return str(v)
+
+
+def _lever_run_values(conditions: dict, outcomes: dict[str, float]) -> dict[str, dict[str, Any]]:
+    """{lever: {run_id: value}} over runs that have an outcome — aligned by run
+    so we can compare which runs each lever partitions together."""
+    rv: dict[str, dict[str, Any]] = {}
+    for run_id, knobs in conditions.items():
+        rid = str(run_id)
+        if rid not in outcomes or not isinstance(knobs, dict):
+            continue
+        for knob, spec in knobs.items():
+            val = _spec_value(spec)
+            if val is not None:
+                rv.setdefault(knob, {})[rid] = val
+    return rv
+
+
+def _partition(run_values: dict[str, Any]) -> frozenset:
+    """The set of run-groups a lever induces (runs sharing a value)."""
+    groups: dict[Any, set[str]] = {}
+    for run, v in run_values.items():
+        groups.setdefault(_value_key(v), set()).add(run)
+    return frozenset(frozenset(s) for s in groups.values())
+
+
+def _confound_flags(rvbl: dict[str, dict[str, Any]]) -> dict[str, tuple[bool, str | None]]:
+    """Data-relative confound detection (no hardcoded 'this factor is bad'):
+      - a lever with ~one distinct value per run is a run LABEL, not a knob
+        (e.g. glycerol lot number) — its 'effect' is just between-run variance;
+      - two levers that partition the runs IDENTICALLY are aliased — their
+        effects are not separable (e.g. impeller type tracking reactor id).
+    Either way the association is not attributable, so it must not be argued as
+    a causal lever. Returns {lever: (confounded, reason)}."""
+    flags: dict[str, tuple[bool, str | None]] = {}
+    levers = list(rvbl)
+    for a in levers:
+        rva = rvbl[a]
+        if len(rva) < MIN_RUNS:
+            flags[a] = (False, None)
+            continue
+        if len({_value_key(v) for v in rva.values()}) >= len(rva):
+            flags[a] = (True, "aliases the run index (~one distinct value per run)")
+            continue
+        match = None
+        for b in levers:
+            if b == a:
+                continue
+            shared = set(rva) & set(rvbl[b])
+            if len(shared) < MIN_RUNS:
+                continue
+            pa = _partition({r: rva[r] for r in shared})
+            pb = _partition({r: rvbl[b][r] for r in shared})
+            if pa == pb and len(pa) > 1:
+                match = b
+                break
+        flags[a] = (match is not None,
+                    f"aliased with {match} (identical run grouping)" if match else None)
+    return flags
+
+
 def lever_effects(
     dossier: dict[str, Any] | None,
     obs_df: pd.DataFrame,
@@ -244,6 +309,7 @@ def lever_effects(
         return {}
     ys = list(outcomes.values())
     spread = float(max(ys) - min(ys))
+    cflags = _confound_flags(_lever_run_values(conditions, outcomes))
     out: dict[str, dict[str, Any]] = {}
     for knob, pairs in _gather_knob_pairs(conditions, outcomes).items():
         if len(pairs) < MIN_RUNS:
@@ -257,7 +323,9 @@ def lever_effects(
         if effect is None:
             continue
         norm = min(abs(float(effect["delta"])) / spread, 1.0) if spread > 0 else 0.0
-        out[knob] = {**effect, "norm_effect": round(norm, 4)}
+        confounded, reason = cflags.get(knob, (False, None))
+        out[knob] = {**effect, "norm_effect": round(norm, 4),
+                     "confounded": confounded, "confounded_with": reason}
     return out
 
 

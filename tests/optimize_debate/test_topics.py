@@ -154,6 +154,29 @@ def test_weak_association_is_labelled_in_topic_summary():
     assert "WEAK" not in strong.summary     # real effect not flagged
 
 
+def test_confounded_lever_is_labelled_and_does_not_lead():
+    from fermdocs_hypothesis.ranker import rank_topics
+    from fermdocs_optimize.lever_discovery import Lever
+
+    levers = [Lever("impeller_type", "categorical", "metadata", {"R0": "A", "R1": "B"}),
+              Lever("nitrogen_source", "categorical", "metadata", {"R0": "C", "R1": "D"})]
+    # impeller has a big apparent effect BUT is confounded; nitrogen is clean.
+    effects = {
+        "impeller_type": {"delta": 50.0, "n": 8, "best_setting": "B", "norm_effect": 0.95,
+                          "confounded": True, "confounded_with": "aliased with reactor"},
+        "nitrogen_source": {"delta": 30.0, "n": 8, "best_setting": "D", "norm_effect": 0.7,
+                            "confounded": False, "confounded_with": None},
+    }
+    topics = extract_opportunity_topics(_char(), discovered_levers=levers, lever_effects=effects)
+    imp = next(t for t in topics if t.source_id == "lever-impeller_type")
+    nit = next(t for t in topics if t.source_id == "lever-nitrogen_source")
+    assert "CONFOUNDED" in imp.summary
+    assert imp.effect_size == 0.0          # confounded -> zeroed, won't lead ranking
+    # the clean lever leads despite the confounded one's larger raw effect
+    ranked = rank_topics(topics, [], k=5)
+    assert ranked[0].topic_id == nit.topic_id
+
+
 def test_no_discovered_levers_falls_back_to_static():
     # discovery did not run (None) -> static LABS lever set still used.
     topics = extract_opportunity_topics(_char(), discovered_levers=None)

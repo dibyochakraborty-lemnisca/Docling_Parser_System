@@ -74,11 +74,19 @@ def _discovered_lever_topic(lever, *, objective_species: str, counter: int,
         delta, n = effect.get("delta"), effect.get("n")
         best = effect.get("best_setting")
         if delta is not None:
-            weak = " (WEAK: small vs run-to-run scatter; a lead to test, not validated)" \
-                if is_weak_effect(effect.get("norm_effect")) else ""
+            if effect.get("confounded"):
+                # Effect not attributable -> must not lead the debate as a lever.
+                effect_size = 0.0
+                qualifier = (f" (CONFOUNDED: {effect.get('confounded_with')}; the effect "
+                             "is not separable / not attributable — do NOT argue this as a "
+                             "causal lever)")
+            elif is_weak_effect(effect.get("norm_effect")):
+                qualifier = " (WEAK: small vs run-to-run scatter; a lead to test, not validated)"
+            else:
+                qualifier = ""
             summary += (f" Across {n} runs this associates with {delta:+g} "
                         f"{objective_species} (best observed: {best}); observational, "
-                        f"not proven causal.{weak}")
+                        f"not proven causal.{qualifier}")
     return SeedTopic(
         topic_id=_topic_id(counter),
         summary=summary,

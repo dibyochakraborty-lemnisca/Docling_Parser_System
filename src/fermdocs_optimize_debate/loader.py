@@ -82,11 +82,15 @@ def _build_within_run_pool(lever_effects: dict) -> list:
             continue
         n = int(eff.get("n", 0))
         best = eff.get("best_setting")
-        weak = is_weak_effect(eff.get("norm_effect"))
-        strength = (" WEAK/preliminary: the effect is a small fraction of the "
-                    "run-to-run scatter, likely within noise on a confounded set — "
-                    "treat as a lead to test, NOT a validated effect."
-                    if weak else "")
+        if eff.get("confounded"):
+            strength = (f" CONFOUNDED ({eff.get('confounded_with')}): the effect is not "
+                        "separable / not attributable — do NOT act on this lever alone.")
+        elif is_weak_effect(eff.get("norm_effect")):
+            strength = (" WEAK/preliminary: the effect is a small fraction of the "
+                        "run-to-run scatter, likely within noise on a confounded set — "
+                        "treat as a lead to test, NOT a validated effect.")
+        else:
+            strength = ""
         summary = (f"Across {n} runs, {lever} associates with {delta:+g} peak titer "
                    f"(best observed: {best}); observational, not proven causal.{strength}")
         pool.append(WithinRunAssociationRef(

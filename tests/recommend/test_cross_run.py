@@ -129,3 +129,24 @@ def test_cross_run_wins_when_bakeoff_refuses(tmp_path, monkeypatch):
     assert out.refusal_reason is None
     assert len(out.interventions) == 1
     assert out.interventions[0].knob == "initial_sugar"
+
+
+def test_lever_effects_flags_confounded_levers():
+    # 8 runs. reactor and impeller partition the runs IDENTICALLY (aliased);
+    # lot is unique per run (run label); nitrogen has a distinct partition.
+    titers = {f"R{i}": 100.0 + 5 * i for i in range(8)}
+    conds = {}
+    for i in range(8):
+        grp = "A" if i < 4 else "B"          # reactor / impeller share this split
+        conds[f"R{i}"] = {
+            "reactor": {"value": grp},
+            "impeller": {"value": f"imp_{grp}"},           # tracks reactor exactly
+            "lot": {"value": f"LOT-{i}"},                  # one value per run
+            "nitrogen": {"value": "CSL" if i % 2 == 0 else "YE"},  # different split
+        }
+    eff = cross_run.lever_effects(_dossier(conds), _runs_with_titer(titers))
+    assert eff["reactor"]["confounded"] is True            # aliased with impeller
+    assert eff["impeller"]["confounded"] is True
+    assert eff["lot"]["confounded"] is True                # run label
+    assert "run index" in eff["lot"]["confounded_with"]
+    assert eff["nitrogen"]["confounded"] is False          # independent partition
