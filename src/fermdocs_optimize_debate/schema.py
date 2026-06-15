@@ -32,7 +32,12 @@ class OptimizationLever(BaseModel):
 
     lever_id: str                              # the hypothesis hyp_id
     summary: str
-    knobs: list[str] = Field(default_factory=list)        # which knobs this lever moves
+    # The controllable lever(s) this hypothesis is about. For the data path these
+    # are the REAL discovered design factors (from the hypothesis's cited
+    # within-run associations, e.g. main_fermentation_nitrogen_source); only when
+    # a hypothesis cites no association (LABS synthetic path) do they fall back to
+    # the static LABS knob mapping (biomass/total_sub/malt_frac/dilution).
+    knobs: list[str] = Field(default_factory=list)
     affected_variables: list[str] = Field(default_factory=list)
     actionable_recommendation: str | None = None
     confidence: float = 0.0
@@ -51,10 +56,15 @@ def levers_from_output(output) -> list[OptimizationLever]:
         affected = list(_get(h, "affected_variables", []) or [])
         specialists = [s.value if hasattr(s, "value") else str(s)
                        for s in _get(h, "supporting_specialists", []) or []]
+        # Prefer the REAL design factors the hypothesis cited (WRA-<lever> ->
+        # <lever>); only fall back to the LABS knob map when it cited none.
+        assoc_ids = list(_get(h, "cited_association_ids", []) or [])
+        design_factors = [a[4:] if a.startswith("WRA-") else a for a in assoc_ids]
+        knobs = design_factors or knobs_for_variables(affected)
         levers.append(OptimizationLever(
             lever_id=_get(h, "hyp_id", "H-0000"),
             summary=_get(h, "summary", ""),
-            knobs=knobs_for_variables(affected),
+            knobs=knobs,
             affected_variables=affected,
             actionable_recommendation=_get(h, "actionable_recommendation", None),
             confidence=float(_get(h, "confidence", 0.0) or 0.0),

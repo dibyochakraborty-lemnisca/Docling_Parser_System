@@ -285,7 +285,24 @@ def test_levers_from_output_sorts_and_maps():
                         actionable_recommendation=None, confidence=0.9, supporting_specialists=[]),
     ])
     levers = levers_from_output(out)
-    # knob-bearing lever sorts above the higher-confidence-but-unmappable one
+    # no associations cited -> LABS-knob fallback (back-compat for the LABS path)
     assert levers[0].lever_id == "H-0002"
     assert "total_sub" in levers[0].knobs
     assert levers[1].knobs == []  # pH maps to no knob, kept for narrative
+
+
+def test_levers_from_output_uses_real_design_factors_when_associations_cited():
+    # Data path: a hypothesis citing within-run associations should badge the
+    # REAL design factors, NOT the LABS knob set (the H-0005/H-0007 wart).
+    out = SimpleNamespace(final_hypotheses=[
+        SimpleNamespace(
+            hyp_id="H-0001", summary="nitrogen source drives titer",
+            affected_variables=["P"], actionable_recommendation="use YE Leiber H",
+            confidence=0.8, supporting_specialists=["metabolic"],
+            cited_association_ids=["WRA-main_fermentation_nitrogen_source",
+                                   "WRA-impeller_type_10l"]),
+    ])
+    knobs = levers_from_output(out)[0].knobs
+    assert knobs == ["main_fermentation_nitrogen_source", "impeller_type_10l"]
+    # crucially NOT the LABS knob set
+    assert "biomass" not in knobs and "total_sub" not in knobs
