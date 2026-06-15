@@ -48,6 +48,16 @@ arithmetic errors, and overreach beyond the cited evidence. You can
 verify numerical claims with execute_python (sandboxed pandas/numpy
 against the bundle's observations.csv when available).
 
+CITATION TYPES: cited_finding_ids, cited_narrative_ids, AND
+cited_association_ids are ALL valid evidence. cited_association_ids carry
+'WRA-*' ids = within-run cross-run associations (a design factor's measured
+effect on the objective across runs). They resolve in view.citation_lookups
+exactly like findings — an entry of type 'within_run_association' carries the
+real lever/delta/direction/n/best_setting. A WRA-* id that RESOLVES in
+citation_lookups is REAL evidence; the delta/best_setting it carries are NOT
+hallucinations. Only flag an association citation when the id does NOT resolve
+in citation_lookups.
+
 Your job is NOT to rewrite the hypothesis. It is to flag concrete
 problems if they exist. If the hypothesis is sound, file a green flag
 with no reasons. If it is not sound, file a red flag with concrete,

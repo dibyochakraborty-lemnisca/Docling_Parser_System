@@ -132,6 +132,18 @@ def _aligned_pair(
 # ---------------------------------------------------------------------------
 
 
+def _sampling_resolution_h(time_h) -> float | None:
+    """Median spacing between consecutive samples (data-derived). A rate cannot be
+    resolved finer than this, and lags shorter than it are invisible — so any
+    rate/lag finding must declare it."""
+    ts = sorted(float(t) for t in time_h)
+    diffs = sorted(b - a for a, b in zip(ts, ts[1:]) if b > a)
+    if not diffs:
+        return None
+    n = len(diffs)
+    return diffs[n // 2] if n % 2 else (diffs[n // 2 - 1] + diffs[n // 2]) / 2.0
+
+
 @_register_adapter("A8")
 def _adapter_a8(bundle: _BundleView, run_id: str | None) -> dict | None:
     """A8: specific growth rate μ(t)."""
@@ -144,14 +156,24 @@ def _adapter_a8(bundle: _BundleView, run_id: str | None) -> dict | None:
     if len(time_h) < 5:
         return None
     result = compute_mu(time_h, values)
+    dt = _sampling_resolution_h(time_h)
+    # A rate is never instantaneous at t=0 — it needs an interval. If the peak
+    # falls in the first resolvable interval, say so instead of implying t=0.
+    if dt and result.t_mu_max_h < dt:
+        when = f"in the first resolved interval (0–{dt:.0f}h)"
+    else:
+        when = f"at t={result.t_mu_max_h:.1f}h"
+    res_note = (f" Sampled every ~{dt:.0f}h, so rates are interval-averaged and "
+                f"sub-{dt:.0f}h lags are not resolvable." if dt else "")
     return {
         "mu_max": result.mu_max,
         "t_mu_max_h": result.t_mu_max_h,
+        "sampling_resolution_h": dt,
         "n_observations": len(time_h),
         "_variables_used": [var],
         "_summary": (
-            f"μ_max = {result.mu_max:.4f} 1/h at t={result.t_mu_max_h:.1f}h"
-            f" on {run_id} (variable={var})."
+            f"μ_max = {result.mu_max:.4f} 1/h {when} on {run_id} (variable={var})."
+            f"{res_note}"
         ),
     }
 
@@ -207,18 +229,24 @@ def _adapter_a10(bundle: _BundleView, run_id: str | None) -> dict | None:
     if df.empty:
         return None
     counts = df["phase"].value_counts().to_dict()
+    dt = _sampling_resolution_h(time_h)
+    res_note = (f" Sampling every ~{dt:.0f}h bounds this: a lag shorter than "
+                f"~{dt:.0f}h cannot be seen, so 'no lag' means 'no lag at this "
+                "resolution', not 'instantaneous growth'." if dt else "")
     return {
         "n_lag": int(counts.get("lag", 0)),
         "n_exp": int(counts.get("exp", 0)),
         "n_linear": int(counts.get("linear", 0)),
         "n_stationary": int(counts.get("stationary", 0)),
         "n_decline": int(counts.get("decline", 0)),
+        "sampling_resolution_h": dt,
         "n_observations": len(time_h),
         "_variables_used": [var],
         "_summary": (
             f"phase counts on {run_id}: lag={counts.get('lag',0)},"
             f" exp={counts.get('exp',0)}, linear={counts.get('linear',0)},"
             f" stat={counts.get('stationary',0)}, decline={counts.get('decline',0)}."
+            f"{res_note}"
         ),
     }
 
@@ -272,19 +300,33 @@ def _adapter_a14(bundle: _BundleView, run_id: str | None) -> dict | None:
     if len(time_h) < 3:
         return None
     result = compute_do_margin(time_h, values)
-    return {
+    out = {
         "frac_below_threshold": result.frac_below,
         "min_do": result.min_do,
+        "max_do": result.max_do,
         "min_margin": result.min_margin,
         "time_below_h": result.time_below_h,
         "n_observations": len(time_h),
+        # Data-derived gate: when DO never rose above the threshold, this is the
+        # operating regime, not a limitation. Downstream agents MUST NOT call it
+        # an O2 bottleneck (the aerobic 30% threshold doesn't apply here).
+        "never_aerobic": result.never_aerobic,
         "_variables_used": [var],
-        "_summary": (
+    }
+    if result.never_aerobic:
+        out["_summary"] = (
+            f"DO on {run_id} (var={var}) stayed at/near zero the entire run "
+            f"(max DO={result.max_do:.2f}%): consistent with anaerobic/"
+            "microaerophilic operation, NOT an oxygen-transfer limitation — the "
+            "process never had an aerobic regime to be limited relative to."
+        )
+    else:
+        out["_summary"] = (
             f"DO margin on {run_id} (var={var}):"
             f" {result.frac_below*100:.1f}% of run below threshold,"
             f" min DO={result.min_do:.2f}, time below={result.time_below_h:.1f}h."
-        ),
-    }
+        )
+    return out
 
 
 # ---------------------------------------------------------------------------

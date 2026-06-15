@@ -81,6 +81,44 @@ def test_specialist_view_caps_findings():
     assert len(view.relevant_findings) <= VIEW_CAPS["findings_per_specialist"]
 
 
+def test_specialist_view_surfaces_within_run_associations_sorted_and_capped():
+    from fermdocs_hypothesis.schema import WithinRunAssociationRef
+
+    seed = make_seed_topic(affected_variables=["DO"])
+    topic = topic_spec_from_seed(seed)
+    assocs = [
+        WithinRunAssociationRef(assoc_id=f"WRA-k{i}", lever=f"k{i}", summary=f"k{i} assoc",
+                                delta=float(i), direction="set_to", n=8,
+                                norm_effect=i / 20.0, objective="product_g_l")
+        for i in range(20)
+    ]
+    view = project_specialist(
+        events=[],
+        role="metabolic",
+        current_topic=topic,
+        available_findings=[],
+        available_narratives=[],
+        available_trajectories=[],
+        available_priors=[],
+        available_within_run=assocs,
+    )
+    got = view.relevant_within_run
+    assert len(got) == VIEW_CAPS["within_run_per_specialist"]          # capped
+    assert got[0].norm_effect >= got[-1].norm_effect                   # sorted strongest-first
+    assert got[0].lever == "k19"                                       # the biggest swing leads
+
+
+def test_specialist_view_within_run_empty_by_default():
+    # diagnosis-driven stage passes nothing -> empty, no crash.
+    seed = make_seed_topic(affected_variables=["DO"])
+    view = project_specialist(
+        events=[], role="kinetics", current_topic=topic_spec_from_seed(seed),
+        available_findings=[], available_narratives=[], available_trajectories=[],
+        available_priors=[],
+    )
+    assert view.relevant_within_run == []
+
+
 def test_specialist_view_excludes_own_facet_from_prior_facets():
     seed = make_seed_topic(topic_id="T-0001")
     topic = topic_spec_from_seed(seed)

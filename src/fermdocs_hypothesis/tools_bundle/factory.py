@@ -47,6 +47,8 @@ from fermdocs_hypothesis.bundle_loader import LoadedBundle
 QUERY_BUNDLE = "query_bundle"
 GET_PRIORS = "get_priors"
 GET_NARRATIVE_OBSERVATIONS = "get_narrative_observations"
+QUERY_RELATIONSHIP = "query_relationship"
+EXECUTE_PYTHON = "execute_python"
 CONTRIBUTE_FACET = "contribute_facet"
 EMIT_HYPOTHESIS = "emit_hypothesis"
 SELECT_TOPIC = "select_topic"
@@ -222,6 +224,59 @@ class HypothesisToolBundle:
                 break
         return {"results": out, "count": len(out)}
 
+    # --- query_relationship (opportunity debate: test a lever's titer effect) ---
+
+    def query_relationship(self, lever: str, objective: str | None = None) -> dict[str, Any]:
+        """Return how a controllable design factor tracked the objective across
+        runs (the within-run association). Looks up the precomputed pool, so it's
+        cheap and deterministic. Lets a specialist TEST 'does nitrogen source
+        actually move titer?' instead of asserting. Reports ALL design factors,
+        including ones beyond the top-N shown in the view."""
+        pool = getattr(self.bundle, "within_run_pool", None) or []
+        want = (lever or "").strip()
+        for a in pool:
+            if want and (a.lever == want or a.assoc_id == want):
+                return {
+                    "assoc_id": a.assoc_id, "lever": a.lever, "delta": a.delta,
+                    "direction": a.direction, "n": a.n, "norm_effect": a.norm_effect,
+                    "best_setting": a.best_setting, "objective": a.objective,
+                    "summary": a.summary,
+                }
+        known = [a.lever for a in pool]
+        return {
+            "error": f"no within-run association for {want!r}",
+            "known_levers": known,
+            "hint": ("Cite a lever from known_levers, or use execute_python to "
+                     "compute a custom relationship from observations.csv."),
+        }
+
+    # --- execute_python (constrained, read-only analysis over observations) ---
+
+    def execute_python(self, code: str) -> dict[str, Any]:
+        """Run short analysis code in the shared sandbox (same isolation the
+        critic uses: subprocess + rlimit + timeout). `obs` (a pandas DataFrame of
+        observations.csv: run_id, variable, time_h, value) and `OBS_CSV` (its
+        path) are pre-loaded so a specialist can CHECK a claim against the data
+        instead of asserting. Tighter than the diagnosis sandbox: 60s, 10KB out."""
+        from fermdocs_diagnose.tools_bundle.execute_python import execute_python as _run
+
+        bundle_dir = getattr(self.bundle, "bundle_dir", None)
+        obs_path = None
+        if bundle_dir is not None:
+            cand = f"{bundle_dir}/characterization/observations.csv"
+            obs_path = cand
+        preamble = (
+            "import pandas as pd, numpy as np\n"
+            f"OBS_CSV = {obs_path!r}\n"
+            "obs = pd.read_csv(OBS_CSV) if OBS_CSV else None\n"
+        )
+        result = _run(preamble + (code or ""), timeout=60)
+        text = result.to_agent_text()
+        if len(text) > 10_000:
+            text = text[:10_000] + "\n... (truncated at 10KB)"
+        return {"output": text, "timed_out": result.timed_out,
+                "returncode": result.returncode}
+
     # --- dispatch (provider-neutral) ---
 
     def dispatch(self, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -240,6 +295,10 @@ class HypothesisToolBundle:
                 variable=args.get("variable"),
                 limit=_safe_limit(args.get("limit"), default=50),
             )
+        if tool_name == QUERY_RELATIONSHIP:
+            return self.query_relationship(args.get("lever", ""), args.get("objective"))
+        if tool_name == EXECUTE_PYTHON:
+            return self.execute_python(args.get("code", ""))
         return {"error": f"unknown read-tool: {tool_name!r}"}
 
 

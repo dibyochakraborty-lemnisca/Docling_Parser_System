@@ -5,9 +5,11 @@ CSV, Excel, PDF, or pre-built bundle uploads; preserves raw observations
 with provenance; characterizes trajectories deterministically; runs an
 observational diagnosis agent; runs a multi-agent hypothesis stage with
 citations and charts; fits/selects a process model and simulates the
-intervention to recommend for the next run; and persists distilled
-lessons to a managed memory layer so successive runs on the same
-process family compound rather than re-debate from scratch.
+intervention to recommend for the next run; runs an optimization stage
+that debates the controllable levers and searches for the best operating
+point (or honestly refuses); and persists distilled lessons to a managed
+memory layer so successive runs on the same process family compound
+rather than re-debate from scratch.
 
 The current system is no longer just a parser. The live flow is:
 
@@ -18,11 +20,15 @@ raw files or bundle zip
   -> diagnose
   -> hypothesize  <-- reads/writes cross-run memory
   -> recommend    <-- fits models, simulates interventions, or refuses
+  -> optimize     <-- debates levers, discovers a model, searches for the best
+                      operating point on the data, or honestly refuses
   -> FastAPI + Next.js UI
 ```
 
 For first-time setup, read [`SETUP.md`](SETUP.md). For the deeper
-design, read [`ARCHITECTURE.md`](ARCHITECTURE.md).
+design, read [`ARCHITECTURE.md`](ARCHITECTURE.md). For how the system
+stays trustworthy as the agents evolve, read
+[`docs/agent-safety-and-trust.md`](docs/agent-safety-and-trust.md).
 
 ## Current Capabilities
 
@@ -59,6 +65,16 @@ design, read [`ARCHITECTURE.md`](ARCHITECTURE.md).
   scores them on held-out runs with a pure deterministic rubric, and either
   simulates the best intervention to apply next or **honestly refuses** when
   no model is trustworthy. See [Recommendation Stage](#recommendation-stage).
+- **Optimization stage.** Discovers the experiment's own controllable
+  **levers** from the data (metadata design factors + varying observation
+  channels — never a hardcoded knob list), runs an **opportunity debate**
+  (the hypothesis engine seeded from those levers + observed trends), and
+  searches for the best operating point. Against a process simulator it runs
+  an active-learning loop with agent-written equation discovery; against the
+  uploaded data alone it discovers a lever→titer model (a coupled ODE over the
+  measured variables first, a static surrogate as fallback), validates it by
+  leave-run-out cross-validation, and optimizes only within the observed
+  envelope — or **honestly refuses**. See [Optimization Stage](#optimization-stage).
 - **Lemnisca instrument-panel frontend** — dark "instrument panel" design
   system: true-black canvas, signature teal accent (`#38AFD8`), hairline
   rules, the lemniscate (∞) motif, and a Helvetica Neue / JetBrains Mono /
@@ -74,7 +90,9 @@ design, read [`ARCHITECTURE.md`](ARCHITECTURE.md).
 |-- src/fermdocs_characterize/    deterministic characterization + optional analyzer
 |-- src/fermdocs_diagnose/        observational ReAct diagnosis agent
 |-- src/fermdocs_hypothesis/      multi-agent causal hypothesis stage
-|-- src/fermdocs_recommend/       model bake-off + intervention simulation + honest refusal
+|-- src/fermdocs_recommend/       model bake-off + cross-run engine + intervention simulation + honest refusal
+|-- src/fermdocs_optimize/        lever discovery, model/equation discovery, data + simulator oracles, search
+|-- src/fermdocs_optimize_debate/ opportunity debate (hypothesis engine seeded from discovered levers + trends)
 |-- src/fermdocs_memory/          MemoryBackend Protocol + Noop/Stub/Synap adapters
 |-- apps/api/                     FastAPI local backend
 |-- apps/web/                     Next.js local frontend
@@ -225,6 +243,50 @@ and the `interventions` (knob, baseline → predicted, delta, in-coverage
 flag, caveat). The web run page renders this as the **Recommendation**
 card. See [`ARCHITECTURE.md`](ARCHITECTURE.md#8-recommendation-output) for
 the rubric constants and refusal codes.
+
+## Optimization Stage
+
+The optimization stage turns the analysis into a forward-looking question:
+*given everything we measured, where is the headroom and what operating point
+should the next batch use?* It lives in `src/fermdocs_optimize/` (the optimizer)
+and `src/fermdocs_optimize_debate/` (the debate), and has two halves.
+
+**1. Lever discovery.** `lever_discovery.py` reads the experiment's *own*
+controllable inputs from the data — design factors in `run_conditions`
+metadata (e.g. nitrogen source, feed concentration; numeric or categorical)
+plus the initial conditions of observation channels that vary across runs.
+There is no hardcoded knob list; a source becomes a lever only if it varies,
+and the objective is never a lever.
+
+**2. Opportunity debate** (`fermdocs_optimize_debate`). Reuses the hypothesis
+debate engine, seeded forward-looking: one topic per discovered lever plus
+observed **trend** topics from characterization. The specialists argue where
+the titer headroom is. Observed trends (evidence-grounded) outrank speculative
+levers in the ranker.
+
+**3. Model discovery + search.** Controlled by `FERMDOCS_OPTIMIZE_ORACLE`:
+
+- `labs` — verify against a process simulator. An active-learning loop
+  (`active_optimize.py`) fits a model, proposes operating points, verifies them
+  on the oracle, and folds surprises back in. Includes agent-written **equation
+  discovery** (`discovery/`: the agent emits ODE structure, a safe symbolic
+  compiler evaluates it, the oracle refines and verifies, and a global search
+  finds the within-box maximum).
+- `data` — verify against the uploaded data itself, no simulator
+  (`data_equation.py`). Discovers a **lever→titer model**: a coupled mechanistic
+  ODE over *all* the measured variables first (`discovery/general_mech.py`),
+  falling back to a static algebraic surrogate (numeric + one-hot categorical
+  levers). Either model must clear a **leave-run-out cross-validation** gate, is
+  optimized only over the **observed envelope**, and is checked by data-relative
+  sanity guards: reject a prediction implausible vs the observed maximum, mark a
+  boundary-sitting optimum as *insufficient data in that region* (not a validated
+  optimum), and flag a fed-batch operating-mode mismatch. If nothing generalizes,
+  it **refuses**.
+
+Like recommend, the decision contract is coherent: a confident result carries a
+best operating point; a refusal carries a reason and zero knobs. On sparse data
+the honest outcome is often the surrogate or a refusal — the loop raises the
+ceiling, it does not manufacture signal that isn't in the data.
 
 ## Setup at a Glance
 
@@ -469,6 +531,37 @@ If open questions are generated, the CLI prompts:
 
 The user's answers are captured as `HumanInputReceivedEvent`s and `QuestionResolvedEvent`s, appended to the event log, and the stage automatically resumes. The agents then factor the operator's input into the next round of debate.
 
+### 7. Optimize
+
+Run the opportunity debate over a bundle (discovers the levers, argues where the
+headroom is):
+
+```bash
+fermdocs-optimize-debate run out/bundle_<id> \
+  --objective P \
+  --out-dir out/optimize
+```
+
+The model-search half has two entry points. Against the **uploaded data** (no
+simulator) it runs inside the API runner once a run is DONE
+(`FERMDOCS_OPTIMIZE_ORACLE=data`), discovering a lever→titer model, validating it
+by leave-run-out CV, and optimizing within the observed envelope or refusing. The
+**simulator-oracle** active-learning loop (equation discovery + oracle-verified
+search) has its own CLI, which needs a process simulator, its true params, and a
+search box:
+
+```bash
+fermdocs-optimize \
+  --train train_data.csv \
+  --mech-params mech_params.json \
+  --box config.json \
+  --rounds 6 --proposals 4 \
+  --out out/optimization.json
+```
+
+In the live app the optimize stage runs automatically off the bundle; the CLIs
+are for offline reproduction and debugging.
+
 ## API Surface
 
 The local API lives under `/api`:
@@ -591,6 +684,12 @@ FERMDOCS_DEBUG_HYPOTHESIS=1
 
 ## Testing and Checks
 
+The suite is large by design — ~1,392 unit tests and ~1,628 tests total across
+178 files. Most safety mechanisms (claim guard, finding validator, citation
+integrity, refusal coherence, optimizer sanity guards) carry regression tests
+written from real bad outputs, so the same mistake can't silently return. See
+[`docs/agent-safety-and-trust.md`](docs/agent-safety-and-trust.md).
+
 Fast default test run:
 
 ```bash
@@ -652,6 +751,16 @@ keys and will cost tokens.
   confident-sounding guess. Schema-level coherence is enforced.
 - Specialist routing is intentionally static while there are only three
   specialists. Add routing when there is a fourth specialist.
+- **No hardcoded domain values.** No baked-in nominal/spec/expected constants;
+  data is judged against its own distribution (data-relative). The optimizer's
+  levers are discovered from the data, not from a fixed knob list.
+- **Claim guard.** A shared deterministic check (`src/fermdocs/claim_guard.py`)
+  rejects agent claims that contradict the data (false "unavailable", oxygen
+  limitation on an anaerobic run, scale confound when scale is constant, a rate
+  "at t=0"). Wired into characterize (finding source) and hypothesis (output).
+- **The optimizer refuses too.** Like recommend, it emits a best operating point
+  only when a model clears cross-validation and the optimum is inside the
+  observed data; otherwise it refuses with a reason.
 - **Memory is opt-in and gated on a closed-vocab `process_family`.**
   `NoopBackend` is the default; `SynapBackend` activates via env var.
   No `process_family` → memory silently no-ops.
@@ -701,8 +810,14 @@ src/fermdocs_recommend/schema.py
 src/fermdocs_recommend/agent.py
 src/fermdocs_recommend/rubric.py
 src/fermdocs_recommend/registry.py
+src/fermdocs_recommend/cross_run.py
+src/fermdocs_optimize/lever_discovery.py
+src/fermdocs_optimize/data_equation.py
+src/fermdocs_optimize/discovery/general_mech.py
+src/fermdocs_optimize_debate/topics.py
 src/fermdocs_memory/base.py
 src/fermdocs_memory/synap.py
+src/fermdocs/claim_guard.py
 apps/api/fermdocs_api/runner_pipeline.py
 apps/web/src/app/runs/[id]/page.tsx
 ```

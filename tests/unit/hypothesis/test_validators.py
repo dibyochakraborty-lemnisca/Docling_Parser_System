@@ -205,3 +205,65 @@ def test_schema_only_unaffected_by_priors_check():
     cleaned = validate_hypothesis_output(out, upstream=upstream)
     assert cleaned.final_hypotheses[0].confidence_basis == ConfidenceBasis.SCHEMA_ONLY
     assert cleaned.final_hypotheses[0].provenance_downgraded is False
+
+
+def _anaerobic_upstream() -> CharacterizationOutput:
+    """Upstream with an A14 finding flagging DO never_aerobic + a DO trajectory."""
+    a14 = Finding(
+        finding_id=f"{CHAR_ID_STR}:F-0001",
+        type=FindingType.RANGE_VIOLATION,
+        severity=Severity.INFO,
+        summary="DO stayed at zero the entire run (consistent with anaerobic).",
+        confidence=0.85,
+        extracted_via=ExtractedVia.DETERMINISTIC,
+        evidence_strength=EvidenceStrength(n_observations=5, n_independent_runs=1),
+        evidence_observation_ids=["O-1"],
+        variables_involved=["do_pct_saturation"],
+        statistics={"metric_id": "A14", "never_aerobic": True},
+    )
+    traj = Trajectory(
+        trajectory_id="T-0001", run_id="R1", variable="do_pct_saturation",
+        time_grid=[0.0, 1.0], values=[0.0, 0.0], imputation_flags=[False, False],
+        source_observation_ids=["O-1"], unit="%", quality=1.0,
+        data_quality=DataQuality(pct_missing=0.0, pct_imputed=0.0, pct_real=1.0),
+    )
+    return CharacterizationOutput(
+        meta=Meta(schema_version="2.0", characterization_version="v1.0.0",
+                  characterization_id=CHAR_ID, generation_timestamp=datetime(2026, 1, 1),
+                  source_dossier_ids=["EXP-X"]),
+        findings=[a14], trajectories=[traj],
+    )
+
+
+def test_claim_guard_downgrades_oxygen_limitation_on_anaerobic_run():
+    upstream = _anaerobic_upstream()
+    bad = FinalHypothesis(
+        hyp_id="H-0001",
+        summary="DO=0 indicates a severe oxygen bottleneck limiting titer.",
+        facet_ids=["FCT-0001"], cited_finding_ids=[f"{CHAR_ID_STR}:F-0001"],
+        affected_variables=["do_pct_saturation"], confidence=0.8,
+        confidence_basis=ConfidenceBasis.SCHEMA_ONLY,
+        critic_flag="green", judge_ruled_criticism_valid=False,
+    )
+    out = HypothesisOutput(meta=_meta(), final_hypotheses=[bad])
+    cleaned = validate_hypothesis_output(out, upstream=upstream)
+    h = cleaned.final_hypotheses[0]
+    assert h.provenance_downgraded is True
+    assert h.confidence <= 0.2
+    assert "claim-guard" in h.summary
+
+
+def test_claim_guard_leaves_clean_hypothesis_untouched():
+    upstream = _anaerobic_upstream()
+    good = FinalHypothesis(
+        hyp_id="H-0001",
+        summary="Higher nitrogen loading associates with higher peak titer across runs.",
+        facet_ids=["FCT-0001"], cited_finding_ids=[f"{CHAR_ID_STR}:F-0001"],
+        affected_variables=["do_pct_saturation"], confidence=0.8,
+        confidence_basis=ConfidenceBasis.SCHEMA_ONLY,
+        critic_flag="green", judge_ruled_criticism_valid=False,
+    )
+    out = HypothesisOutput(meta=_meta(), final_hypotheses=[good])
+    cleaned = validate_hypothesis_output(out, upstream=upstream)
+    assert cleaned.final_hypotheses[0].confidence == 0.8
+    assert cleaned.final_hypotheses[0].provenance_downgraded is False

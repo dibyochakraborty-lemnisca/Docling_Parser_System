@@ -32,9 +32,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from fermdocs.claim_guard import ClaimFacts, build_claim_facts, check_claim
 from fermdocs_characterize.schema import Finding, FindingType, Severity
 
 _log = logging.getLogger(__name__)
+
+__all__ = ["validate_finding", "build_claim_facts", "guard_claims"]
 
 
 # Bounds dictionary: maps statistics-field name to (lower, upper).
@@ -97,6 +100,34 @@ _PHYSICAL_BOUNDS: dict[str, tuple[float | None, float | None]] = {
     "yield_decline_after_peak": (0.0, 1.0),
     "final_volumetric_yield_mg_per_l": (0.0, None),
 }
+
+
+def guard_claims(findings: list[Finding], facts: ClaimFacts) -> list[Finding]:
+    """Reject finding summaries that contradict the deterministic facts. A
+    violating finding is converted to a data_gap whose summary IS the correction
+    (the false claim is preserved under statistics.raw_invalid_claim for audit).
+    Deterministic metric findings carry correct summaries and pass untouched."""
+    out: list[Finding] = []
+    for f in findings:
+        violations = check_claim(f.summary or "", facts)
+        if not violations:
+            out.append(f)
+            continue
+        correction = " ".join(v.message for v in violations)
+        codes = ", ".join(v.code for v in violations)
+        _log.warning("claim_guard: finding %s rejected (%s)",
+                     getattr(f, "finding_id", "?"), codes)
+        new_stats = dict(f.statistics or {})
+        new_stats["pattern_kind"] = "data_gap"
+        new_stats["reason"] = f"claim contradicted deterministic facts ({codes})"
+        new_stats["raw_invalid_claim"] = f.summary
+        new_stats["claim_guard_codes"] = [v.code for v in violations]
+        out.append(f.model_copy(update={
+            "severity": Severity.INFO,
+            "summary": correction,
+            "statistics": new_stats,
+        }))
+    return out
 
 
 def validate_finding(finding: Finding) -> Finding:

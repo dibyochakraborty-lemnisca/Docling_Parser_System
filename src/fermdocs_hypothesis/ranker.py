@@ -7,8 +7,15 @@ Score formula:
         severity_weight(topic.source_type|severity) * topic.priority
       + 0.3 * citation_density(topic)
       + 0.2 * unresolved_question_overlap(topic)
+      + 0.6 * effect_size(topic)            # cross-run lever strength (opt. debate)
       - 0.5 * times_attempted(topic)
       - 1.0 * times_rejected_by_judge(topic)
+
+The effect_size term is GATED: it defaults to 0.0 on every topic except
+opportunity-debate lever topics, so the diagnosis-stage ranking is provably
+unchanged (a regression test asserts this). It exists so design-factor levers,
+which carry no measured trajectory (zero citation density), still lead when they
+actually moved the objective across runs.
 
 Returns top-K (K=3 by default) sorted by score descending. Ties broken by
 topic_id ascending so the order is fully deterministic — no LLM jitter
@@ -38,6 +45,10 @@ from fermdocs_hypothesis.state import (
 
 DEFAULT_K = 3
 TIE_EPSILON = 0.05
+# Weight on the cross-run effect-size term. Material enough that a strong lever
+# (norm_effect near 1) clears the citation-density gap that otherwise lets
+# trajectory-backed topics out-rank trajectory-less design factors.
+_EFFECT_WEIGHT = 0.6
 
 _SEVERITY_WEIGHT = {
     Severity.CRITICAL: 1.2,
@@ -91,6 +102,7 @@ def _score_seed(
         sev * topic.priority
         + 0.3 * _citation_density(topic)
         + 0.2 * _unresolved_question_overlap(topic, unresolved)
+        + _EFFECT_WEIGHT * topic.effect_size
         - 0.5 * attempts
         - 1.0 * rejections
     )

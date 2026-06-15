@@ -137,7 +137,8 @@ export interface OptimizationOutput {
   confident: boolean;
   refusal_reason: string | null;
   selection_rationale: string;
-  best_candidate: Record<string, number> | null;
+  // numeric for continuous levers; string for categorical levers (e.g. nitrogen source)
+  best_candidate: Record<string, number | string> | null;
   best_achieved_titer: number | null;
   baseline_titer: number | null;
   improvement: number | null;

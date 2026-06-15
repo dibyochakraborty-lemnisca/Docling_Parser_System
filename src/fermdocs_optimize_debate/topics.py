@@ -24,10 +24,71 @@ from fermdocs_hypothesis.schema import SeedTopic, TopicSourceType
 
 from fermdocs_optimize_debate.levers import DEFAULT_LEVERS, KnobLever
 
-# Knob levers are the spine of the debate (they map to the box), so they sit above
-# observed-trend topics in the ranker.
+# Topic priorities. Observed TRENDS are grounded in real measured behavior
+# (substrate left over, titer plateau, DO dip), so they outrank the
+# forward-looking lever questions — and a trend inherits its finding's severity,
+# so a trend off a CRITICAL observation dominates. Levers are the controllable
+# spine but are partly speculative ("could moving X help?"), so they sit below.
 _KNOB_PRIORITY = 0.7
-_TREND_PRIORITY = 0.5
+_TREND_PRIORITY = 0.8
+# Severity ordering for picking WHICH trends to keep when capped (worst first).
+_SEVERITY_RANK = {
+    Severity.CRITICAL: 3, Severity.MAJOR: 2, Severity.MINOR: 1, Severity.INFO: 0,
+}
+def _debate_levers(levers: list) -> list:
+    """The levers worth DEBATING: metadata design factors only (nitrogen source,
+    feed, inoculum, ...). Derived observation-channel '.initial' levers are
+    dropped here — you don't independently control 'initial acetate' or 'initial
+    substrate'; the recipe (metadata) is the control. Derived levers still feed
+    the optimizer surrogate; only their promotion to *debate topics* is removed.
+    (Eng-review decision A2, 2026-06-13.)"""
+    meta = [lv for lv in levers if getattr(lv, "source", None) == "metadata"]
+    derived = [lv for lv in levers if getattr(lv, "source", None) != "metadata"]
+    if derived:
+        import logging
+        logging.getLogger(__name__).info(
+            "opportunity debate: debating %d metadata design factors; dropping "
+            "%d derived channel levers from topics %s",
+            len(meta), len(derived), [lv.name for lv in derived])
+    return meta
+
+
+def _discovered_lever_topic(lever, *, objective_species: str, counter: int,
+                            findings, trajectories, effect: dict | None = None) -> SeedTopic:
+    """One forward-looking opportunity topic for a metadata design factor. These
+    have no single measured trajectory, so they carry their cross-run effect in
+    the summary (and `effect_size` for ranking) rather than a citation — that is
+    how a real lever leads the debate without a trajectory to cite."""
+    if lever.kind == "numeric":
+        rng = lever.observed_range
+        span = f" (varied {round(rng[0], 4)}–{round(rng[1], 4)} across runs)" if rng else ""
+        summary = f"Could changing {lever.name} raise peak {objective_species}?{span}"
+    else:
+        cats = ", ".join(lever.categories)
+        summary = (f"Which {lever.name} maximizes peak {objective_species}? "
+                   f"(observed: {cats})")
+    effect_size = 0.0
+    if effect:
+        effect_size = float(effect.get("norm_effect") or 0.0)
+        delta, n = effect.get("delta"), effect.get("n")
+        best = effect.get("best_setting")
+        if delta is not None:
+            summary += (f" Across {n} runs this associates with {delta:+g} "
+                        f"{objective_species} (best observed: {best}); observational, "
+                        "not proven causal.")
+    return SeedTopic(
+        topic_id=_topic_id(counter),
+        summary=summary,
+        source_type=TopicSourceType.OPEN_QUESTION,
+        source_id=f"lever-{lever.name}",
+        cited_finding_ids=[],
+        cited_narrative_ids=[],
+        cited_trajectories=[],
+        affected_variables=[],
+        severity=Severity.MAJOR,
+        priority=_KNOB_PRIORITY,
+        effect_size=min(max(effect_size, 0.0), 1.0),
+    )
 
 
 def extract_opportunity_topics(
@@ -35,42 +96,70 @@ def extract_opportunity_topics(
     *,
     objective_species: str = "P",
     levers: tuple[KnobLever, ...] = DEFAULT_LEVERS,
-    max_trend_topics: int = 4,
+    discovered_levers: list | None = None,
+    lever_effects: dict[str, dict] | None = None,
+    max_trend_topics: int = 8,
 ) -> list[SeedTopic]:
-    """Knob-anchored + trend opportunity topics, in deterministic id order."""
+    """Knob-anchored + trend opportunity topics, in deterministic id order.
+
+    When ``discovered_levers`` is provided (the experiment's OWN levers, found
+    from run_conditions metadata + varying observation channels), the
+    knob-anchored topics come from those — so the debate argues the real levers
+    (nitrogen source, feed conc, ...), not a fixed LABS knob list. The static
+    ``levers`` tuple is used only as a fallback when nothing was discovered
+    (e.g. a LABS synthetic bundle with no metadata)."""
     findings = list(getattr(char, "findings", []) or [])
     trajectories = list(getattr(char, "trajectories", []) or [])
     topics: list[SeedTopic] = []
     counter = 0
 
-    # 1. KNOB-ANCHORED — one per lever, grounded in its effect-variable evidence.
-    for lever in levers:
-        counter += 1
-        cited_findings, cited_trajs = _evidence_for(findings, trajectories, lever.effect_variables)
-        # If nothing matched, the topic stays uncited — downstream facets are
-        # flagged schema_only and the critic judges them. We do not fabricate a
-        # citation just to satisfy validation (flag-don't-fake).
-        topics.append(SeedTopic(
-            topic_id=_topic_id(counter),
-            summary=lever.question.format(obj=objective_species),
-            source_type=TopicSourceType.OPEN_QUESTION,
-            source_id=f"lever-{lever.knob}",
-            cited_finding_ids=cited_findings,
-            cited_narrative_ids=[],
-            cited_trajectories=cited_trajs,
-            affected_variables=list(lever.effect_variables),
-            severity=Severity.MAJOR,
-            priority=_KNOB_PRIORITY,
-        ))
+    # 1. KNOB-ANCHORED — one per metadata design factor, ranked by cross-run
+    #    effect size. Derived channel levers are NOT debated (see _debate_levers).
+    #    `discovered_levers is not None` = the data path ran: use metadata levers
+    #    (possibly empty -> trends carry the debate). Only when discovery did not
+    #    run at all (None) do we fall back to the static LABS lever set.
+    if discovered_levers is not None:
+        effects = lever_effects or {}
+        for lever in _debate_levers(discovered_levers):
+            counter += 1
+            topics.append(_discovered_lever_topic(
+                lever, objective_species=objective_species, counter=counter,
+                findings=findings, trajectories=trajectories,
+                effect=effects.get(lever.name)))
+        driver_vars: set[str] = {objective_species}
+    else:
+        for lever in levers:
+            counter += 1
+            cited_findings, cited_trajs = _evidence_for(findings, trajectories, lever.effect_variables)
+            # If nothing matched, the topic stays uncited — downstream facets are
+            # flagged schema_only and the critic judges them. We do not fabricate a
+            # citation just to satisfy validation (flag-don't-fake).
+            topics.append(SeedTopic(
+                topic_id=_topic_id(counter),
+                summary=lever.question.format(obj=objective_species),
+                source_type=TopicSourceType.OPEN_QUESTION,
+                source_id=f"lever-{lever.knob}",
+                cited_finding_ids=cited_findings,
+                cited_narrative_ids=[],
+                cited_trajectories=cited_trajs,
+                affected_variables=list(lever.effect_variables),
+                severity=Severity.MAJOR,
+                priority=_KNOB_PRIORITY,
+            ))
+        driver_vars = {objective_species}
+        for lever in levers:
+            driver_vars.update(lever.effect_variables)
 
-    # 2. TREND — findings touching the objective or any lever's driver variables,
-    #    objective-citing findings first, capped to keep the debate focused.
-    driver_vars: set[str] = {objective_species}
-    for lever in levers:
-        driver_vars.update(lever.effect_variables)
+    # 2. TREND — findings touching the objective (or driver variables in the
+    #    fallback path). Keep the most important first: objective-citing AND
+    #    higher-severity observations lead, so the cap keeps the trends that
+    #    matter most. Each topic inherits its finding's real severity.
     relevant = [f for f in findings if set(getattr(f, "variables_involved", []) or []) & driver_vars]
     relevant.sort(
-        key=lambda f: objective_species in (getattr(f, "variables_involved", []) or []),
+        key=lambda f: (
+            objective_species in (getattr(f, "variables_involved", []) or []),
+            _SEVERITY_RANK.get(getattr(f, "severity", Severity.MAJOR), 2),
+        ),
         reverse=True,
     )
     for f in relevant[:max_trend_topics]:
@@ -88,7 +177,9 @@ def extract_opportunity_topics(
             cited_narrative_ids=[],
             cited_trajectories=ct,
             affected_variables=fvars,
-            severity=Severity.MINOR,
+            # Inherit the finding's severity (was hardcoded MINOR) so a trend off
+            # a CRITICAL observation ranks at the top, not the bottom.
+            severity=getattr(f, "severity", Severity.MAJOR),
             priority=_TREND_PRIORITY,
         ))
 

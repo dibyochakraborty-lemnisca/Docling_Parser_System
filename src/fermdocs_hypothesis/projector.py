@@ -64,6 +64,7 @@ VIEW_CAPS = {
     "questions_per_specialist": 8,
     "facets_per_topic": 6,
     "analyses_per_specialist": 6,
+    "within_run_per_specialist": 8,
     "top_topics_k": 3,
     "accepted_hypotheses_in_orchestrator_view": 8,
 }
@@ -119,6 +120,7 @@ def project_specialist(
     available_trajectories: list[TrajectoryViewRef],
     available_priors: list[ResolvedPriorRef],
     available_analyses: list[AnalysisRef] | None = None,
+    available_within_run: list | None = None,
     user_question: UserQuestion | None = None,
     followup_context: FollowupContext | None = None,
     cross_run_lessons: "object | None" = None,
@@ -198,6 +200,15 @@ def project_specialist(
     # Don't show this specialist their own facet back
     facets = [f for f in facets if f.specialist != role]
 
+    # Within-run lever->objective associations (opportunity debate). Surface the
+    # strongest by effect size to EVERY specialist — the comparative picture
+    # ("nitrogen moved titer more than feed") is the grounding, so no per-topic
+    # filtering. Empty in the diagnosis-driven hypothesis stage.
+    within_run = sorted(
+        list(available_within_run or []),
+        key=lambda a: getattr(a, "norm_effect", 0.0), reverse=True,
+    )[: VIEW_CAPS["within_run_per_specialist"]]
+
     return SpecialistView(
         specialist_role=role,
         current_topic=current_topic,
@@ -208,6 +219,7 @@ def project_specialist(
         relevant_analyses=analyses[: VIEW_CAPS["analyses_per_specialist"]],
         open_questions_in_domain=questions[: VIEW_CAPS["questions_per_specialist"]],
         prior_facets_this_topic=facets[: VIEW_CAPS["facets_per_topic"]],
+        relevant_within_run=within_run,
         user_question=user_question,
         followup_context=followup_context,
         cross_run_lessons=cross_run_lessons,

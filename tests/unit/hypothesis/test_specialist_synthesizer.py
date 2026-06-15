@@ -30,6 +30,53 @@ def test_specialist_build_facet_backfills_citations_when_llm_drops_them():
     assert facet.cited_finding_ids == list(topic.cited_finding_ids)
 
 
+def _assoc(assoc_id="WRA-nitrogen_source", lever="nitrogen_source"):
+    from fermdocs_hypothesis.schema import WithinRunAssociationRef
+    return WithinRunAssociationRef(
+        assoc_id=assoc_id, lever=lever, summary=f"{lever} assoc", delta=40.0,
+        direction="set_to", n=8, norm_effect=0.9, objective="product_g_l",
+        best_setting="YE")
+
+
+def _uncited_topic():
+    from fermdocs_hypothesis.schema import TopicSourceType
+    return TopicSpec(topic_id="T-0001", summary="Which nitrogen source maximizes P?",
+                     source_type=TopicSourceType.OPEN_QUESTION)
+
+
+def test_facet_grounded_by_association_is_not_schema_only():
+    # The wart: a design-factor facet with no trajectory must NOT be muted when
+    # it cites a within-run association present in its view.
+    view = SpecialistView(specialist_role="metabolic", current_topic=_uncited_topic(),
+                          relevant_within_run=[_assoc()])
+    agent = SpecialistAgent(client=None, spec={}, tools=None, role="metabolic")  # type: ignore[arg-type]
+    parsed = {
+        "action": "contribute_facet", "summary": "Nitrogen source YE lifts titer.",
+        "cited_association_ids": ["WRA-nitrogen_source"],
+        "confidence": 0.8, "confidence_basis": "cross_run",
+    }
+    facet = agent._build_facet(parsed, view, "FCT-0001")
+    assert facet.cited_association_ids == ["WRA-nitrogen_source"]
+    assert facet.confidence_basis == ConfidenceBasis.CROSS_RUN  # NOT downgraded
+    assert facet.confidence == 0.8                              # NOT capped to 0.4
+
+
+def test_facet_drops_hallucinated_association_ids():
+    view = SpecialistView(specialist_role="metabolic", current_topic=_uncited_topic(),
+                          relevant_within_run=[_assoc()])
+    agent = SpecialistAgent(client=None, spec={}, tools=None, role="metabolic")  # type: ignore[arg-type]
+    parsed = {
+        "action": "contribute_facet", "summary": "x",
+        "cited_association_ids": ["WRA-made-up"],  # not in the view
+        "confidence": 0.8, "confidence_basis": "cross_run",
+    }
+    facet = agent._build_facet(parsed, view, "FCT-0001")
+    assert facet.cited_association_ids == []      # hallucinated id dropped
+    # nothing else cited + uncited topic -> falls back to schema_only
+    assert facet.confidence_basis == ConfidenceBasis.SCHEMA_ONLY
+    assert facet.confidence <= 0.4
+
+
 def test_specialist_build_facet_clamps_confidence_at_cap():
     seed = make_seed_topic()
     topic = topic_spec_from_seed(seed)

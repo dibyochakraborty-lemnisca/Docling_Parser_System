@@ -251,6 +251,20 @@ class CharacterizationPipeline:
         # 'PAA yield 204.5 g/g passed everything' bug class).
         findings = [validate_finding(f) for f in findings]
 
+        # 4c-ii. Claim guard: reject finding summaries that CONTRADICT the
+        # deterministic facts (a populated channel called "unavailable", an
+        # oxygen-limitation claim on a never-aerobic run, a scale confound when
+        # reactor scale is constant, a rate "at t=0"). Data-derived; LLM pattern
+        # findings that assert the opposite of the metrics are converted to
+        # data_gap carrying the correction. Plan: praaj review items 4-7.
+        from fermdocs_characterize.agents.finding_validator import (
+            build_claim_facts,
+            guard_claims,
+        )
+
+        _claim_facts = build_claim_facts(findings, set(summary.variables), dossier)
+        findings = guard_claims(findings, _claim_facts)
+
         # 4d. Symmetry post-condition. Detects (metric, run) pairs the
         # catalog runner SHOULD have hit but didn't, and emits explicit
         # [SYMMETRY] data_gap findings so the synthesizer can

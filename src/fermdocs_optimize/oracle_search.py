@@ -71,7 +71,10 @@ def oracle_global_search(
 
     # 1. DENSE SWEEP (+ warm starts) — one batched oracle call.
     sample = qmc.LatinHypercube(d=len(KNOB_NAMES), seed=seed).random(n_lhs)
-    pts = qmc.scale(sample, lo, hi)
+    # Manual scale (not qmc.scale) so a pinned knob with lb==ub — e.g. a knob
+    # the data oracle doesn't have, held fixed — is allowed; that column just
+    # stays at the constant instead of raising "bounds not consistent".
+    pts = lo + sample * (hi - lo)
     cands = (list(warm_start) if warm_start else []) + _candidates(pts)
     best, best_titer = _best_on_oracle(simulator, cands, v0=v0, target=objective_species)
     n_evals = len(cands)
@@ -100,6 +103,8 @@ def oracle_global_search(
     # 3. BOUNDARY FLAG.
     on_boundary: dict[str, str] = {}
     for i, k in enumerate(KNOB_NAMES):
+        if hi[i] - lo[i] <= 1e-12:
+            continue  # pinned/inactive knob — not a real boundary
         v = getattr(best, k)
         if abs(v - lo[i]) <= _BOUNDARY_FRAC * spans[i]:
             on_boundary[k] = "lower"

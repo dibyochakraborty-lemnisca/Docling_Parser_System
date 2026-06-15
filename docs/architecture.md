@@ -1,22 +1,246 @@
 # FASSO architecture
 
-Last updated: matches `0.1.0`. Source of truth for design intent. Update when you change a public contract.
+Source of truth for design intent. Update when you change a public contract.
+
+This document has two parts:
+
+- **Part I — the whole system.** The six-stage pipeline, the artifact boundary
+  between stages, the cross-cutting principles, and a per-stage architecture
+  summary. Read this for the overall picture.
+- **Part II — the ingestion layer (deep dive).** The original, detailed
+  reference for Stage 1 (`fermdocs`): storage, units, mapping, narrative
+  extraction, the dossier contract, CLI, and the Rust-port boundary. Section
+  numbering there is local to that part.
 
 ---
 
-## 1. What this is
+# Part I — The whole system
 
-FASSO (Fermentation Agentic Scientific Synthesis and Observation) ingests fermentation experiment reports (PDF, Excel, CSV) and produces a versioned, agent-consumable dossier JSON for downstream LLM workflows. It maps raw column headers to a canonical golden-column schema using an LLM (Anthropic or Gemini), preserves full provenance for every value, normalizes units via pint with optional LLM fallback, and stores everything in Postgres with a re-extraction-friendly schema.
+## 1. What FASSO is
 
-**The non-negotiables:**
+FASSO (Fermentation Agentic Scientific Synthesis and Observation) turns messy
+fermentation experiment reports into grounded, cited scientific analysis and a
+tested recommendation for the next batch. It is **not** a single model — it is a
+pipeline of stages, several of which are multi-agent, that hand a versioned
+artifact (the *bundle*) from one to the next:
 
-- Every observation carries provenance back to a specific cell in a specific file.
-- LLMs never emit numeric values, only header-to-column mappings and unit-normalization hints. Code does the math.
-- Conflicting observations are preserved, never resolved away (Philosophy B).
-- The dossier JSON is a stable, versioned contract for downstream agents.
-- Source files are content-addressed by sha256 so re-ingest is idempotent.
+```
+raw files (CSV / XLSX / PDF) or a pre-built bundle .zip
+   │
+   ▼
+ ingest        →  characterize  →  diagnose  →  hypothesize  →  recommend  →  optimize
+ (fermdocs)       (deterministic    (observa-     (multi-agent    (model         (opportunity
+                   metrics +         tional         debate +        bake-off +     debate +
+                   findings)         ReAct agent)   memory)         refusal)       model search)
+```
+
+with a local **FastAPI** backend (`apps/api`) and **Next.js** frontend
+(`apps/web`) driving the live flow, and a **cross-run memory** layer
+(`fermdocs_memory`) that lets successive runs on the same process family
+compound instead of re-deriving from scratch.
+
+Every stage past ingest is optional in isolation (each has a CLI and reads the
+bundle), but the live app runs them in sequence.
+
+### 1.1 The principles that hold across every stage
+
+These are the load-bearing design rules. They are why the system can be trusted
+as it grows (see also `docs/agent-safety-and-trust.md`):
+
+- **LLMs decide meaning; code touches numbers.** Models map headers, classify
+  process identity, propose equation structure, and argue hypotheses. The
+  arithmetic — unit conversion, metric computation, model fitting, optimization
+  — is plain, audited code. The one deliberate exception (narrative value
+  extraction) is fenced by seven guards (Part II §8).
+- **Provenance or it didn't happen.** Every observation points back to a cell /
+  page / paragraph. Every agent claim must cite a real finding, trajectory, or
+  narrative; fabricated citations are dropped.
+- **Deterministic-first, LLM-advisory.** Where a number can be computed, it is
+  computed by code and the LLM is told to treat it as authoritative, not
+  recompute it.
+- **No hardcoded domain values.** No baked-in "expected" nominal/spec values
+  anywhere. Data is judged against its own distribution (data-relative), so the
+  system reads what happened, not what we assumed should happen.
+- **Flag, don't fake; refuse, don't bluff.** When evidence is thin, the system
+  downgrades confidence, annotates, or refuses outright (with a reason code)
+  rather than inventing a confident answer. An honest "no" is a valid output.
+- **Conflicts are preserved, not resolved away.** Two files disagreeing about a
+  value both survive into the dossier with their provenance; judging is a
+  separate, downstream concern.
+- **The bundle is the artifact boundary.** Stages communicate only through a
+  versioned bundle directory, never by importing each other's internals.
+  `meta.json` is written last and is the readiness signal.
+
+### 1.2 Cross-cutting machinery
+
+- **Claim guard** (`src/fermdocs/claim_guard.py`) — a shared, deterministic
+  check that rejects agent claims contradicting the data (e.g. calling a
+  populated channel "unavailable", invoking oxygen limitation on an anaerobic
+  run, a reactor-scale confound when scale is constant, a rate "at t=0"). Wired
+  into characterize (at the finding source) and hypothesis (final output).
+- **Lenient JSON** (`src/fermdocs/json_utils.py`) — repairs and *salvages*
+  malformed/truncated LLM responses so one bad reply never crashes a stage.
+- **Confidence caps + refusal contracts** — LLM confidence is capped (≤0.85);
+  refusal ↔ no-output coherence is schema-enforced in the stages that refuse.
+- **The test wall** — ~1,392 unit tests and ~1,628 tests total across 178 files;
+  most safety mechanisms have regression tests written from real bad outputs.
+  Plus invariant scripts (`scripts/check_*_invariant*.py`).
 
 ---
+
+## 2. The six stages
+
+### 2.1 Stage 1 — Ingest (`src/fermdocs`)
+
+Raw files → a versioned **dossier** and then a **bundle**. Parses CSV/XLSX/PDF,
+maps raw headers to the canonical `golden_schema.yaml` with an LLM
+(Gemini/Anthropic/fake), normalizes units via pint (+ optional LLM fallback),
+preserves full provenance, and persists to Postgres with a re-extraction-friendly
+schema. A structure-agnostic **layout detector** (`mapping/layout_detector.py`)
+finds the header row / data span / run grouping on messy grids, and
+`extract_design_factors` pulls per-run operating conditions (the "levers" later
+stages optimize) into `run_conditions`. **This is the layer documented in depth
+in Part II.**
+
+Output contract: dossier JSON 1.0 + a bundle directory.
+
+### 2.2 Stage 2 — Characterize (`src/fermdocs_characterize`)
+
+Dossier → `characterization.json` (+ flattened `observations.csv`). Turns
+observations into **trajectories**, runs a deterministic **metric catalog**
+(`agents/metric_catalog.py` + `toolkit/` math: kinetics, yields, operational, mass
+transfer, literature correlations) over them via `catalog_runner.py`, and emits
+**findings**. Everything computable is computed deterministically; an optional
+LLM **trajectory analyzer** adds pattern findings on top (advisory). Findings pass
+through `finding_validator.py` (physical-bound checks → `data_gap`) and the
+**claim guard**; a symmetry check flags metrics that should have run but didn't;
+a metadata-anomaly pre-pass flags instrument/scale/header changes. Narrative
+observations from PDF prose are carried through. Principle: deterministic metrics
+and validators first, LLM second.
+
+### 2.3 Stage 3 — Diagnose (`src/fermdocs_diagnose`)
+
+Bundle → `diagnosis/diagnosis.json`. An **observational** ReAct agent with hard
+tool-use enforcement (`tools_bundle/`, including a sandboxed `execute_python`)
+reports *what happened* — failures, trends, what is uncertain — and explicitly
+**must not** claim causality ("why"); causal reasoning is the next stage's job
+(enforced by forbidden-word checks). Writes an **audit** trace
+(`audit/trace_writer.py`) under a strict "runtime code never reads audit
+artifacts as evidence" invariant. Diagnosis is optional — healthy bundles skip
+straight to hypothesis.
+
+### 2.4 Stage 4 — Hypothesize (`src/fermdocs_hypothesis`)
+
+Bundle (+ optional diagnosis) → `hypothesis_output.json` + a human-readable event
+log (`global.md`). A **multi-agent debate**, budget-bounded:
+
+- **Orchestrator** selects which topic to debate each turn; a deterministic
+  **ranker** (`ranker.py`) scores topics by severity × priority + citation
+  density − attempts/rejections.
+- **Specialists** (kinetics, mass-transfer, metabolic) contribute evidence-cited
+  **facets**, each carrying written **invariants** ("stay in your domain", "cite
+  ≥1 finding", "confidence ≤0.85").
+- **Critic** challenges; **Judge** rules the criticism valid or not;
+  **Synthesizer** forms final hypotheses; **lessons summarizer** distills durable
+  lessons.
+- **Cross-run memory** is read in (prior lessons injected as `[CROSS-RUN
+  LESSONS]`) and written out at clean exit, keyed by `process_family`.
+- **Human-in-the-loop**: open questions can pause the run for operator answers,
+  then resume. A **user question** acts as a lens over the bottom-up debate, not
+  a replacement for it.
+
+Validators enforce citation integrity (unknown citations dropped/raised),
+provenance downgrade (no matching prior → `schema_only`), and the **claim guard**
+(contradict-the-data → downgrade).
+
+### 2.5 Stage 5 — Recommend (`src/fermdocs_recommend`)
+
+Bundle + hypotheses → `recommend/recommendation.json`. Two complementary engines:
+
+- **Dynamic model bake-off.** A ReAct agent fits candidate process models —
+  **mechanistic** (ODE with fitted params), **surrogate** (neural/statistical),
+  **hybrid** (ODE + learned residual), plus a pre-trained IndPenSim path for
+  `penicillin_fedbatch` — under leave-one-run-out scoring. A **deterministic
+  rubric** (`rubric.py`, no LLM) picks the winner on held-out fit, parameter
+  plausibility, and optimizer movement. The winner is used as an oracle to
+  line-search the control knobs for the best next-batch intervention.
+- **Cross-run comparative engine** (`cross_run.py`). On sparse fed-batch data the
+  per-run dynamic fits often can't identify, so this relates each per-run lever
+  (from `run_conditions`) to the outcome **across** runs (numeric linear fit /
+  categorical group means) and emits the controllable levers as interventions —
+  observational associations, each carrying that caveat.
+- **Mechanistic ODE discovery** (`mech_discovery.py`): an LLM proposes/iterates a
+  kinetic ODE, fit across all runs, gated by leave-runs-out CV.
+
+**Honest refusal** is first-class: if nothing clears the rubric, the stage emits a
+refusal code and **zero** interventions (schema-enforced coherence). It never
+flips a run to FAILED.
+
+### 2.6 Stage 6 — Optimize (`src/fermdocs_optimize`, `src/fermdocs_optimize_debate`)
+
+Bundle → an optimization output (debated levers + a best operating point, or an
+honest refusal). Two halves:
+
+- **Opportunity debate** (`fermdocs_optimize_debate`). Reuses the hypothesis
+  debate engine, but seeded forward-looking: one topic per **discovered lever**
+  (from `lever_discovery.py` — the experiment's own controllable inputs:
+  metadata design factors like nitrogen source + varying observation channels)
+  plus observed **trend** topics. The specialists argue where the titer headroom
+  is. Trends (evidence-grounded) outrank speculative levers in the ranker.
+- **Optimizer proper** (`fermdocs_optimize`). Discovers a model and searches for
+  the best operating point. Two oracle modes (`FERMDOCS_OPTIMIZE_ORACLE`):
+  - **`labs`** — a process-simulator oracle drives an active-learning loop
+    (`active_optimize.py`, `loop.py`): fit a model → propose points → verify on
+    the oracle → fold surprises back in. Includes **equation discovery**
+    (`discovery/`: an agent writes ODE structure, the compiler `expr.py`
+    safely evaluates it, the oracle refines + verifies, and a global search
+    `oracle_search.py` finds the within-box maximum).
+  - **`data`** — no simulator: discover a **lever→titer model on the uploaded
+    data itself** (`data_equation.py`). Mechanistic-first — a coupled ODE over
+    *all* the measured variables (`discovery/general_mech.py`), gated by
+    leave-runs-out held-out R² — falling back to a static algebraic surrogate
+    (numeric + one-hot categorical levers). The winner is optimized only over the
+    **observed envelope**, with data-relative sanity guards (reject predictions
+    implausible vs the observed maximum; mark boundary-sitting optima as
+    insufficient-data, not a validated optimum; flag fed-batch operating-mode
+    mismatch) and honest refusal when nothing generalizes.
+
+The decision contract (`schema.py`) mirrors recommend's discipline:
+confident ↔ has a candidate, refusal ↔ has a reason.
+
+---
+
+## 3. Stage interfaces and the bundle
+
+The **bundle** is a directory written by ingest/characterize and read by every
+later stage. Canonical contents:
+
+```
+bundle_<id>/
+  meta.json                         readiness signal, written LAST
+  dossier.json                      Stage 1 output (Part II §9)
+  characterization/
+    characterization.json           trajectories + findings + narrative obs
+    observations.csv                long-format (run_id, variable, time_h, value)
+  diagnosis/diagnosis.json          Stage 3 (optional)
+  recommend/recommendation.json     Stage 5
+  audit/                            diagnosis ReAct trace — NEVER read as evidence
+```
+
+Hypothesis/optimize outputs are written under their own run roots (the bundle is
+their read-only input). Memory is external (the `fermdocs_memory` backend), not in
+the bundle. Rules: stages depend only on bundle files, never on each other's
+Python internals; `meta.json` last means a half-written bundle is never treated as
+ready; re-running a stage overwrites its own output and nothing else.
+
+The detailed Stage-1 reference follows in Part II.
+
+---
+
+# Part II — Ingestion layer (deep dive)
+
+The sections below are the original, in-depth reference for **Stage 1
+(`fermdocs`)**. Their numbering is local to this part.
 
 ## 2. Pipeline
 

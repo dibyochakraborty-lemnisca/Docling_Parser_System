@@ -21,10 +21,12 @@ from fermdocs_hypothesis.agents.specialist_base import (
 )
 from fermdocs_hypothesis.prompts import ToolHint
 from fermdocs_hypothesis.tools_bundle.factory import (
+    EXECUTE_PYTHON,
     GET_NARRATIVE_OBSERVATIONS,
     GET_PRIORS,
     HypothesisToolBundle,
     QUERY_BUNDLE,
+    QUERY_RELATIONSHIP,
 )
 
 # The lever vocabulary the specialists must speak so a facet maps to a knob.
@@ -83,6 +85,14 @@ _TOOL_HINTS = (
              purpose="organism-aware variable bounds (range, typical, source)"),
     ToolHint(name=GET_NARRATIVE_OBSERVATIONS,
              purpose="filter narrative_observations by run_id/tag/variable"),
+    ToolHint(name=QUERY_RELATIONSHIP,
+             purpose="test a design factor's cross-run effect on titer (args: lever); "
+                     "returns delta/direction/n/best_setting. Use to CHECK a lever, "
+                     "then cite its assoc_id (WRA-*) in cited_association_ids"),
+    ToolHint(name=EXECUTE_PYTHON,
+             purpose="run short pandas analysis over the data (args: code); `obs` "
+                     "(observations.csv: run_id,variable,time_h,value) is pre-loaded. "
+                     "Use to verify a claim against the curves instead of asserting"),
     ToolHint(name="contribute_facet", purpose="TERMINAL: emit your lever facet and exit"),
 )
 
@@ -125,6 +135,13 @@ def _shared_invariants(role: str) -> tuple[str, ...]:
         " it maps to a controllable knob (biomass/total_sub/malt_frac/dilution).",
         f"Stay in the {role} domain; defer other levers to peers.",
         "Every facet must cite ≥1 finding, narrative, or trajectory.",
+        "When relevant_within_run associations are present, GROUND your lever"
+        " claim in them: put the relevant assoc_id(s) (WRA-*) in"
+        " cited_association_ids, state the magnitude + direction and that it is an"
+        " observational association across N runs (not proven causal), and set"
+        " confidence_basis='cross_run'. A design factor that measurably moved the"
+        " objective beats a speculative one. (cited_association_ids counts as"
+        " grounding, so a design-factor facet is not flagged schema_only.)",
         "Confidence ≤ 0.85; thin evidence → low confidence and say so.",
         "Propose direction + mechanism, not a magnitude — the simulator oracle"
         " verifies the actual titer gain downstream; do NOT overclaim the number.",

@@ -38,3 +38,25 @@ def test_double_encoded_unwrapped():
 def test_unrecoverable_still_raises():
     with pytest.raises(json.JSONDecodeError):
         loads_lenient("not json at all {{{")
+
+
+def test_truncated_midstring_salvaged_to_partial():
+    # thinking model ate the budget; JSON cut off mid-value (the run-killing shape)
+    t = '{\n  "action": "contribute",\n  "summary": "Increasing the initial bio'
+    assert loads_lenient(t) == {"action": "contribute"}
+
+
+def test_truncated_after_complete_array_keeps_it():
+    t = '{"action":"contribute","cited_finding_ids":["F-1","F-2"],"summary":"ab'
+    assert loads_lenient(t) == {"action": "contribute", "cited_finding_ids": ["F-1", "F-2"]}
+
+
+def test_truncated_nested_object_closes_open_brackets():
+    t = '{"a": 1, "nested": {"x": "done", "y": "cut o'
+    out = loads_lenient(t)
+    assert out["a"] == 1
+    assert out["nested"] == {"x": "done"}
+
+
+def test_well_formed_untouched_by_salvage():
+    assert loads_lenient('{"a": 1, "b": [2, 3]}') == {"a": 1, "b": [2, 3]}

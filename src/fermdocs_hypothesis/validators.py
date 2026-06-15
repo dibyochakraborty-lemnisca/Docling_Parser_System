@@ -96,11 +96,39 @@ def validate_hypothesis_output(
         _apply_soft_enforcement(h, priors_variables) for h in cleaned_finals
     ]
 
+    # Claim guard: reject hypothesis text that CONTRADICTS the deterministic
+    # facts (a populated channel called "unavailable", oxygen limitation on a
+    # never-aerobic run, a rate "at t=0"). Data-derived from the upstream
+    # characterization; downgrades the offending hypothesis to schema_only and
+    # records the correction. Plan: praaj review items 4-7.
+    from fermdocs.claim_guard import build_claim_facts, check_claim
+
+    facts = build_claim_facts(
+        upstream.findings, {t.variable for t in upstream.trajectories}, dossier=None)
+    cleaned_finals = [_apply_claim_guard(h, facts, check_claim) for h in cleaned_finals]
+
     # Rejected hypotheses are kept untouched; they're audit records, not
     # outputs anyone consumes for reasoning.
     return output.model_copy(
         update={"final_hypotheses": cleaned_finals},
     )
+
+
+def _apply_claim_guard(h: FinalHypothesis, facts, check_claim) -> FinalHypothesis:
+    """Downgrade a hypothesis whose text contradicts the deterministic facts."""
+    text = " ".join(filter(None, [h.summary, getattr(h, "question_response_summary", None)]))
+    violations = check_claim(text, facts)
+    if not violations:
+        return h
+    correction = " ".join(v.message for v in violations)
+    _log.warning("hypothesis %s claim-guarded (%s)", h.hyp_id,
+                 ", ".join(v.code for v in violations))
+    return h.model_copy(update={
+        "summary": f"{h.summary}  [claim-guard: {correction}]",
+        "confidence": min(h.confidence, 0.2),
+        "confidence_basis": ConfidenceBasis.SCHEMA_ONLY,
+        "provenance_downgraded": True,
+    })
 
 
 def _filter_finals(

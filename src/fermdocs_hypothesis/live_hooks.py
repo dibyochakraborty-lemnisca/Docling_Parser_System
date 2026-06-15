@@ -165,6 +165,9 @@ class LiveHooks:
             available_trajectories=self._bundle.trajectories_pool,
             available_priors=self._bundle.priors_pool,
             available_analyses=self._bundle.analyses_pool,
+            # Opportunity-debate only; the hypothesis LoadedBundle has no such
+            # pool, so default to empty for the diagnosis-driven stage.
+            available_within_run=getattr(self._bundle, "within_run_pool", None),
             user_question=self._user_question,
             followup_context=self._followup_context,
             cross_run_lessons=self._fetch_cross_run(state.current_topic.summary),
@@ -297,5 +300,18 @@ class LiveHooks:
                     "run_id": n.run_id,
                     "time_h": n.time_h,
                     "affected_variables": list(n.affected_variables),
+                }
+        # Within-run associations (WRA-*) are a real, resolvable citation type
+        # (opportunity debate). Resolve them so the critic/judge can VERIFY the
+        # cited numbers instead of mistaking a valid WRA-* id for a hallucination.
+        assoc_by_id = {a.assoc_id: a for a in (getattr(self._bundle, "within_run_pool", None) or [])}
+        for aid in getattr(hyp, "cited_association_ids", []) or []:
+            a = assoc_by_id.get(aid)
+            if a is not None:
+                lookups[aid] = {
+                    "type": "within_run_association",
+                    "lever": a.lever, "delta": a.delta, "direction": a.direction,
+                    "n": a.n, "best_setting": a.best_setting,
+                    "objective": a.objective, "summary": a.summary,
                 }
         return lookups

@@ -563,6 +563,13 @@ class SynthesizerAgent:
         if view.followup_context is None:
             parent_ids = []
 
+        # Carry within-run association citations up by UNION of the facets'
+        # (validated at the facet boundary), so the synthesizer can't invent
+        # assoc ids and an association-grounded hypothesis stays grounded.
+        cited_assocs = sorted({
+            a for f in view.facets for a in getattr(f, "cited_association_ids", [])
+        })
+
         return HypothesisFull(
             hyp_id=hyp_id,
             summary=summary,
@@ -570,6 +577,7 @@ class SynthesizerAgent:
             cited_finding_ids=cited_findings,
             cited_narrative_ids=cited_narratives,
             cited_trajectories=cited_trajs,
+            cited_association_ids=cited_assocs,
             affected_variables=affected,
             confidence=confidence,
             confidence_basis=basis,

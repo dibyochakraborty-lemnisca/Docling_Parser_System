@@ -81,11 +81,17 @@ _log = logging.getLogger(__name__)
 # API-runner budget: 2× BudgetSnapshot defaults so debates explore more
 # topics and run more critic cycles per topic before terminating. Trade-off
 # is ~2× cost and wall time per run. Bump these together if you raise one.
+# Input tokens are the binding constraint on how many topics get debated: each
+# topic costs ~150-300k input tokens (orchestrator + up to 3 specialists + up to
+# 6 critic cycles + synthesis, ~46k/call), so the old 400k ceiling capped the
+# debate at 2-3 topics. Raised 3× to ~1.2M to debate ~8-10 topics; turns and
+# tool-calls are lifted in step so the token ceiling stays the governing lever
+# rather than re-bottlenecking at the old 20-turn / 160-call caps.
 _API_BUDGET = BudgetSnapshot(
-    max_turns=20,                     # 2× default 10 — more topics covered
+    max_turns=30,                     # ~1 select + 1 synth per topic -> ~10+ topics
     max_critic_cycles_per_topic=6,    # 2× default 3 — deeper per-topic refinement
-    max_tool_calls_total=160,         # 2× default 80 — covers raised turn cap
-    max_total_input_tokens=400_000,   # 2× default 200k — hard token ceiling
+    max_tool_calls_total=240,         # headroom for the raised turn/token caps
+    max_total_input_tokens=1_200_000,  # 3× prior 400k — the real "more topics" lever
     max_open_questions=30,            # 2× default 15 — more OQs allowed
 )
 
@@ -936,16 +942,111 @@ def _run_opportunity_debate_blocking(bundle_dir: Path, global_md: Path):
     )
 
 
+def _optimize_oracle_mode() -> str:
+    """'data' = verify against the uploaded experiment (k-NN over real runs);
+    'labs' = the LABS process simulator. Default 'labs' to preserve behavior."""
+    return os.environ.get("FERMDOCS_OPTIMIZE_ORACLE", "labs").strip().lower()
+
+
 def _optimizer_simulator_available(bundle_dir: Path) -> bool:
-    """True iff the closed-loop optimizer can run: a process simulator (oracle)
-    is configured. Today that means the LABS `generate-batches` CLI on PATH plus
-    a mech-params file via FERMDOCS_OPTIMIZE_MECH_PARAMS. Absent → debate-only
-    (the honest default; we never optimize against a fake oracle)."""
+    """True iff the closed-loop optimizer can run.
+
+    'data' oracle: the uploaded experiment IS the oracle, so it's available
+    whenever the bundle has usable observations (the run-time builder refuses
+    gracefully if not, and we fall back to debate-only).
+    'labs' oracle: requires the LABS `generate-batches` CLI plus a mech-params
+    file. Absent → debate-only (we never optimize against a fake oracle)."""
+    if _optimize_oracle_mode() == "data":
+        return (bundle_dir / "characterization" / "observations.csv").exists()
     import shutil
 
     mech = os.environ.get("FERMDOCS_OPTIMIZE_MECH_PARAMS")
     gen_bin = os.environ.get("FERMDOCS_GENERATE_BATCHES_BIN", "generate-batches")
     return bool(mech and Path(mech).exists() and shutil.which(gen_bin))
+
+
+def _run_data_optimization(bundle_dir: Path) -> dict:
+    """Optimize against the uploaded data itself (no simulator).
+
+    Discovers a lever->titer model on the real runs — a mechanistic kinetic ODE
+    first (preferred), falling back to a static algebraic surrogate — gated by
+    leave-run-out cross-validation. The levers are whatever THIS experiment
+    varied: design factors from the dossier's run_conditions metadata (nitrogen
+    source, feed conc, timing) plus varying observation channels, NOT a hardcoded
+    knob list. The winner is optimized over the observed lever envelope. If
+    neither model generalizes, it refuses honestly (the data is too sparse or too
+    confounded to support a predictive model)."""
+    import pandas as pd
+
+    from fermdocs.bundle import BundleReader
+    from fermdocs_optimize.data_equation import GATE_R2, discover_and_optimize
+
+    obs = pd.read_csv(bundle_dir / "characterization" / "observations.csv")
+    try:
+        dossier = BundleReader(bundle_dir).get_dossier()
+    except Exception:  # noqa: BLE001 — no dossier just means metadata levers are skipped
+        dossier = None
+    result = discover_and_optimize(obs, dossier=dossier)
+
+    df = obs.copy()
+    df["value"] = pd.to_numeric(df["value"], errors="coerce")
+    peaks = df[df["variable"] == "product_g_l"].groupby("run_id")["value"].max()
+    baseline = float(peaks.median()) if len(peaks) else None
+
+    lever_desc = ", ".join(
+        f"{lev['name']} ({lev['kind']}, {lev['source']})" for lev in result.levers
+    ) or "none found"
+    common_note = {
+        "kind": "note",
+        "title": f"Data-backed optimization ({result.family}, no process simulator)",
+        "detail": (
+            f"Levers were discovered from this experiment's own data — {lever_desc}. "
+            "A lever->titer model was discovered on the uploaded runs and validated "
+            f"by leave-run-out cross-validation (gate R^2 >= {GATE_R2}). It is bounded "
+            "to the observed envelope — no extrapolation, and categorical levers stay "
+            "within observed category combinations. Titer is on the ingested product "
+            "scale (ranks meaningful). Confounded campaigns yield associations, not "
+            "proven causation; validate any proposed setting experimentally."
+        ),
+    }
+
+    if not result.cleared:
+        # Honest refusal: no model generalized on this data.
+        return {
+            "best_candidate": None, "best_achieved_titer": None,
+            "baseline_titer": round(baseline, 3) if baseline is not None else None,
+            "improvement": None, "confident": False,
+            "refusal_reason": "no_generalizable_model",
+            "selection_rationale": result.rationale,
+            "model_log": [common_note],
+            "meta_extra": {"oracle": "data", "family": result.family,
+                           "cv_r2": result.cv_r2, "levers": result.levers},
+        }
+
+    predicted = float(result.predicted_peak) if result.predicted_peak is not None else None
+    improvement = (round(predicted - baseline, 3)
+                   if predicted is not None and baseline is not None else None)
+    # The boundary/insufficient-data and operating-mode notes are now folded into
+    # result.rationale by the optimizer's sanity guards (data-relative); surface
+    # the boundary_limited flag in meta so the UI can mark it.
+    return {
+        "best_candidate": result.best_knobs,
+        "best_achieved_titer": round(predicted, 3) if predicted is not None else None,
+        "baseline_titer": round(baseline, 3) if baseline is not None else None,
+        "improvement": improvement,
+        "confident": True,
+        "refusal_reason": None,
+        "selection_rationale": result.rationale,
+        "model_log": [common_note, {
+            "kind": "equation",
+            "title": f"{result.family} model '{result.spec_name}' "
+                     f"(held-out R^2={result.cv_r2})",
+            "detail": str(result.expr),
+        }],
+        "meta_extra": {"oracle": "data", "family": result.family,
+                       "cv_r2": result.cv_r2, "knobs_on_boundary": result.on_boundary,
+                       "boundary_limited": result.boundary_limited, "levers": result.levers},
+    }
 
 
 def _assemble_optimization_output(bundle_dir: Path, debate_result, run_id: str) -> dict:
@@ -968,11 +1069,14 @@ def _assemble_optimization_output(bundle_dir: Path, debate_result, run_id: str) 
 
     if base["simulator_available"]:
         try:
+            if _optimize_oracle_mode() == "data":
+                # Verify against the uploaded experiment itself, not a simulator.
+                return {**base, **_run_data_optimization(bundle_dir)}
             # Active-learning optimization: discover a model on the data, optimize
             # it, verify the optimum on the oracle, augment + re-discover on error.
             return {**base, **_run_active_optimization(bundle_dir)}
         except Exception as exc:  # noqa: BLE001 — fall back to debate-only, never fail the run
-            _log.exception("active optimization failed; reporting debate levers only")
+            _log.exception("optimization failed; reporting debate levers only")
             base["meta"]["optimizer_error"] = f"{type(exc).__name__}: {exc}"
 
     # Debate-only: still show the equations the agent's model uses.

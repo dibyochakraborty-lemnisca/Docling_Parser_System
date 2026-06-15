@@ -9,23 +9,35 @@ and the agent's own declared parameters) and a small whitelist of math functions
 are allowed. Anything else raises — so the agent can rewrite the *equations*,
 not run code.
 
-State order is fixed to match the mechanistic model: y = [X, S, P, M, O2, V].
+By default the state order matches the LABS mechanistic model
+(y = [X, S, P, M, O2, V]), but `compile_spec` accepts an arbitrary `state`
+tuple (plus its own conditions/constants/defaults) so the SAME safe compiler can
+build a kinetic model over whatever variables a dataset actually measured — not
+only the LABS species. The LABS defaults reproduce the original behavior exactly.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import sympy as sp
 from sympy.core.function import AppliedUndef
 from sympy.parsing.sympy_parser import parse_expr
 
-# State variables, in integration order.
+# LABS state variables, in integration order (the default).
 STATE = ("X", "S", "P", "M", "O2", "V")
 # Operating conditions the loop supplies per batch (D is derived = F/V).
 CONDITIONS = ("D", "F", "S_f", "M_f", "v0")
 # Fixed physics constants (reactor config — NOT the oracle's kinetic params).
 CONSTANTS = ("K_O2", "q_O2_max", "O2_sat", "kLa", "C_FEED")
+# LABS ODE defaults (so the agent can omit the boilerplate balances) and the
+# states it must define. Pass empties for a general (batch) model where every
+# state needs an explicit ODE and there is no reactor physics.
+_LABS_ODE_DEFAULTS = {
+    "V": "F",
+    "O2": "kLa*(O2_sat-O2) - q_O2_max*(O2/(K_O2+O2))*X - D*O2",
+}
+_LABS_REQUIRED = ("X", "S", "P", "M")
 
 # Whitelisted math functions available inside expressions.
 _FUNCS = {
@@ -54,34 +66,54 @@ class CompiledModel:
     """A compiled, parameter-named RHS ready for odeint/least_squares."""
 
     param_names: tuple[str, ...]
-    _funcs: list  # one lambdified callable per state, in STATE order
+    _funcs: list  # one lambdified callable per state, in `state` order
     _arg_order: tuple[str, ...]
+    state: tuple[str, ...] = STATE
+    _cond_names: tuple[str, ...] = field(default_factory=lambda: tuple(
+        c for c in CONDITIONS if c != "D"))
+    _has_D: bool = True  # derive D = F/V (LABS reactor dilution)
 
     def rhs(self, y, t, theta, cond, const):
         """dy/dt for odeint. `theta` aligns to `param_names`; `cond`/`const` are
-        dicts for CONDITIONS (minus D, derived here) and CONSTANTS."""
-        X, S, P, M, O2, V = y
-        D = cond["F"] / V if V > 1e-12 else 0.0
-        env = {
-            "X": X, "S": S, "P": P, "M": M, "O2": O2, "V": V,
-            "D": D, "F": cond["F"], "S_f": cond["S_f"], "M_f": cond["M_f"],
-            "v0": cond["v0"], **const,
-            **{n: float(v) for n, v in zip(self.param_names, theta)},
-        }
+        dicts for the (non-derived) conditions and constants. Env is built from
+        the model's own `state` order, so this works for any state vector."""
+        env = {s: y[i] for i, s in enumerate(self.state)}
+        if self._has_D:
+            V = env.get("V", cond.get("v0", 1.0))
+            env["D"] = cond["F"] / V if V > 1e-12 else 0.0
+        for c in self._cond_names:
+            env[c] = cond[c]
+        env.update(const)
+        for n, v in zip(self.param_names, theta):
+            env[n] = float(v)
         args = [env[a] for a in self._arg_order]
         return [float(f(*args)) for f in self._funcs]
 
 
-def compile_spec(params: list[str], aux: dict[str, str], odes: dict[str, str]) -> CompiledModel:
+def compile_spec(
+    params: list[str], aux: dict[str, str], odes: dict[str, str], *,
+    state: tuple[str, ...] = STATE,
+    conditions: tuple[str, ...] = CONDITIONS,
+    constants: tuple[str, ...] = CONSTANTS,
+    ode_defaults: dict[str, str] | None = None,
+    required: tuple[str, ...] | None = None,
+) -> CompiledModel:
     """Compile an agent-proposed model into a CompiledModel.
 
     `params`  : names the agent introduces and wants fitted.
     `aux`     : intermediate expressions (e.g. mu, growth term); may reference
                 state, conditions, constants, params, and earlier aux names.
-    `odes`    : derivative expression per state. X,S,P,M are required; O2 and V
-                default to the standard aeration / volume balance if omitted.
-    """
-    allowed = set(STATE) | set(CONDITIONS) | set(CONSTANTS) | set(params) | set(aux)
+    `odes`    : derivative expression per state.
+
+    By default this builds the LABS model (state X,S,P,M,O2,V; X,S,P,M required;
+    O2/V default to the standard balances; D=F/V derived). Pass `state` (and,
+    for a batch model, `conditions=()`, `constants=()`, `ode_defaults={}`) to
+    discover a kinetic model over arbitrary measured variables; then every state
+    needs an explicit ODE."""
+    ode_defaults = _LABS_ODE_DEFAULTS if ode_defaults is None else ode_defaults
+    required = _LABS_REQUIRED if required is None else required
+    has_D = "D" in conditions
+    allowed = set(state) | set(conditions) | set(constants) | set(params) | set(aux)
     symtab = {n: sp.Symbol(n) for n in allowed}
 
     def _parse(name: str, text: str):
@@ -115,21 +147,26 @@ def compile_spec(params: list[str], aux: dict[str, str], odes: dict[str, str]) -
 
     # Sensible defaults so the agent can focus on the interesting balances.
     full_odes = dict(odes)
-    full_odes.setdefault("V", "F")
-    full_odes.setdefault("O2", "kLa*(O2_sat-O2) - q_O2_max*(O2/(K_O2+O2))*X - D*O2")
+    for s, expr in ode_defaults.items():
+        full_odes.setdefault(s, expr)
 
-    missing = [s for s in ("X", "S", "P", "M") if s not in full_odes]
+    missing = [s for s in required if s not in full_odes]
     if missing:
-        raise ExprError(f"odes must define X,S,P,M (missing {missing})")
+        raise ExprError(f"odes must define {list(required)} (missing {missing})")
+    undefined = [s for s in state if s not in full_odes]
+    if undefined:
+        raise ExprError(f"every state needs an ODE (missing {undefined})")
 
-    arg_order = tuple(STATE) + ("D",) + tuple(c for c in CONDITIONS if c != "D") \
-        + tuple(CONSTANTS) + tuple(params)
+    cond_names = tuple(c for c in conditions if c != "D")
+    arg_order = tuple(state) + (("D",) if has_D else ()) + cond_names \
+        + tuple(constants) + tuple(params)
     arg_syms = [sp.Symbol(a) for a in arg_order]
 
     funcs = []
-    for s in STATE:
+    for s in state:
         e = _parse(f"d{s}/dt", full_odes[s])
         e = e.subs({sp.Symbol(k): v for k, v in aux_expr.items()})
         funcs.append(sp.lambdify(arg_syms, e, modules=_LAMBDIFY_MODULES))
 
-    return CompiledModel(param_names=tuple(params), _funcs=funcs, _arg_order=arg_order)
+    return CompiledModel(param_names=tuple(params), _funcs=funcs, _arg_order=arg_order,
+                         state=tuple(state), _cond_names=cond_names, _has_D=has_D)

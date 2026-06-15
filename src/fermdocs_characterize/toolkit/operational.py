@@ -30,14 +30,22 @@ class DOMarginResult:
     `min_margin`: deepest deficit seen.
     `time_below_h`: time-weighted hours spent below threshold (linear
         interpolation between samples; reasonable for hourly sampling).
+    `never_aerobic`: DO never rose above the threshold at ANY timepoint
+        (max_do <= threshold). When true, "below threshold" is the operating
+        regime (consistent with anaerobic/microaerophilic operation), NOT an
+        oxygen-limitation event — you cannot be O2-limited relative to a demand
+        the process never aerated for. Callers must NOT report this as a
+        bottleneck. This is a data signal, not an organism assumption.
     """
 
     frac_below: float
     min_margin: float
     min_do: float
+    max_do: float
     mean_do: float
     time_below_h: float
     n_points: int
+    never_aerobic: bool
 
 
 def compute_do_margin(
@@ -85,9 +93,14 @@ def compute_do_margin(
         frac_below=float(below.sum()) / float(len(do)),
         min_margin=float(np.min(margin)),
         min_do=float(np.min(do)),
+        max_do=float(np.max(do)),
         mean_do=float(np.mean(do)),
         time_below_h=float(time_below),
         n_points=int(len(t)),
+        # DO never exceeded the limitation threshold at any sample -> there was
+        # never an aerobic regime to be limited relative to. Data-derived, not an
+        # organism prior: this gates the "O2 bottleneck" interpretation downstream.
+        never_aerobic=bool(np.max(do) <= critical_threshold_pct),
     )
 
 

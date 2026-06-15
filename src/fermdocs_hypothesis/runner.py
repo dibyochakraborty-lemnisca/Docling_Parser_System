@@ -992,6 +992,7 @@ def _build_final(
         cited_finding_ids=list(hyp.cited_finding_ids),
         cited_narrative_ids=list(hyp.cited_narrative_ids),
         cited_trajectories=list(hyp.cited_trajectories),
+        cited_association_ids=list(getattr(hyp, "cited_association_ids", [])),
         affected_variables=list(hyp.affected_variables),
         confidence=hyp.confidence,
         confidence_basis=hyp.confidence_basis,

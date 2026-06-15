@@ -162,6 +162,15 @@ class SeedTopic(BaseModel):
     affected_variables: list[str] = Field(default_factory=list)
     severity: Severity
     priority: float = Field(ge=0.0, le=1.0)
+    effect_size: float = Field(
+        default=0.0, ge=0.0, le=1.0,
+        description=(
+            "Normalized cross-run association strength (|delta|/outcome spread) "
+            "for opportunity-debate lever topics. 0.0 for every other topic "
+            "(diagnosis failures/analyses), so the ranker's effect term is inert "
+            "outside the optimize debate."
+        ),
+    )
 
     @field_validator("topic_id")
     @classmethod
@@ -225,6 +234,15 @@ class FacetFull(BaseModel):
     cited_finding_ids: list[str] = Field(default_factory=list)
     cited_narrative_ids: list[str] = Field(default_factory=list)
     cited_trajectories: list[TrajectoryRef] = Field(default_factory=list)
+    cited_association_ids: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Within-run association ids (WRA-*) this facet is grounded in — the"
+            " cross-run lever->objective evidence a design factor cites when it"
+            " has no measured trajectory. Counts as grounding, so an"
+            " association-grounded facet is NOT flagged schema_only."
+        ),
+    )
     affected_variables: list[str] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=LLM_CONFIDENCE_CAP)
     confidence_basis: ConfidenceBasis
@@ -239,16 +257,17 @@ class FacetFull(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _flag_if_uncited(cls, data):
-        """A facet that cites no finding/narrative/trajectory is NOT rejected —
-        it's kept but flagged un-grounded (schema_only basis, confidence capped),
-        so the critic can judge it on merit and red-flag weak provenance instead
-        of the whole run crashing. (flag-don't-fake: we never fabricate a citation
-        just to pass validation.)"""
+        """A facet that cites no finding/narrative/trajectory/association is NOT
+        rejected — it's kept but flagged un-grounded (schema_only basis,
+        confidence capped), so the critic can judge it on merit and red-flag weak
+        provenance instead of the whole run crashing. (flag-don't-fake: we never
+        fabricate a citation just to pass validation.)"""
         if isinstance(data, dict):
             grounded = bool(
                 data.get("cited_finding_ids")
                 or data.get("cited_narrative_ids")
                 or data.get("cited_trajectories")
+                or data.get("cited_association_ids")
             )
             if not grounded:
                 data = {
@@ -270,6 +289,10 @@ class HypothesisFull(BaseModel):
     cited_finding_ids: list[str] = Field(default_factory=list)
     cited_narrative_ids: list[str] = Field(default_factory=list)
     cited_trajectories: list[TrajectoryRef] = Field(default_factory=list)
+    cited_association_ids: list[str] = Field(
+        default_factory=list,
+        description="Within-run association ids (WRA-*) carried up from the facets.",
+    )
     affected_variables: list[str] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=LLM_CONFIDENCE_CAP)
     confidence_basis: ConfidenceBasis
@@ -338,6 +361,7 @@ class HypothesisFull(BaseModel):
                 data.get("cited_finding_ids")
                 or data.get("cited_narrative_ids")
                 or data.get("cited_trajectories")
+                or data.get("cited_association_ids")
             )
             if not grounded:
                 data = {
@@ -709,6 +733,27 @@ class OrchestratorView(BaseModel):
     followup_context: FollowupContext | None = None
 
 
+class WithinRunAssociationRef(BaseModel):
+    """A cross-run association computed WITHIN this experiment: how a controllable
+    design factor (lever) tracked the objective across the runs. Distinct from
+    `cross_run_lessons` (memory from PRIOR experiments) — this is this-experiment
+    evidence the opportunity-debate specialists reason from, so a design factor
+    with no measured trajectory still has grounded numbers to argue. Observational
+    (association, not proven causation)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    assoc_id: str
+    lever: str
+    summary: str = Field(min_length=1)
+    delta: float
+    direction: str
+    n: int
+    norm_effect: float = Field(ge=0.0, le=1.0)
+    objective: str
+    best_setting: str | float | None = None
+
+
 class SpecialistView(BaseModel):
     specialist_role: SpecialistRole
     current_topic: TopicSpec
@@ -727,6 +772,15 @@ class SpecialistView(BaseModel):
     )
     open_questions_in_domain: list[OpenQuestionRef] = Field(default_factory=list)
     prior_facets_this_topic: list[FacetSummary] = Field(default_factory=list)
+    relevant_within_run: list[WithinRunAssociationRef] = Field(
+        default_factory=list,
+        description=(
+            "Within-experiment lever->objective associations (opportunity debate)."
+            " Top design factors by effect size, so the specialist argues from"
+            " what actually moved the objective across runs. Empty in the"
+            " diagnosis-driven hypothesis stage (no levers)."
+        ),
+    )
     user_question: UserQuestion | None = None
     followup_context: FollowupContext | None = None
     cross_run_lessons: LessonsDigest | None = Field(
@@ -819,6 +873,10 @@ class FinalHypothesis(BaseModel):
     cited_finding_ids: list[str] = Field(default_factory=list)
     cited_narrative_ids: list[str] = Field(default_factory=list)
     cited_trajectories: list[TrajectoryRef] = Field(default_factory=list)
+    cited_association_ids: list[str] = Field(
+        default_factory=list,
+        description="Within-run association ids (WRA-*) grounding this hypothesis.",
+    )
     affected_variables: list[str] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=LLM_CONFIDENCE_CAP)
     confidence_basis: ConfidenceBasis

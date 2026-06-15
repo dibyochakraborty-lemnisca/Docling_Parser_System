@@ -27,10 +27,12 @@ from fermdocs_hypothesis.schema import (
     SpecialistView,
 )
 from fermdocs_hypothesis.tools_bundle.factory import (
+    EXECUTE_PYTHON,
     GET_NARRATIVE_OBSERVATIONS,
     GET_PRIORS,
     HypothesisToolBundle,
     QUERY_BUNDLE,
+    QUERY_RELATIONSHIP,
     truncate_result,
 )
 
@@ -45,7 +47,8 @@ SPECIALIST_SCHEMA: dict[str, Any] = {
         # tool_call branch
         "tool": {
             "type": "STRING",
-            "enum": [QUERY_BUNDLE, GET_PRIORS, GET_NARRATIVE_OBSERVATIONS],
+            "enum": [QUERY_BUNDLE, GET_PRIORS, GET_NARRATIVE_OBSERVATIONS,
+                     QUERY_RELATIONSHIP, EXECUTE_PYTHON],
             "nullable": True,
         },
         "args": {
@@ -60,6 +63,9 @@ SPECIALIST_SCHEMA: dict[str, Any] = {
                 "run_id": {"type": "STRING", "nullable": True},
                 "tag": {"type": "STRING", "nullable": True},
                 "limit": {"type": "INTEGER", "nullable": True},
+                "lever": {"type": "STRING", "nullable": True},
+                "objective": {"type": "STRING", "nullable": True},
+                "code": {"type": "STRING", "nullable": True},
             },
         },
         # contribute_facet branch
@@ -68,6 +74,9 @@ SPECIALIST_SCHEMA: dict[str, Any] = {
             "type": "ARRAY", "items": {"type": "STRING"}, "nullable": True,
         },
         "cited_narrative_ids": {
+            "type": "ARRAY", "items": {"type": "STRING"}, "nullable": True,
+        },
+        "cited_association_ids": {
             "type": "ARRAY", "items": {"type": "STRING"}, "nullable": True,
         },
         "cited_trajectories": {
@@ -233,7 +242,14 @@ class SpecialistAgent:
             if isinstance(t, dict) and t.get("run_id") and t.get("variable")
         ]
 
-        if not cited_findings and not cited_narratives and not cited_trajs:
+        # Within-run association citations: validate against what the view
+        # actually carried (drop hallucinated assoc ids — same discipline as
+        # findings, enforced at this boundary so they can't leak downstream).
+        known_assoc = {a.assoc_id for a in (view.relevant_within_run or [])}
+        cited_assocs = [a for a in (parsed.get("cited_association_ids") or [])
+                        if a in known_assoc]
+
+        if not cited_findings and not cited_narratives and not cited_trajs and not cited_assocs:
             # Inherit the topic's REAL evidence when the specialist cited nothing.
             # If the topic itself is uncited, the facet stays uncited and FacetFull
             # flags it schema_only (we do NOT fabricate a citation — flag-don't-fake).
@@ -261,6 +277,7 @@ class SpecialistAgent:
             cited_finding_ids=cited_findings,
             cited_narrative_ids=cited_narratives,
             cited_trajectories=cited_trajs,
+            cited_association_ids=cited_assocs,
             affected_variables=affected,
             confidence=confidence,
             confidence_basis=basis,

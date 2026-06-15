@@ -36,6 +36,26 @@ def test_do_margin_full_violation_when_below_threshold() -> None:
     assert math.isclose(res.time_below_h, 10.0)  # entire run below
 
 
+def test_do_margin_anaerobic_never_aerobic_flagged() -> None:
+    # DO sits at ~0 the whole run (anaerobic lactic): never_aerobic must be True
+    # so downstream never calls this an O2 bottleneck.
+    t = np.linspace(0, 48, 7)
+    do = np.zeros_like(t)
+    res = compute_do_margin(t, do, critical_threshold_pct=30.0)
+    assert res.never_aerobic is True
+    assert res.max_do == 0.0
+
+
+def test_do_margin_real_crash_is_not_never_aerobic() -> None:
+    # DO starts aerobic (80%) then crashes below threshold: a genuine limitation,
+    # NOT the anaerobic operating regime.
+    t = np.linspace(0, 10, 11)
+    do = np.array([80, 70, 60, 40, 20, 10, 5, 5, 5, 5, 5], dtype=float)
+    res = compute_do_margin(t, do, critical_threshold_pct=30.0)
+    assert res.never_aerobic is False
+    assert res.frac_below > 0.0
+
+
 def test_do_margin_partial_violation() -> None:
     # Half the run below: hours 0-5 at 10%, hours 5-10 at 50%.
     t = np.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
