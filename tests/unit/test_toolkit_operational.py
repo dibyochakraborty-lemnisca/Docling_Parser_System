@@ -36,23 +36,33 @@ def test_do_margin_full_violation_when_below_threshold() -> None:
     assert math.isclose(res.time_below_h, 10.0)  # entire run below
 
 
-def test_do_margin_anaerobic_never_aerobic_flagged() -> None:
-    # DO sits at ~0 the whole run (anaerobic lactic): never_aerobic must be True
+def test_do_margin_anaerobic_flagged_when_pinned_at_zero() -> None:
+    # DO sits at ~0 the whole run (anaerobic lactic): anaerobic_operation True
     # so downstream never calls this an O2 bottleneck.
     t = np.linspace(0, 48, 7)
     do = np.zeros_like(t)
     res = compute_do_margin(t, do, critical_threshold_pct=30.0)
-    assert res.never_aerobic is True
-    assert res.max_do == 0.0
+    assert res.anaerobic_operation is True
 
 
-def test_do_margin_real_crash_is_not_never_aerobic() -> None:
-    # DO starts aerobic (80%) then crashes below threshold: a genuine limitation,
-    # NOT the anaerobic operating regime.
+def test_do_margin_saturated_then_crashes_is_anaerobic() -> None:
+    # The praaj pattern (run 3cfc2aa6/61f0b3e1): probe reads ~100% at inoculation,
+    # then DO collapses to 0 and stays. The OLD 'never_aerobic' (max<=threshold)
+    # missed this because max=100; the dominant-near-zero signal catches it.
+    t = np.linspace(0, 48, 10)
+    do = np.array([100, 0, 0, 0, 0, 0, 0, 0, 0, 0], dtype=float)
+    res = compute_do_margin(t, do, critical_threshold_pct=30.0)
+    assert res.max_do == 100.0                 # was aerobic at t0
+    assert res.anaerobic_operation is True     # but operates anaerobically -> flagged
+
+
+def test_do_margin_real_crash_to_low_is_not_anaerobic() -> None:
+    # DO starts aerobic then crashes to ~5% (low, but NOT pinned at zero): a
+    # genuine low-DO / possible limitation, NOT the anaerobic operating regime.
     t = np.linspace(0, 10, 11)
     do = np.array([80, 70, 60, 40, 20, 10, 5, 5, 5, 5, 5], dtype=float)
     res = compute_do_margin(t, do, critical_threshold_pct=30.0)
-    assert res.never_aerobic is False
+    assert res.anaerobic_operation is False
     assert res.frac_below > 0.0
 
 

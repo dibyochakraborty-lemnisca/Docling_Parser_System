@@ -139,6 +139,21 @@ def test_effect_size_attached_and_ranks_lever_above_flat_one():
     assert order.index(nitro.topic_id) < order.index(flat.topic_id)
 
 
+def test_weak_association_is_labelled_in_topic_summary():
+    from fermdocs_optimize.lever_discovery import Lever
+
+    levers = [Lever("nitrogen_source", "categorical", "metadata", {"R0": "A", "R1": "B"}),
+              Lever("strong_factor", "numeric", "metadata", {"R0": 1.0, "R1": 2.0})]
+    # nitrogen: tiny effect (norm 0.03) -> WEAK; strong_factor: norm 0.9 -> not weak
+    effects = {"nitrogen_source": {"delta": 2.0, "n": 10, "best_setting": "B", "norm_effect": 0.03},
+               "strong_factor": {"delta": 40.0, "n": 10, "best_setting": 2.0, "norm_effect": 0.9}}
+    topics = extract_opportunity_topics(_char(), discovered_levers=levers, lever_effects=effects)
+    nitro = next(t for t in topics if t.source_id == "lever-nitrogen_source")
+    strong = next(t for t in topics if t.source_id == "lever-strong_factor")
+    assert "WEAK" in nitro.summary          # tiny effect flagged as preliminary
+    assert "WEAK" not in strong.summary     # real effect not flagged
+
+
 def test_no_discovered_levers_falls_back_to_static():
     # discovery did not run (None) -> static LABS lever set still used.
     topics = extract_opportunity_topics(_char(), discovered_levers=None)

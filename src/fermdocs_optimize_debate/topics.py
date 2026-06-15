@@ -69,13 +69,16 @@ def _discovered_lever_topic(lever, *, objective_species: str, counter: int,
                    f"(observed: {cats})")
     effect_size = 0.0
     if effect:
+        from fermdocs.analysis.cross_run import is_weak_effect
         effect_size = float(effect.get("norm_effect") or 0.0)
         delta, n = effect.get("delta"), effect.get("n")
         best = effect.get("best_setting")
         if delta is not None:
+            weak = " (WEAK: small vs run-to-run scatter; a lead to test, not validated)" \
+                if is_weak_effect(effect.get("norm_effect")) else ""
             summary += (f" Across {n} runs this associates with {delta:+g} "
                         f"{objective_species} (best observed: {best}); observational, "
-                        "not proven causal.")
+                        f"not proven causal.{weak}")
     return SeedTopic(
         topic_id=_topic_id(counter),
         summary=summary,

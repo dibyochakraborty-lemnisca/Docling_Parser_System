@@ -72,6 +72,7 @@ def _discover_bundle_levers(reader, dossier) -> tuple[list | None, dict]:
 def _build_within_run_pool(lever_effects: dict) -> list:
     """Turn the per-lever cross-run effects into citeable WithinRunAssociationRefs
     the specialists see in their view. Sorted by effect size (strongest first)."""
+    from fermdocs.analysis.cross_run import is_weak_effect
     from fermdocs_hypothesis.schema import WithinRunAssociationRef
 
     pool: list[WithinRunAssociationRef] = []
@@ -81,8 +82,13 @@ def _build_within_run_pool(lever_effects: dict) -> list:
             continue
         n = int(eff.get("n", 0))
         best = eff.get("best_setting")
+        weak = is_weak_effect(eff.get("norm_effect"))
+        strength = (" WEAK/preliminary: the effect is a small fraction of the "
+                    "run-to-run scatter, likely within noise on a confounded set — "
+                    "treat as a lead to test, NOT a validated effect."
+                    if weak else "")
         summary = (f"Across {n} runs, {lever} associates with {delta:+g} peak titer "
-                   f"(best observed: {best}); observational, not proven causal.")
+                   f"(best observed: {best}); observational, not proven causal.{strength}")
         pool.append(WithinRunAssociationRef(
             assoc_id=f"WRA-{lever}", lever=lever, summary=summary,
             delta=float(delta), direction=str(eff.get("direction", "")), n=n,

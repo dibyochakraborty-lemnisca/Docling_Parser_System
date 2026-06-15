@@ -5,8 +5,8 @@ opposite in free text — the praaj review caught four such classes:
 
   * "no DO data available" / "no substrate limitation metrics" when those
     channels ARE populated (false unavailability).
-  * "DO = 0 = oxygen bottleneck" on an anaerobic process where DO never had an
-    aerobic regime to be limited relative to (never_aerobic).
+  * "DO = 0 = oxygen bottleneck" on a process operating anaerobically (DO pinned
+    near zero for most of the run — the regime, not a transfer limitation).
   * "scale / bioreactor confound" when every run is the SAME reactor and the
     differing number is the initial CHARGE volume, not hardware scale.
   * "growth rate at t=0" — a rate needs an interval; t=0 is a single point.
@@ -18,8 +18,8 @@ caller decides whether to reject, downgrade, or annotate. Facts are data-derived
 needed to recognise which channel a sentence is talking about.
 
 Conservative by design: a check fires only on an explicit contradicting pattern
-(negation for availability; never_aerobic for oxygen; known-constant scale for
-the scale confound), so legitimate claims pass untouched.
+(negation for availability; anaerobic_operation for oxygen; known-constant scale
+for the scale confound), so legitimate claims pass untouched.
 """
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ class ClaimFacts:
     """Deterministic facts a claim must not contradict. All data-derived."""
 
     populated_channels: frozenset[str] = frozenset()  # variables present + populated
-    never_aerobic: bool = False           # DO never rose above the O2 threshold
+    anaerobic_operation: bool = False     # DO pinned near zero for most of the run
     reactor_scale_constant: bool | None = None  # None = unknown (don't flag scale)
     sampling_resolution_h: float | None = None
 
@@ -141,17 +141,18 @@ def check_claim(text: str, facts: ClaimFacts) -> list[ClaimViolation]:
                             "channel registry before asserting a metric is missing."))
                         break
 
-    # 2. Oxygen limitation on a never-aerobic (e.g. anaerobic) process. Skip
+    # 2. Oxygen limitation on an anaerobically-operating process. Skip
     #    negated/already-corrected phrasing ("NOT an oxygen limitation").
-    if facts.never_aerobic:
+    if facts.anaerobic_operation:
         m = _OXYGEN_LIMIT_RE.search(low)
         if m and not _negated_before(low, m.start()):
             out.append(ClaimViolation(
                 "oxygen_limitation_when_anaerobic",
-                "Claim invokes oxygen/DO limitation, but DO never rose above the "
-                "aerobic threshold at any sample (never_aerobic): DO=0 is the operating "
-                "regime, not a transfer limitation. Reframe as 'consistent with "
-                "anaerobic/microaerophilic operation'."))
+                "Claim invokes oxygen/DO limitation, but DO was pinned near zero for "
+                "most of the run (anaerobic operation): DO=0 is the operating regime "
+                "here, not a transfer limitation. A real aerobic O2 limitation shows "
+                "transient dips or a controlled positive setpoint. Reframe as "
+                "'consistent with anaerobic/microaerophilic operation'."))
 
     # 3. Scale confound when the reactor scale is constant per metadata.
     if facts.reactor_scale_constant:
@@ -186,11 +187,12 @@ def _stat(f, key):
     return (getattr(f, "statistics", None) or {}).get(key)
 
 
-def never_aerobic_from_findings(findings) -> bool:
-    """True iff DO was measured (A14 ran) and never rose above the aerobic
-    threshold on any run — the data signal that O2-limitation talk is wrong."""
-    seen = [_stat(f, "never_aerobic") for f in findings
-            if _stat(f, "metric_id") == "A14" and "never_aerobic" in (getattr(f, "statistics", None) or {})]
+def anaerobic_operation_from_findings(findings) -> bool:
+    """True iff DO was measured (A14 ran) and the runs operate anaerobically (DO
+    pinned near zero for most of the run) — the data signal that O2-limitation
+    talk is wrong. Catches the saturated-at-t0-then-crashes pattern."""
+    seen = [_stat(f, "anaerobic_operation") for f in findings
+            if _stat(f, "metric_id") == "A14" and "anaerobic_operation" in (getattr(f, "statistics", None) or {})]
     return bool(seen) and all(bool(v) for v in seen)
 
 
@@ -221,7 +223,7 @@ def build_claim_facts(findings, populated_channels, dossier=None) -> ClaimFacts:
     bundle's own metrics + metadata (all data-derived)."""
     return ClaimFacts(
         populated_channels=frozenset(populated_channels),
-        never_aerobic=never_aerobic_from_findings(findings),
+        anaerobic_operation=anaerobic_operation_from_findings(findings),
         reactor_scale_constant=reactor_scale_constant(dossier),
         sampling_resolution_h=sampling_resolution_from_findings(findings),
     )

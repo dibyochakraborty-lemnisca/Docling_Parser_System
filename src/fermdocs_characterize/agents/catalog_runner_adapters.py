@@ -306,19 +306,21 @@ def _adapter_a14(bundle: _BundleView, run_id: str | None) -> dict | None:
         "max_do": result.max_do,
         "min_margin": result.min_margin,
         "time_below_h": result.time_below_h,
+        "frac_near_zero": result.frac_near_zero,
         "n_observations": len(time_h),
-        # Data-derived gate: when DO never rose above the threshold, this is the
-        # operating regime, not a limitation. Downstream agents MUST NOT call it
-        # an O2 bottleneck (the aerobic 30% threshold doesn't apply here).
-        "never_aerobic": result.never_aerobic,
+        # Data-derived gate: when DO is pinned near zero for most of the run, this
+        # is the operating regime, not a limitation. Downstream agents MUST NOT
+        # call it an O2 bottleneck (the aerobic 30% threshold doesn't apply here).
+        "anaerobic_operation": result.anaerobic_operation,
         "_variables_used": [var],
     }
-    if result.never_aerobic:
+    if result.anaerobic_operation:
         out["_summary"] = (
-            f"DO on {run_id} (var={var}) stayed at/near zero the entire run "
-            f"(max DO={result.max_do:.2f}%): consistent with anaerobic/"
-            "microaerophilic operation, NOT an oxygen-transfer limitation — the "
-            "process never had an aerobic regime to be limited relative to."
+            f"DO on {run_id} (var={var}) sat at/near zero for "
+            f"{result.frac_near_zero*100:.0f}% of the run: consistent with "
+            "anaerobic/microaerophilic operation, NOT an oxygen-transfer "
+            "limitation. (DO=0 is the operating regime here; a real aerobic O2 "
+            "limitation shows transient dips or a controlled positive setpoint.)"
         )
     else:
         out["_summary"] = (

@@ -38,13 +38,13 @@ def test_does_not_fire_on_positive_mention_of_a_channel():
 # --- item 6 tail: oxygen limitation on an anaerobic process -------------------
 
 def test_rejects_oxygen_bottleneck_when_never_aerobic():
-    facts = ClaimFacts(populated_channels=_CHANNELS, never_aerobic=True)
+    facts = ClaimFacts(populated_channels=_CHANNELS, anaerobic_operation=True)
     v = check_claim("DO = 0.00% indicates a severe oxygen bottleneck / mass transfer failure.", facts)
     assert any(x.code == "oxygen_limitation_when_anaerobic" for x in v)
 
 
 def test_allows_oxygen_limitation_when_aerobic():
-    facts = ClaimFacts(populated_channels=_CHANNELS, never_aerobic=False)
+    facts = ClaimFacts(populated_channels=_CHANNELS, anaerobic_operation=False)
     v = check_claim("The DO crash to 0 mid-run indicates oxygen limitation.", facts)
     assert not any(x.code == "oxygen_limitation_when_anaerobic" for x in v)
 
@@ -79,14 +79,14 @@ def test_allows_rate_at_a_real_time():
 
 def test_negated_oxygen_phrasing_is_not_flagged():
     # the pipeline's own CORRECTED A14 finding must not trip the guard
-    facts = ClaimFacts(never_aerobic=True)
+    facts = ClaimFacts(anaerobic_operation=True)
     txt = ("DO stayed at zero the entire run: consistent with anaerobic operation, "
            "NOT an oxygen-transfer limitation.")
     assert not any(x.code == "oxygen_limitation_when_anaerobic" for x in check_claim(txt, facts))
 
 
 def test_clean_claim_has_no_violations():
-    facts = ClaimFacts(populated_channels=_CHANNELS, never_aerobic=True,
+    facts = ClaimFacts(populated_channels=_CHANNELS, anaerobic_operation=True,
                        reactor_scale_constant=True, sampling_resolution_h=8.0)
     v = check_claim("Peak titer reached 150 g/L on run B474; substrate was fully consumed.", facts)
     assert v == []

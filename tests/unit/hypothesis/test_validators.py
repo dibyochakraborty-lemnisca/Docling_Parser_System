@@ -219,7 +219,7 @@ def _anaerobic_upstream() -> CharacterizationOutput:
         evidence_strength=EvidenceStrength(n_observations=5, n_independent_runs=1),
         evidence_observation_ids=["O-1"],
         variables_involved=["do_pct_saturation"],
-        statistics={"metric_id": "A14", "never_aerobic": True},
+        statistics={"metric_id": "A14", "anaerobic_operation": True},
     )
     traj = Trajectory(
         trajectory_id="T-0001", run_id="R1", variable="do_pct_saturation",

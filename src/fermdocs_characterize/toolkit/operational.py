@@ -18,6 +18,12 @@ import pandas as pd
 # A14 — DO margin profile
 # -----------------------------------------------------------------------------
 
+# DO at/below this (% saturation) is "effectively zero" (probe noise floor).
+_NEAR_ZERO_PCT = 1.0
+# If DO is near-zero for at least this fraction of the run, the process is
+# operating anaerobically (DO=0 is the regime, not a transfer limitation).
+_ANAEROBIC_FRAC = 0.6
+
 
 @dataclass(frozen=True)
 class DOMarginResult:
@@ -30,12 +36,15 @@ class DOMarginResult:
     `min_margin`: deepest deficit seen.
     `time_below_h`: time-weighted hours spent below threshold (linear
         interpolation between samples; reasonable for hourly sampling).
-    `never_aerobic`: DO never rose above the threshold at ANY timepoint
-        (max_do <= threshold). When true, "below threshold" is the operating
-        regime (consistent with anaerobic/microaerophilic operation), NOT an
-        oxygen-limitation event — you cannot be O2-limited relative to a demand
-        the process never aerated for. Callers must NOT report this as a
-        bottleneck. This is a data signal, not an organism assumption.
+    `frac_near_zero`: fraction of timepoints with DO at/near zero.
+    `anaerobic_operation`: DO sat at/near zero for the DOMINANT fraction of the
+        run (frac_near_zero >= threshold). When true, DO=0 is the operating
+        REGIME (consistent with anaerobic/microaerophilic operation), NOT an
+        oxygen-limitation event — so callers must NOT report it as a bottleneck.
+        This catches the common pattern where the probe reads ~100% at
+        inoculation, then DO collapses to 0 and stays there: a real aerobic O2
+        limitation shows transient dips or a controlled positive setpoint, not a
+        flat zero for most of the run. Data signal, not an organism assumption.
     """
 
     frac_below: float
@@ -44,8 +53,9 @@ class DOMarginResult:
     max_do: float
     mean_do: float
     time_below_h: float
+    frac_near_zero: float
     n_points: int
-    never_aerobic: bool
+    anaerobic_operation: bool
 
 
 def compute_do_margin(
@@ -89,6 +99,13 @@ def compute_do_margin(
         elif below[i] or below[i + 1]:
             time_below += dt / 2.0
 
+    # Fraction of the run with DO pinned at/near zero. DO <= 1% saturation is
+    # "effectively zero" (probe noise floor). If that's the DOMINANT fraction of
+    # the run, the process is OPERATING anaerobically (DO=0 is the regime), even
+    # if the probe read ~100% at inoculation before collapsing — which is exactly
+    # the pattern an aerobic O2-limitation does NOT show.
+    frac_near_zero = float(np.mean(do <= _NEAR_ZERO_PCT))
+
     return DOMarginResult(
         frac_below=float(below.sum()) / float(len(do)),
         min_margin=float(np.min(margin)),
@@ -96,11 +113,12 @@ def compute_do_margin(
         max_do=float(np.max(do)),
         mean_do=float(np.mean(do)),
         time_below_h=float(time_below),
+        frac_near_zero=frac_near_zero,
         n_points=int(len(t)),
-        # DO never exceeded the limitation threshold at any sample -> there was
-        # never an aerobic regime to be limited relative to. Data-derived, not an
-        # organism prior: this gates the "O2 bottleneck" interpretation downstream.
-        never_aerobic=bool(np.max(do) <= critical_threshold_pct),
+        # Data-derived gate for the "O2 bottleneck" interpretation downstream:
+        # true when DO is pinned near zero for most of the run (anaerobic regime),
+        # NOT merely when it dipped below the aerobic threshold.
+        anaerobic_operation=bool(frac_near_zero >= _ANAEROBIC_FRAC),
     )
 
 

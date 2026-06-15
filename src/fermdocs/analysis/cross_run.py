@@ -38,6 +38,15 @@ MIN_RUNS = 4
 MIN_EFFECT_FRAC = 0.15
 # Default outcome variable (the thing we want to maximize).
 DEFAULT_OBJECTIVE = "product_g_l"
+# An association moving the objective by less than this fraction of the
+# run-to-run spread is WEAK/preliminary — likely within noise on a small,
+# confounded campaign. Used to label such associations so they aren't argued as
+# confident levers (a +2 g/L swing on a ~60 g/L spread is not a validated effect).
+WEAK_EFFECT_FRAC = 0.2
+
+
+def is_weak_effect(norm_effect: float | None) -> bool:
+    return (norm_effect or 0.0) < WEAK_EFFECT_FRAC
 
 
 def run_outcomes(obs_df: pd.DataFrame, objective: str) -> dict[str, float]:
