@@ -945,6 +945,14 @@ class FinalHypothesis(BaseModel):
             " '↑ refines H-NNNN' link between chained cards."
         ),
     )
+    # A3 — the claim's type, load-bearing for the deterministic gates: a 'causal'
+    # or 'recommendation' claim must survive the confound/objective/materiality
+    # gates; an 'observational' one is not required to condition. Default
+    # 'observational' keeps legacy/uncategorized hypotheses ungated (back-compat).
+    claim_type: Literal["observational", "causal", "recommendation"] = "observational"
+    # Names of deterministic gates this claim FAILED (attached by the gate bridge,
+    # A3). A non-empty hard-fail list means the claim must not enter the verdict.
+    gate_failures: list[str] = Field(default_factory=list)
 
 
 class RejectedHypothesis(BaseModel):

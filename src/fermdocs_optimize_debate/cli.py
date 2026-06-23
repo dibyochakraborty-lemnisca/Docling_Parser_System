@@ -27,7 +27,8 @@ def main(argv: list[str] | None = None) -> int:
     runp = sub.add_parser("run", help="run the optimization debate over a bundle")
     runp.add_argument("bundle_dir")
     runp.add_argument("--out-dir", default=None, help="defaults to the bundle dir")
-    runp.add_argument("--objective", default="P", help="objective species to maximize")
+    runp.add_argument("--objective", default=None,
+                      help="objective channel to maximize (default: resolve from the bundle data)")
     runp.add_argument("--max-trend-topics", type=int, default=4)
     runp.add_argument("--max-turns", type=int, default=20)
     runp.add_argument("--max-critic-cycles-per-topic", type=int, default=6)
@@ -38,7 +39,7 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     loaded = load_optimization_bundle(
-        args.bundle_dir, objective_species=args.objective,
+        args.bundle_dir, objective=args.objective,
         max_trend_topics=args.max_trend_topics)
     out_dir = Path(args.out_dir) if args.out_dir else loaded.bundle_dir
     out_dir.mkdir(parents=True, exist_ok=True)

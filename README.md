@@ -264,16 +264,13 @@ observed **trend** topics from characterization. The specialists argue where
 the titer headroom is. Observed trends (evidence-grounded) outrank speculative
 levers in the ranker.
 
-**3. Model discovery + search.** Controlled by `FERMDOCS_OPTIMIZE_ORACLE`:
+**3. Model discovery + search.** The API run path **always verifies against the
+uploaded data itself** — real data wins, the LABS simulator is never used there
+(de-LABS, 2026-06-16). The objective channel is resolved from the data + the
+user's question (`fermdocs/analysis/objective.py`), not a fixed species.
 
-- `labs` — verify against a process simulator. An active-learning loop
-  (`active_optimize.py`) fits a model, proposes operating points, verifies them
-  on the oracle, and folds surprises back in. Includes agent-written **equation
-  discovery** (`discovery/`: the agent emits ODE structure, a safe symbolic
-  compiler evaluates it, the oracle refines and verifies, and a global search
-  finds the within-box maximum).
-- `data` — verify against the uploaded data itself, no simulator
-  (`data_equation.py`). Discovers a **lever→titer model**: a coupled mechanistic
+- **data path (default)** — verify against the uploaded data, no simulator
+  (`data_equation.py`). Discovers a **lever→objective model**: a coupled mechanistic
   ODE over *all* the measured variables first (`discovery/general_mech.py`),
   falling back to a static algebraic surrogate (numeric + one-hot categorical
   levers). Either model must clear a **leave-run-out cross-validation** gate, is
@@ -282,6 +279,10 @@ levers in the ranker.
   boundary-sitting optimum as *insufficient data in that region* (not a validated
   optimum), and flag a fed-batch operating-mode mismatch. If nothing generalizes,
   it **refuses**.
+- **LABS benchmark backend** (`fermdocs_optimize/benchmark/`, opt-in, CLI-only) —
+  a synthetic process simulator for benchmarking the optimizer against a known
+  answer. Reachable only via the standalone optimize CLIs (`FERMDOCS_OPTIMIZE_ORACLE`
+  + a configured simulator); an import-guard test keeps it out of the data path.
 
 Like recommend, the decision contract is coherent: a confident result carries a
 best operating point; a refusal carries a reason and zero knobs. On sparse data
@@ -543,12 +544,12 @@ fermdocs-optimize-debate run out/bundle_<id> \
 ```
 
 The model-search half has two entry points. Against the **uploaded data** (no
-simulator) it runs inside the API runner once a run is DONE
-(`FERMDOCS_OPTIMIZE_ORACLE=data`), discovering a lever→titer model, validating it
-by leave-run-out CV, and optimizing within the observed envelope or refusing. The
-**simulator-oracle** active-learning loop (equation discovery + oracle-verified
-search) has its own CLI, which needs a process simulator, its true params, and a
-search box:
+simulator) it runs inside the API runner once a run is DONE — automatically,
+whenever the bundle has observations — discovering a lever→objective model,
+validating it by leave-run-out CV, and optimizing within the observed envelope or
+refusing. The **LABS benchmark backend** (equation discovery + oracle-verified
+search against a synthetic simulator) is opt-in and CLI-only — it needs a process
+simulator, its true params, and a search box, and is never used on the API path:
 
 ```bash
 fermdocs-optimize \

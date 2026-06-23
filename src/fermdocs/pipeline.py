@@ -228,6 +228,40 @@ class IngestionPipeline:
         if doc_map is not None:
             residual.document_map = doc_map.model_dump(mode="json")
 
+        # Cross-run design factors + per-run DENSITY (0b), extracted BEFORE building
+        # observations so the converter has the per-run density it needs to turn
+        # %w/w concentrations into g/L. Digest both the metadata above the table
+        # (design factors) and the summary region below it (density lives there).
+        # Best-effort; never breaks ingestion.
+        densities: dict[str, float] = {}
+        if self._layout_detector is not None and parsed.raw_grids:
+            table_starts: dict[str, int] = {}
+            table_ends: dict[str, int] = {}
+            for t in tables:
+                if not isinstance(t.locator, dict):
+                    continue
+                sid = str(t.table_id).split("~", 1)[0]
+                hr = t.locator.get("header_row")
+                if isinstance(hr, int):
+                    table_starts[sid] = min(table_starts.get(sid, hr), hr)
+                de = t.locator.get("data_end_row")
+                if isinstance(de, int):
+                    table_ends[sid] = max(table_ends.get(sid, de), de)
+            try:
+                factors = self._layout_detector.extract_design_factors(
+                    parsed.raw_grids, table_starts=table_starts, table_ends=table_ends
+                )
+            except Exception:  # noqa: BLE001 — conditions are best-effort
+                factors = {}
+            for run_id, knobs in factors.items():
+                residual.run_conditions.setdefault(str(run_id), {}).update(knobs)
+                d = knobs.get("density_g_per_ml")
+                if isinstance(d, dict):
+                    try:
+                        densities[str(run_id)] = float(d.get("value"))
+                    except (TypeError, ValueError):
+                        pass
+
         for table in tables:
             tm = mapping_by_table.get(table.table_id)
             if tm is None:
@@ -241,36 +275,14 @@ class IngestionPipeline:
                 doc_map=doc_map,
                 manifest_run_id=manifest_run_id,
                 dominant_units=dominant_units,
+                densities=densities,
             )
             table_observations.extend(obs)
             if partial:
                 _add_partial(residual, table, tm, partial)
 
-        # Cross-run design factors: the experimental variables deliberately
-        # varied across runs (nutrient source/amount, feed timing, titer
-        # target) read from the metadata/highlights blocks. One pass over all
-        # this file's runs so factor names line up and only varying factors
-        # survive. These are the levers the cross-run recommendation engine
-        # reasons over. Never breaks ingestion.
-        if self._layout_detector is not None and parsed.raw_grids:
-            # Bound the factor digest to each sheet's metadata region (above
-            # the data table we just located) — smaller prompt, sharper read.
-            table_starts: dict[str, int] = {}
-            for t in tables:
-                if isinstance(t.locator, dict) and isinstance(
-                    t.locator.get("header_row"), int
-                ):
-                    sid = str(t.table_id).split("~", 1)[0]
-                    hr = t.locator["header_row"]
-                    table_starts[sid] = min(table_starts.get(sid, hr), hr)
-            try:
-                factors = self._layout_detector.extract_design_factors(
-                    parsed.raw_grids, table_starts=table_starts
-                )
-            except Exception:  # noqa: BLE001 — conditions are best-effort
-                factors = {}
-            for run_id, knobs in factors.items():
-                residual.run_conditions.setdefault(str(run_id), {}).update(knobs)
+        # (Design factors + density are now extracted BEFORE the observation loop
+        # above, so per-run density reaches the unit converter.)
 
         # Tier 1: always capture narrative blocks in residual.
         if narrative_blocks:
@@ -414,6 +426,7 @@ class IngestionPipeline:
             value_canonical=value_canonical,
             unit_canonical=conversion.unit_canonical,
             conversion_status=conversion.status,
+            conversion_error=conversion.error,
             source_locator=locator,
             mapping_confidence=capped_conf,
             extraction_confidence=_extraction_confidence(ext.value, data_type),
@@ -472,6 +485,7 @@ class IngestionPipeline:
         doc_map: Any | None = None,
         manifest_run_id: str | None = None,
         dominant_units: dict[str, str] | None = None,
+        densities: dict[str, float] | None = None,
     ) -> tuple[list[Observation], list[dict]]:
         observations: list[Observation] = []
         unmapped_columns: list[dict] = []
@@ -616,6 +630,7 @@ class IngestionPipeline:
                         time_h=row_time_h,
                         decision=decision,
                         force_review=low_conf,
+                        density_g_per_ml=(densities or {}).get(str(row_run_id)),
                     )
                 )
         return observations, unmapped_columns
@@ -636,9 +651,14 @@ class IngestionPipeline:
         run_id: str | None = None,
         time_h: float | None = None,
         force_review: bool = False,
+        density_g_per_ml: float | None = None,
     ) -> Observation:
+        # 0b: per-run density lets the converter turn gravimetric %w/w concentrations
+        # into g/L. None for runs without a density -> the converter refuses %w/w
+        # channels legibly (it never imputes a density).
         conversion = self._converter.convert(
             raw_value, entry.raw_unit, golden_unit, normalizer=self._normalizer,
+            density_g_per_ml=density_g_per_ml,
         )
         value_raw = {"value": _coerce(raw_value, data_type), "type": data_type}
         value_canonical: dict[str, Any] | None = None
@@ -678,6 +698,7 @@ class IngestionPipeline:
             value_canonical=value_canonical,
             unit_canonical=conversion.unit_canonical,
             conversion_status=conversion.status,
+            conversion_error=conversion.error,
             source_locator=locator,
             mapping_confidence=entry.confidence,
             extraction_confidence=_extraction_confidence(raw_value, data_type),

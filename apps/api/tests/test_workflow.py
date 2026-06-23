@@ -3,6 +3,7 @@ result assembly's model log. No network — exercises the wiring, not a live run
 """
 from __future__ import annotations
 
+import json
 import tempfile
 from pathlib import Path
 
@@ -32,18 +33,20 @@ def test_request_model_defaults_and_parses_workflow():
     assert body.workflow == WorkflowKind.OPTIMIZATION
 
 
-def test_simulator_gate_is_off_without_config(monkeypatch):
-    """The closed-loop optimizer stays gated off unless a real simulator is
-    configured — the honest default (we never optimize against a fake oracle)."""
-    from fermdocs_api.runner_pipeline import _optimizer_simulator_available
+def test_data_oracle_off_without_observations(monkeypatch):
+    """The data optimizer is available only when the bundle has real observations.
+    LABS is never consulted on the API path (de-LABS) — even with LABS env vars set,
+    a bundle with no observations.csv yields debate-only, never a LABS substitute."""
+    from fermdocs_api.runner_pipeline import _data_oracle_available
 
-    monkeypatch.delenv("FERMDOCS_OPTIMIZE_MECH_PARAMS", raising=False)
-    assert _optimizer_simulator_available(Path("/tmp")) is False
+    monkeypatch.setenv("FERMDOCS_OPTIMIZE_ORACLE", "labs")
+    monkeypatch.setenv("FERMDOCS_OPTIMIZE_TRAIN", "/some/labs/train.csv")
+    assert _data_oracle_available(Path("/tmp")) is False
 
 
-def test_model_card_is_shown_in_debate_only_path():
-    """Even with no simulator, the optimization result carries the governing
-    equations so the UI can show how the agent uses the model."""
+def test_debate_only_path_shows_no_labs_model_card():
+    """With no observations, the result is debate-only: it shows the debated levers
+    and a plain note — NOT a LABS mechanistic model card (no mu_max / X,S,P,M,V)."""
     from types import SimpleNamespace
 
     from fermdocs_api.runner_pipeline import _assemble_optimization_output
@@ -52,7 +55,6 @@ def test_model_card_is_shown_in_debate_only_path():
         final_hypotheses=[], debate_summary="levers found"))
     out = _assemble_optimization_output(Path("/tmp"), debate, "run-1")
     assert out["simulator_available"] is False
-    kinds = [e["kind"] for e in out["model_log"]]
-    assert "equations" in kinds  # the model card is present
-    assert any("mu_max" in eq for e in out["model_log"]
-               if e["kind"] == "equations" for eq in e["equations"])
+    blob = json.dumps(out["model_log"])
+    assert "mu_max" not in blob and '"X"' not in blob  # no LABS equations leak
+    assert any(e.get("kind") == "note" for e in out["model_log"])

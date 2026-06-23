@@ -139,7 +139,32 @@ def analyze(
     when at least one knob shows a large-enough association over >= MIN_RUNS
     runs; callers should treat a cleared result as a recommendable verdict and
     an uncleared one as "analyzed, nothing actionable".
+
+    F2: cached on (objective, data) — re-asking returns the identical verdict.
+    Returned dict is read-only.
     """
+    from fermdocs.analysis.computation_cache import (
+        data_version,
+        default_cache,
+        make_key,
+    )
+
+    key = make_key(
+        "cross_run.analyze",
+        objective=objective,
+        data_ver=data_version(obs_df, dossier),
+    )
+    return default_cache().get_or_compute(
+        key, lambda: _analyze_uncached(dossier, obs_df, objective=objective)
+    )
+
+
+def _analyze_uncached(
+    dossier: dict[str, Any] | None,
+    obs_df: pd.DataFrame,
+    *,
+    objective: str = DEFAULT_OBJECTIVE,
+) -> dict[str, Any] | None:
     conditions = (dossier or {}).get("run_conditions") or {}
     if not conditions:
         return None
@@ -293,6 +318,7 @@ def lever_effects(
     obs_df: pd.DataFrame,
     *,
     objective: str = DEFAULT_OBJECTIVE,
+    outcomes: dict[str, float] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Per-lever association with the objective across runs — UNGATED, so every
     varying metadata lever gets a number for topic ranking (not just the ones
@@ -300,11 +326,49 @@ def lever_effects(
     best_setting, norm_effect, ...}}`` where ``norm_effect`` in [0,1] is
     ``|delta| / outcome_spread``. Empty dict when there aren't enough runs or no
     outcomes — the caller then falls back to neutral ordering. Pure/deterministic.
+
+    F2: routed through the canonical computation cache so every caller asking the
+    same (objective, data) question resolves to ONE computed result — no
+    re-derivation drift. The returned dict is read-only; callers must not mutate
+    it. (A1 will thread the conditioning covariate set into the cache key.)
     """
+    from fermdocs.analysis.computation_cache import (
+        data_version,
+        default_cache,
+        fingerprint_obj,
+        make_key,
+    )
+
+    key = make_key(
+        "cross_run.lever_effects",
+        objective=objective,
+        data_ver=data_version(obs_df, dossier),
+        extra=(fingerprint_obj(_sorted_outcomes(outcomes)),) if outcomes is not None else (),
+    )
+    return default_cache().get_or_compute(
+        key,
+        lambda: _lever_effects_uncached(
+            dossier, obs_df, objective=objective, outcomes=outcomes
+        ),
+    )
+
+
+def _sorted_outcomes(outcomes: dict[str, float] | None):
+    return None if outcomes is None else sorted((str(k), round(float(v), 6))
+                                                for k, v in outcomes.items())
+
+
+def _lever_effects_uncached(
+    dossier: dict[str, Any] | None,
+    obs_df: pd.DataFrame,
+    *,
+    objective: str = DEFAULT_OBJECTIVE,
+    outcomes: dict[str, float] | None = None,
+) -> dict[str, dict[str, Any]]:
     conditions = (dossier or {}).get("run_conditions") or {}
     if not conditions:
         return {}
-    outcomes = run_outcomes(obs_df, objective)
+    outcomes = outcomes if outcomes is not None else run_outcomes(obs_df, objective)
     if len(outcomes) < MIN_RUNS:
         return {}
     ys = list(outcomes.values())
@@ -327,6 +391,203 @@ def lever_effects(
         out[knob] = {**effect, "norm_effect": round(norm, 4),
                      "confounded": confounded, "confounded_with": reason}
     return out
+
+
+# Minimum runs in a stratum for its within-stratum effect to count toward power.
+MIN_STRATUM_RUNS = 3
+
+
+def lever_effect_conditioned(
+    dossier: dict[str, Any] | None,
+    obs_df: pd.DataFrame,
+    lever: str,
+    *,
+    objective: str = DEFAULT_OBJECTIVE,
+    conditioning: list[str],
+    outcomes: dict[str, float] | None = None,
+) -> dict[str, Any] | None:
+    """A1 — the conditional (stratified) effect of one lever on the objective,
+    holding `conditioning` covariates constant.
+
+    This is the machine that kills the confound mechanically: stratify the runs by
+    the covariate(s), estimate the lever's effect WITHIN each stratum (reusing the
+    univariate estimators), and pool sample-weighted. Two failure modes are made
+    explicit rather than hidden:
+
+      - **not separable** — if the lever does not vary within ANY stratum, it is
+        aliased with the covariate (e.g. 'Leiber H only ever used in the high-titer
+        campaign'). The effect is *not attributable* to the lever; ``separable`` is
+        False and ``confounded_with`` names the covariate. This is strictly stronger
+        than the aliasing-only flag in ``lever_effects``.
+      - **insufficient power** — stratifying small n into smaller cells trades
+        confound bias for variance. If too few runs carry a within-stratum lever
+        contrast, ``power`` is 'insufficient' and the pooled point estimate must NOT
+        be trusted as crisp (report the CI, don't crown a winner on noise).
+
+    Routed through the F2 cache keyed on (lever, objective, conditioning, data).
+    Returns None when the objective/conditions are unusable. Read-only result."""
+    from fermdocs.analysis.computation_cache import (
+        data_version,
+        default_cache,
+        fingerprint_obj,
+        make_key,
+    )
+
+    key = make_key(
+        "cross_run.lever_effect_conditioned",
+        objective=objective,
+        data_ver=data_version(obs_df, dossier),
+        conditioning=conditioning,
+        extra=(lever, fingerprint_obj(_sorted_outcomes(outcomes)) if outcomes is not None else ""),
+    )
+    return default_cache().get_or_compute(
+        key,
+        lambda: _lever_effect_conditioned_uncached(
+            dossier, obs_df, lever, objective=objective,
+            conditioning=conditioning, outcomes=outcomes,
+        ),
+    )
+
+
+def _lever_effect_conditioned_uncached(
+    dossier: dict[str, Any] | None,
+    obs_df: pd.DataFrame,
+    lever: str,
+    *,
+    objective: str,
+    conditioning: list[str],
+    outcomes: dict[str, float] | None = None,
+) -> dict[str, Any] | None:
+    conditions = (dossier or {}).get("run_conditions") or {}
+    if not conditions or not conditioning:
+        return None
+    outcomes = outcomes if outcomes is not None else run_outcomes(obs_df, objective)
+    if len(outcomes) < MIN_RUNS:
+        return None
+    ys = list(outcomes.values())
+    spread = float(max(ys) - min(ys))
+
+    # Per-run rows: (lever_value, stratum_key, outcome) over runs with everything present.
+    rows: list[tuple[Any, tuple, float]] = []
+    for run_id, knobs in conditions.items():
+        o = outcomes.get(str(run_id))
+        if o is None or not isinstance(knobs, dict):
+            continue
+        lv = _spec_value(knobs.get(lever))
+        if lv is None:
+            continue
+        cov = tuple(_spec_value(knobs.get(c)) for c in conditioning)
+        if any(c is None for c in cov):
+            continue
+        rows.append((lv, cov, o))
+    if len(rows) < MIN_RUNS:
+        return None
+
+    # Group by stratum; estimate the lever effect WITHIN each stratum.
+    strata: dict[tuple, list[tuple[Any, float]]] = {}
+    for lv, cov, o in rows:
+        strata.setdefault(cov, []).append((lv, o))
+
+    per_stratum: list[dict[str, Any]] = []
+    weighted_delta, weight_total, effective_runs, n_effective_strata = 0.0, 0, 0, 0
+    for cov, pairs in strata.items():
+        distinct_levels = {_value_key(v) for v, _ in pairs}
+        if len(distinct_levels) < 2:
+            # lever does not vary inside this stratum -> contributes no contrast
+            per_stratum.append({"stratum": list(cov), "n": len(pairs),
+                                "delta": None, "varies": False})
+            continue
+        numeric = all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                      for v, _ in pairs)
+        eff = (_numeric_knob_effect([(float(v), y) for v, y in pairs], spread, min_frac=0.0)
+               if numeric
+               else _categorical_knob_effect([(str(v), y) for v, y in pairs], spread, min_frac=0.0))
+        if eff is None:
+            per_stratum.append({"stratum": list(cov), "n": len(pairs),
+                                "delta": None, "varies": True})
+            continue
+        per_stratum.append({"stratum": list(cov), "n": len(pairs),
+                            "delta": eff["delta"], "direction": eff["direction"],
+                            "best_setting": eff["best_setting"], "varies": True})
+        weighted_delta += eff["delta"] * len(pairs)
+        weight_total += len(pairs)
+        n_effective_strata += 1
+        if len(pairs) >= MIN_STRATUM_RUNS:
+            effective_runs += len(pairs)
+
+    # Separability: lever never varied within any stratum -> aliased with covariate.
+    if weight_total == 0:
+        return {
+            "lever": lever, "objective": objective, "conditioned_on": list(conditioning),
+            "pooled_delta": None, "pooled_norm_effect": 0.0,
+            "separable": False,
+            "confounded_with": "+".join(conditioning),
+            "separability_note": (f"{lever} does not vary within any {conditioning} "
+                                  "stratum — effect is not separable from the covariate "
+                                  "(aliased)."),
+            "per_stratum": per_stratum, "n": len(rows),
+            "n_strata_effective": 0,
+            "power": "insufficient",
+            "power_note": "no within-stratum contrast for the lever",
+        }
+
+    pooled = weighted_delta / weight_total
+    norm = min(abs(pooled) / spread, 1.0) if spread > 0 else 0.0
+    power_ok = effective_runs >= MIN_RUNS and n_effective_strata >= 1
+    return {
+        "lever": lever, "objective": objective, "conditioned_on": list(conditioning),
+        "pooled_delta": round(pooled, 4), "pooled_norm_effect": round(norm, 4),
+        "direction": "increase" if pooled >= 0 else "decrease",
+        "separable": True, "confounded_with": None,
+        "per_stratum": per_stratum, "n": len(rows),
+        "n_strata_effective": n_effective_strata,
+        "power": "ok" if power_ok else "insufficient",
+        "power_note": (None if power_ok else
+                       f"only {effective_runs} run(s) carry a within-stratum contrast "
+                       f"(need >= {MIN_RUNS}); treat the pooled estimate as a lead, not a "
+                       "validated effect."),
+    }
+
+
+def ranking_effects(
+    dossier: dict[str, Any] | None,
+    obs_df: pd.DataFrame,
+    *,
+    objective: str = DEFAULT_OBJECTIVE,
+    outcomes: dict[str, float] | None = None,
+    conditioning: list[str] | None = None,
+) -> dict[str, float]:
+    """B2 — the per-lever ranking score the ranker should use: the lever's effect
+    on the (free) objective, CONDITIONED on `conditioning` when provided.
+
+    This is the redirect that makes the system rank by *importance*, not salience:
+      - with conditioning: a lever's score is its conditioned ``pooled_norm_effect``
+        only when the effect is separable AND adequately powered; otherwise 0 — so a
+        confounded or underpowered lever (the nutrient claim) sinks to the bottom
+        while a real one (feed window) keeps its magnitude.
+      - without conditioning (no strata yet): falls back to the unconditioned
+        ``norm_effect`` (current behavior) — graceful until B1' structures the
+        covariate. The objective is still the FREE one resolved by F1 (via
+        ``outcomes``), so the ranking already targets the right thing.
+
+    Returns ``{lever: score in [0,1]}``; the conditioning covariates are excluded
+    from the ranking (they're the strata, not candidate levers)."""
+    base = lever_effects(dossier, obs_df, objective=objective, outcomes=outcomes)
+    cov = set(conditioning or [])
+    if not cov:
+        return {k: float(v.get("norm_effect") or 0.0) for k, v in base.items()}
+    scores: dict[str, float] = {}
+    for lever in base:
+        if lever in cov:
+            continue
+        est = lever_effect_conditioned(
+            dossier, obs_df, lever, objective=objective,
+            conditioning=list(cov), outcomes=outcomes)
+        if est is None or not est["separable"] or est["power"] != "ok":
+            scores[lever] = 0.0   # confounded / underpowered -> sinks
+        else:
+            scores[lever] = float(est["pooled_norm_effect"])
+    return scores
 
 
 def _to_intervention(knob: str, objective: str, effect: dict[str, Any]) -> dict[str, Any]:

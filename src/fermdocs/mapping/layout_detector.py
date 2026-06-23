@@ -108,9 +108,24 @@ _FACTOR_SYSTEM_PROMPT = (
     "block, NOT in the fixed setpoint cells.\n\n"
     "Examples of factors that often vary: nutrient/nitrogen source and amount, "
     "feed timing/window, target titer, inoculum, carbon loading.\n\n"
+    "Mine the FREE-TEXT strategy note for these, not just the tables. Two patterns "
+    "are commonly missed and you MUST capture them when present:\n"
+    "  - FEED WINDOW: any phrasing of a feeding period -- 'A to B hrs', 'A-B hrs', "
+    "'A–B hour feeding pattern', 'fed ... from A to B h' -- becomes feed_start_h=A, "
+    "feed_end_h=B, feed_duration_h=(B-A).\n"
+    "  - CAMPAIGN / TARGET: a stated goal in prose. A numeric target titer becomes "
+    "titer_target_g_l. A qualitative campaign tag (e.g. a 'High Titer Batch' prefix) "
+    "becomes a categorical factor titer_target: tag the labelled runs (e.g. 'high') "
+    "and the unlabelled ones ('standard') -- present-on-some / absent-on-others is a "
+    "VARYING categorical factor, so emit it.\n\n"
     "CRITICAL: report ONLY factors that DIFFER across runs. If something is the "
     "same in every run (a fixed base, a fixed carbon source, a constant "
     "setpoint), it is NOT a factor -- omit it.\n\n"
+    "ONE EXCEPTION -- conversion inputs: ALSO capture per-run DENSITY / specific "
+    "gravity when present (e.g. a summary cell 'Density 1.0653 g/cm3'), as "
+    "density_g_per_ml. It is a measured scalar, not a deliberately-varied factor, "
+    "but downstream needs it to convert %w/w concentrations to g/L. Emit it per run "
+    "even though it's an outcome; one number per run.\n\n"
     'Return JSON {"factors": [ {factor} ]}. Each factor has:\n'
     "  name     (str): short snake_case, IDENTICAL across runs, e.g.\n"
     "           'nutrient_source', 'nutrient_loading_g_l', 'feed_start_h',\n"
@@ -124,7 +139,10 @@ _FACTOR_SYSTEM_PROMPT = (
     "      evidence (str): a SHORT verbatim snippet copied from THAT run's text\n"
     "               proving the value (checked against the text).\n\n"
     "Rules:\n"
-    "  - Split a window like '7-9 hrs' into feed_start_h=7 and feed_end_h=9.\n"
+    "  - Split a feed window ('7-9 hrs', '7 hrs to 9 hrs', '7–9 hour feeding "
+    "pattern') into feed_start_h=7, feed_end_h=9, feed_duration_h=2.\n"
+    "  - A campaign tag present on some runs and absent on others IS a varying "
+    "categorical factor (titer_target: 'high' vs 'standard') -- emit it.\n"
     "  - evidence MUST be copied verbatim from that run's block.\n"
     "  - Only emit a factor if it has >=2 runs with >=2 distinct values.\n"
     "  - If nothing varies across runs, return {\"factors\": []}."
@@ -176,6 +194,7 @@ class LayoutDetector:
         raw_grids: dict[str, list[list[Any]]],
         *,
         table_starts: dict[str, int] | None = None,
+        table_ends: dict[str, int] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Find the experimental factors that VARY across runs and tabulate
         each run's value. Returns ``{run_id: {factor: {value, unit, kind,
@@ -186,10 +205,16 @@ class LayoutDetector:
         view. Each value is grounded: its evidence (or the value itself) must
         appear verbatim in that run's grid. Only factors that genuinely vary
         (>=2 runs, >=2 distinct values) survive.
+
+        Metadata above the data table is always digested. When ``table_ends`` is
+        given, the SUMMARY region below the table is digested too — that's where
+        per-run scalars like density / specific gravity live (a conversion input
+        for %w/w -> g/L), which the above-table region misses.
         """
         if not raw_grids or self._client is None:
             return {}
         starts = table_starts or {}
+        ends = table_ends or {}
         grid_texts: dict[str, str] = {}
         sections: list[str] = []
         for source_id, grid in raw_grids.items():
@@ -200,12 +225,22 @@ class LayoutDetector:
             # know where the table starts, digest only the metadata region —
             # smaller prompt, and no distraction from the time-series rows.
             start = starts.get(source_id)
-            meta = grid[:start] if isinstance(start, int) and start > 0 else grid
+            end = ends.get(source_id)
+            above = grid[:start] if isinstance(start, int) and start > 0 else grid
+            # The post-table SUMMARY region (per-run density, harvest scalars) —
+            # included only when we know where the data table ends, so we don't
+            # drag the time-series rows into the factor prompt.
+            below = (grid[end:] if isinstance(end, int) and 0 < end < len(grid) else [])
+            meta = list(above) + list(below)
             grid_texts[run_id] = "\n".join(
                 " | ".join("" if c is None else str(c) for c in row) for row in meta
             )
             sections.append(
-                f"=== RUN {run_id} ===\n{self._digest(meta, max_rows=100)}"
+                # Generous per-cell budget: design factors live in long free-text
+                # strategy cells (feed window, campaign tag) the default 24-char cap
+                # would truncate away.
+                f"=== RUN {run_id} ===\n"
+                f"{self._digest(meta, max_rows=140, max_cell_chars=800)}"
             )
         if len(grid_texts) < 2:
             return {}  # cross-run comparison needs at least two runs
@@ -311,14 +346,24 @@ class LayoutDetector:
             table_id=table_id, headers=headers, rows=rows, locator=locator
         )
 
-    def _digest(self, grid: list[list[Any]], max_rows: int | None = None) -> str:
+    def _digest(
+        self,
+        grid: list[list[Any]],
+        max_rows: int | None = None,
+        max_cell_chars: int | None = None,
+    ) -> str:
         # Skip fully-empty rows (lab sheets are mostly blank cells) but KEEP
         # the original row index on every shown line -- the LLM points at
         # those indices and code slices the real grid, so the labels must be
         # the true positions. This lets a data table buried deep in a long,
         # sparse sheet (e.g. row 75 of 117) still reach the model within the
         # row budget.
+        # `max_cell_chars` overrides the default per-cell cap. The default (24) is
+        # tuned for TABLE-STRUCTURE detection (short headers); free-text FACTOR
+        # mining must pass a larger budget or it truncates the strategy prose where
+        # the feed window / campaign target live (they sit ~100 chars in).
         cap = max_rows or self._max_rows
+        cell_cap = max_cell_chars or self._max_cell_chars
         lines: list[str] = []
         shown = 0
         last_idx = -1
@@ -327,7 +372,7 @@ class LayoutDetector:
             if not any(c is not None and str(c).strip() != "" for c in cells):
                 continue  # fully-blank row
             rendered = " | ".join(
-                "" if c is None else str(c)[: self._max_cell_chars] for c in cells
+                "" if c is None else str(c)[:cell_cap] for c in cells
             )
             lines.append(f"[{i}] {rendered}")
             shown += 1

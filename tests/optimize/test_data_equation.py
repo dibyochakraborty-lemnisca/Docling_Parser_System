@@ -144,6 +144,21 @@ def test_end_to_end_optimizes_categorical_lever_picks_best_observed_level():
     assert out.predicted_peak == pytest.approx(135.0, abs=3.0)
 
 
+def test_regression_data_path_emits_no_labs_symbols():
+    # De-LABS invariant (2026-06-16): the data optimizer on real (long-format)
+    # data must never produce LABS knobs (biomass/total_sub/malt_frac/dilution)
+    # or LABS species (bare X/S/P/M/V) — only the experiment's real levers.
+    dossier, obs = _categorical_dossier_and_obs()
+    out = discover_and_optimize(obs, dossier=dossier, objective="product_g_l")
+    labs_knobs = {"biomass", "total_sub", "malt_frac", "dilution"}
+    labs_species = {"X", "S", "P", "M", "V"}
+    lever_names = {lev["name"] for lev in out.levers}
+    knob_names = set(out.best_knobs)
+    assert lever_names.isdisjoint(labs_knobs | labs_species)
+    assert knob_names.isdisjoint(labs_knobs | labs_species)
+    assert "nitrogen_source" in lever_names  # the real discovered design factor
+
+
 # --- item 8: data-relative sanity guards on the optimizer output ---------------
 
 def _obs_with_objective(peaks, *, volume=None):

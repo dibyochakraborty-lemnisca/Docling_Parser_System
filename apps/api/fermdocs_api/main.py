@@ -248,10 +248,19 @@ def create_app() -> FastAPI:
             if run.hypothesis_dir is not None
             else None
         )
+        # Optimization runs write the debated hypotheses (HypothesisOutput shape,
+        # with rendered plotly_charts) to optimize_dir/optimization_debate.json and
+        # never set hypothesis_dir. Surface that as `output` so the run page renders
+        # the debated hypotheses WITH their charts, alongside the OptimizationPanel.
+        if (output_path is None or not output_path.exists()) and run.optimize_dir is not None:
+            cand = run.optimize_dir / "optimization_debate.json"
+            if cand.exists():
+                output_path = cand
         output = None
         if output_path and output_path.exists():
             output = json.loads(output_path.read_text())
-            
+
+
         recommendation_output = None
         if run.recommend_dir and (run.recommend_dir / "recommendation.json").exists():
             recommendation_output = json.loads((run.recommend_dir / "recommendation.json").read_text())

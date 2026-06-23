@@ -138,6 +138,10 @@ class GoldenColumn(BaseModel):
     canonical_unit: str | None = None
     nominal: float | None = None
     std_dev: float | None = None
+    # The optimization objective channel (the trajectory the optimizer maximizes).
+    # Exactly one column should set this true; the optimizer/debate read it via
+    # GoldenSchema.objective_channel() rather than hardcoding a channel name.
+    objective: bool = False
     synonyms: list[str] = Field(default_factory=list)
     observation_types: list[ObservationType] = Field(default_factory=list)
     examples: list[GoldenColumnExample] = Field(default_factory=list)
@@ -163,6 +167,16 @@ class GoldenSchema(BaseModel):
 
     def by_name(self) -> dict[str, GoldenColumn]:
         return {c.name: c for c in self.columns}
+
+    def objective_channel(self) -> str | None:
+        """The schema-designated optimization objective channel name, or None.
+
+        Single source of truth for "what does the optimizer maximize by default"
+        — derived from the golden schema, not hardcoded at call sites."""
+        for c in self.columns:
+            if c.objective:
+                return c.name
+        return None
 
 
 class ParsedTable(BaseModel):
@@ -272,6 +286,10 @@ class Observation(BaseModel):
     value_canonical: dict[str, Any] | None = None
     unit_canonical: str | None = None
     conversion_status: ConversionStatus = ConversionStatus.NOT_APPLICABLE
+    # Why a conversion FAILED, in fix-pointing language (e.g. "g/L requires per-run
+    # density to convert from '%w/w'; none supplied"). Carried so a refusal is
+    # legible downstream, not a bare "failed". None when OK / not applicable.
+    conversion_error: str | None = None
     source_locator: dict[str, Any]
     mapping_confidence: float | None = None
     extraction_confidence: float | None = None

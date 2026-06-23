@@ -36,40 +36,93 @@ from fermdocs_hypothesis.schema import (
     TrajectoryViewRef,
 )
 
-from fermdocs_optimize_debate.levers import DEFAULT_LEVERS, KnobLever
 from fermdocs_optimize_debate.topics import extract_opportunity_topics
 
 
-def _discover_bundle_levers(reader, dossier) -> tuple[list | None, dict]:
-    """The experiment's own levers + their cross-run effect on the objective.
+def _golden_objective_label() -> str:
+    """The golden-schema designated objective channel name, as a display/label
+    fallback when the bundle's own objective can't be resolved. Schema-derived,
+    not a hardcoded domain value."""
+    try:
+        from fermdocs.domain.golden_schema import cached_schema
+        return cached_schema().objective_channel() or "product_g_l"
+    except Exception:  # noqa: BLE001 — schema unreadable → canonical product channel
+        return "product_g_l"
 
-    Returns ``(levers, lever_effects)``:
-      - ``levers``: discovered levers (None → caller falls back to static LABS
-        levers, i.e. discovery did not run; an empty-after-filter list still
-        counts as "ran", handled in topics.py).
-      - ``lever_effects``: {lever_name: {delta, direction, n, norm_effect, ...}}
-        from the within-run cross-run engine, used to RANK design-factor topics
-        by how much they actually moved titer. ``{}`` when there aren't enough
-        runs / no objective (topics then fall back to neutral ordering).
+
+def _resolve_bundle_objective(reader, user_question) -> str | None:
+    """Resolve the objective channel from THIS bundle's measured channels (+ the
+    user's question), not a fixed species. None when nothing resolves."""
+    try:
+        import pandas as pd
+
+        from fermdocs.analysis.objective import resolve_objective
+
+        obs_path = reader.dir / "characterization" / "observations.csv"
+        if not obs_path.exists():
+            return None
+        obs = pd.read_csv(obs_path)
+        channels = (set(obs["variable"].astype(str).unique())
+                    if "variable" in obs.columns else set())
+        return resolve_objective(channels, user_question=user_question)
+    except Exception:  # noqa: BLE001 — best-effort; caller falls back to schema label
+        return None
+
+
+def _derive_strata(dossier) -> tuple[dict, list[str]]:
+    """The campaign/target stratum for clampedness + conditioning (B2/F1). Shared
+    with the gate bridge (A3) — see fermdocs.analysis.clampedness.derive_strata."""
+    from fermdocs.analysis.clampedness import derive_strata
+    return derive_strata(dossier)
+
+
+def _discover_bundle_levers(reader, dossier, user_question, *, fallback_objective: str):
+    """The experiment's own levers + their RANKING effect on the FREE objective.
+
+    Returns ``(levers, effects, objective_name)``:
+      - ``levers``: discovered levers ([] = ran-none -> trends; None = couldn't run).
+      - ``effects``: {lever: {delta, direction, norm_effect (observational),
+        ranking_effect (B2: conditioned on the target stratum when one exists,
+        else == norm_effect), confounded, ...}}.
+      - ``objective_name``: the resolved objective (F1) — a free rate when the
+        schema objective is clamped, else the channel; fallback when unresolved.
     Never raises."""
     try:
         import pandas as pd
 
-        from fermdocs.analysis.cross_run import lever_effects
+        from fermdocs.analysis.cross_run import lever_effects, ranking_effects
+        from fermdocs.analysis.objective import resolve_objective_free
         from fermdocs_optimize.lever_discovery import discover_levers
 
         obs_path = reader.dir / "characterization" / "observations.csv"
         if not obs_path.exists():
-            return None, {}
+            return None, {}, fallback_objective
         obs = pd.read_csv(obs_path)
-        levers = discover_levers(dossier, obs)
-        effects = lever_effects(dossier, obs)  # objective defaults to product_g_l
-        return (levers or None), effects
+
+        strata, conditioning = _derive_strata(dossier)
+        obj = resolve_objective_free(obs, user_question=user_question, strata=strata or None)
+        if obj is None:
+            objective_name, base_channel, outcomes = fallback_objective, fallback_objective, None
+        else:
+            objective_name, base_channel = obj.name, obj.base_channel
+            outcomes = obj.outcome_per_run(obs) or None
+
+        levers = discover_levers(dossier, obs, objective=base_channel)
+        effects = lever_effects(dossier, obs, objective=objective_name, outcomes=outcomes)
+        # B2: redirect the ranking signal to the conditioned effect on the free
+        # objective. Confounded/underpowered levers score 0 (sink); real ones keep
+        # their magnitude. With no target stratum this == the unconditioned effect.
+        ranking = ranking_effects(dossier, obs, objective=objective_name,
+                                  outcomes=outcomes, conditioning=conditioning or None)
+        for lev, e in effects.items():
+            base = float(e.get("norm_effect") or 0.0)
+            e["ranking_effect"] = float(ranking.get(lev, base))
+        return levers, effects, objective_name
     except Exception:  # noqa: BLE001 — discovery is best-effort; fall back to static
-        return None, {}
+        return None, {}, fallback_objective
 
 
-def _build_within_run_pool(lever_effects: dict) -> list:
+def _build_within_run_pool(lever_effects: dict, objective: str) -> list:
     """Turn the per-lever cross-run effects into citeable WithinRunAssociationRefs
     the specialists see in their view. Sorted by effect size (strongest first)."""
     from fermdocs.analysis.cross_run import is_weak_effect
@@ -97,7 +150,7 @@ def _build_within_run_pool(lever_effects: dict) -> list:
             assoc_id=f"WRA-{lever}", lever=lever, summary=summary,
             delta=float(delta), direction=str(eff.get("direction", "")), n=n,
             norm_effect=float(eff.get("norm_effect") or 0.0),
-            objective="product_g_l", best_setting=best))
+            objective=objective, best_setting=best))
     pool.sort(key=lambda a: a.norm_effect, reverse=True)
     return pool
 
@@ -124,8 +177,7 @@ class OptimizeLoadedBundle:
 def load_optimization_bundle(
     bundle_dir: str | Path,
     *,
-    objective_species: str = "P",
-    levers: tuple[KnobLever, ...] = DEFAULT_LEVERS,
+    objective: str | None = None,
     max_trend_topics: int = 8,
 ) -> OptimizeLoadedBundle:
     reader = BundleReader(bundle_dir)
@@ -150,13 +202,21 @@ def load_optimization_bundle(
     organism, process_family = _extract_organism_and_family(dossier)
     user_question = _load_user_question(reader.dir)
 
+    # Resolve the objective from THIS bundle's data (+ the user's question), not a
+    # fixed LABS species. Caller override wins; else resolve from measured channels;
+    # else fall back to the golden-schema objective label (de-LABS, 2026-06-16).
+    fallback_objective = objective or _resolve_bundle_objective(reader, user_question) \
+        or _golden_objective_label()
+
     # Discover THIS experiment's own levers (run_conditions metadata + varying
-    # observation channels) so the debate argues the real levers, not a fixed
-    # LABS knob list. Falls back to the static `levers` tuple only when nothing
-    # was discovered (no metadata + no varying channel).
-    discovered, lever_effects = _discover_bundle_levers(reader, dossier)
+    # observation channels) so the debate argues the real levers. There is no LABS
+    # knob fallback (de-LABS): no levers -> trends carry the debate. B2/F1: the
+    # resolved objective is the FREE variable (productivity when titer is clamped),
+    # and lever ranking uses the conditioned effect on it.
+    discovered, lever_effects, objective = _discover_bundle_levers(
+        reader, dossier, user_question, fallback_objective=fallback_objective)
     seed_topics = extract_opportunity_topics(
-        char, objective_species=objective_species, levers=levers,
+        char, objective_species=objective,
         discovered_levers=discovered, lever_effects=lever_effects,
         max_trend_topics=max_trend_topics)
 
@@ -180,5 +240,5 @@ def load_optimization_bundle(
         priors_pool=_build_priors_pool(organism, process_family),
         analyses_pool=_build_analyses_pool(diagnosis) if diagnosis is not None else [],
         bundle_dir=Path(bundle_dir),
-        within_run_pool=_build_within_run_pool(lever_effects),
+        within_run_pool=_build_within_run_pool(lever_effects, objective),
     )

@@ -22,7 +22,6 @@ from fermdocs_characterize.schema import Severity
 from fermdocs_diagnose.schema import TrajectoryRef
 from fermdocs_hypothesis.schema import SeedTopic, TopicSourceType
 
-from fermdocs_optimize_debate.levers import DEFAULT_LEVERS, KnobLever
 
 # Topic priorities. Observed TRENDS are grounded in real measured behavior
 # (substrate left over, titer plateau, DO dip), so they outrank the
@@ -70,7 +69,10 @@ def _discovered_lever_topic(lever, *, objective_species: str, counter: int,
     effect_size = 0.0
     if effect:
         from fermdocs.analysis.cross_run import is_weak_effect
-        effect_size = float(effect.get("norm_effect") or 0.0)
+        # B2: rank by the CONDITIONED effect on the free objective (ranking_effect)
+        # when present — confounded/underpowered levers carry ~0 and sink. Falls
+        # back to the unconditioned norm_effect pre-B1' (no target stratum).
+        effect_size = float(effect.get("ranking_effect", effect.get("norm_effect") or 0.0))
         delta, n = effect.get("delta"), effect.get("n")
         best = effect.get("best_setting")
         if delta is not None:
@@ -105,20 +107,18 @@ def _discovered_lever_topic(lever, *, objective_species: str, counter: int,
 def extract_opportunity_topics(
     char,
     *,
-    objective_species: str = "P",
-    levers: tuple[KnobLever, ...] = DEFAULT_LEVERS,
+    objective_species: str = "product_g_l",
     discovered_levers: list | None = None,
     lever_effects: dict[str, dict] | None = None,
     max_trend_topics: int = 8,
 ) -> list[SeedTopic]:
     """Knob-anchored + trend opportunity topics, in deterministic id order.
 
-    When ``discovered_levers`` is provided (the experiment's OWN levers, found
-    from run_conditions metadata + varying observation channels), the
-    knob-anchored topics come from those — so the debate argues the real levers
-    (nitrogen source, feed conc, ...), not a fixed LABS knob list. The static
-    ``levers`` tuple is used only as a fallback when nothing was discovered
-    (e.g. a LABS synthetic bundle with no metadata)."""
+    Knob-anchored topics come from ``discovered_levers`` — the experiment's OWN
+    levers, found from run_conditions metadata + varying observation channels —
+    so the debate argues the real levers (nitrogen source, feed conc, ...). There
+    is NO fixed LABS knob fallback (de-LABS, 2026-06-16): when no levers are
+    discovered, the trends carry the debate."""
     findings = list(getattr(char, "findings", []) or [])
     trajectories = list(getattr(char, "trajectories", []) or [])
     topics: list[SeedTopic] = []
@@ -126,40 +126,15 @@ def extract_opportunity_topics(
 
     # 1. KNOB-ANCHORED — one per metadata design factor, ranked by cross-run
     #    effect size. Derived channel levers are NOT debated (see _debate_levers).
-    #    `discovered_levers is not None` = the data path ran: use metadata levers
-    #    (possibly empty -> trends carry the debate). Only when discovery did not
-    #    run at all (None) do we fall back to the static LABS lever set.
-    if discovered_levers is not None:
-        effects = lever_effects or {}
-        for lever in _debate_levers(discovered_levers):
-            counter += 1
-            topics.append(_discovered_lever_topic(
-                lever, objective_species=objective_species, counter=counter,
-                findings=findings, trajectories=trajectories,
-                effect=effects.get(lever.name)))
-        driver_vars: set[str] = {objective_species}
-    else:
-        for lever in levers:
-            counter += 1
-            cited_findings, cited_trajs = _evidence_for(findings, trajectories, lever.effect_variables)
-            # If nothing matched, the topic stays uncited — downstream facets are
-            # flagged schema_only and the critic judges them. We do not fabricate a
-            # citation just to satisfy validation (flag-don't-fake).
-            topics.append(SeedTopic(
-                topic_id=_topic_id(counter),
-                summary=lever.question.format(obj=objective_species),
-                source_type=TopicSourceType.OPEN_QUESTION,
-                source_id=f"lever-{lever.knob}",
-                cited_finding_ids=cited_findings,
-                cited_narrative_ids=[],
-                cited_trajectories=cited_trajs,
-                affected_variables=list(lever.effect_variables),
-                severity=Severity.MAJOR,
-                priority=_KNOB_PRIORITY,
-            ))
-        driver_vars = {objective_species}
-        for lever in levers:
-            driver_vars.update(lever.effect_variables)
+    #    No discovered levers -> no knob topics; the trends below carry the debate.
+    effects = lever_effects or {}
+    for lever in _debate_levers(discovered_levers or []):
+        counter += 1
+        topics.append(_discovered_lever_topic(
+            lever, objective_species=objective_species, counter=counter,
+            findings=findings, trajectories=trajectories,
+            effect=effects.get(lever.name)))
+    driver_vars: set[str] = {objective_species}
 
     # 2. TREND — findings touching the objective (or driver variables in the
     #    fallback path). Keep the most important first: objective-citing AND
@@ -195,15 +170,6 @@ def extract_opportunity_topics(
         ))
 
     return topics
-
-
-def _evidence_for(findings, trajectories, variables) -> tuple[list[str], list[TrajectoryRef]]:
-    vs = set(variables)
-    cited_findings = [
-        getattr(f, "finding_id") for f in findings
-        if getattr(f, "finding_id", None) and set(getattr(f, "variables_involved", []) or []) & vs
-    ]
-    return cited_findings, _trajs_for(trajectories, variables)
 
 
 def _trajs_for(trajectories, variables) -> list[TrajectoryRef]:

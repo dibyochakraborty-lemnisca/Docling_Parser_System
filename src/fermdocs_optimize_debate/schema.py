@@ -13,7 +13,6 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from fermdocs_optimize_debate.levers import knobs_for_variables
 
 
 def _get(obj, attr, default=None):
@@ -56,11 +55,11 @@ def levers_from_output(output) -> list[OptimizationLever]:
         affected = list(_get(h, "affected_variables", []) or [])
         specialists = [s.value if hasattr(s, "value") else str(s)
                        for s in _get(h, "supporting_specialists", []) or []]
-        # Prefer the REAL design factors the hypothesis cited (WRA-<lever> ->
-        # <lever>); only fall back to the LABS knob map when it cited none.
+        # The REAL design factors the hypothesis cited (WRA-<lever> -> <lever>).
+        # No LABS knob fallback (de-LABS): a hypothesis that cites no association
+        # carries no knob and sorts below knob-bearing levers.
         assoc_ids = list(_get(h, "cited_association_ids", []) or [])
-        design_factors = [a[4:] if a.startswith("WRA-") else a for a in assoc_ids]
-        knobs = design_factors or knobs_for_variables(affected)
+        knobs = [a[4:] if a.startswith("WRA-") else a for a in assoc_ids]
         levers.append(OptimizationLever(
             lever_id=_get(h, "hyp_id", "H-0000"),
             summary=_get(h, "summary", ""),

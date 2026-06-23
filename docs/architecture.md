@@ -188,15 +188,12 @@ honest refusal). Two halves:
   plus observed **trend** topics. The specialists argue where the titer headroom
   is. Trends (evidence-grounded) outrank speculative levers in the ranker.
 - **Optimizer proper** (`fermdocs_optimize`). Discovers a model and searches for
-  the best operating point. Two oracle modes (`FERMDOCS_OPTIMIZE_ORACLE`):
-  - **`labs`** — a process-simulator oracle drives an active-learning loop
-    (`active_optimize.py`, `loop.py`): fit a model → propose points → verify on
-    the oracle → fold surprises back in. Includes **equation discovery**
-    (`discovery/`: an agent writes ODE structure, the compiler `expr.py`
-    safely evaluates it, the oracle refines + verifies, and a global search
-    `oracle_search.py` finds the within-box maximum).
-  - **`data`** — no simulator: discover a **lever→titer model on the uploaded
-    data itself** (`data_equation.py`). Mechanistic-first — a coupled ODE over
+  the best operating point. **The API run path always uses the uploaded data as
+  the oracle** — real data wins, the LABS process simulator is never used there
+  (de-LABS, 2026-06-16). The objective channel is resolved from the data + the
+  user's question (`fermdocs/analysis/objective.py`), not a fixed species.
+  - **data path (default, API)** — discover a **lever→objective model on the
+    uploaded data itself** (`data_equation.py`). Mechanistic-first — a coupled ODE over
     *all* the measured variables (`discovery/general_mech.py`), gated by
     leave-runs-out held-out R² — falling back to a static algebraic surrogate
     (numeric + one-hot categorical levers). The winner is optimized only over the
@@ -204,6 +201,11 @@ honest refusal). Two halves:
     implausible vs the observed maximum; mark boundary-sitting optima as
     insufficient-data, not a validated optimum; flag fed-batch operating-mode
     mismatch) and honest refusal when nothing generalizes.
+  - **LABS benchmark backend (`fermdocs_optimize/benchmark/`, opt-in, CLI-only)** —
+    a synthetic process-simulator oracle for benchmarking the optimizer against a
+    known answer (the lactic-acid model). Reachable only via the standalone
+    optimize CLIs on synthetic input; an import-guard test asserts the data path
+    and the debate never import it.
 
 The decision contract (`schema.py`) mirrors recommend's discipline:
 confident ↔ has a candidate, refusal ↔ has a reason.

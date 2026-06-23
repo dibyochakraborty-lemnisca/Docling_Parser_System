@@ -1,9 +1,13 @@
 """Phase A: opportunity-topic extraction + lever mapping (deterministic, no LLM).
 
 Uses duck-typed stand-ins for characterization findings/trajectories so we never
-construct a full CharacterizationOutput. Verifies the knob-anchored + trend
-topics, their evidence citations, well-formed ids, and that debated levers map
-back onto the optimizer's knobs.
+construct a full CharacterizationOutput. Verifies the (discovered) knob-anchored +
+trend topics, their evidence citations, well-formed ids, and that debated levers
+map back onto the real design factors.
+
+De-LABS (2026-06-16): there is NO static LABS knob fallback. Knob topics come only
+from discovered levers; with none, the trends carry the debate. The default
+objective is the golden-schema channel (product_g_l), not the LABS species "P".
 """
 from __future__ import annotations
 
@@ -12,7 +16,6 @@ from types import SimpleNamespace
 
 from fermdocs_hypothesis.schema import TopicSourceType
 
-from fermdocs_optimize_debate.levers import DEFAULT_LEVERS, knobs_for_variables
 from fermdocs_optimize_debate.schema import levers_from_output
 from fermdocs_optimize_debate.topics import extract_opportunity_topics
 
@@ -33,54 +36,47 @@ class _Traj:
 def _char():
     return SimpleNamespace(
         findings=[
-            _Finding("characterization:F-0001", "Substrate left unconsumed at harvest", ["S", "P"]),
-            _Finding("characterization:F-0002", "Dissolved oxygen dipped mid-run", ["DO"]),
-            _Finding("characterization:F-0003", "Product titer plateaued early", ["P"]),
+            _Finding("characterization:F-0001", "Substrate left unconsumed at harvest",
+                     ["substrate_g_l", "product_g_l"]),
+            _Finding("characterization:F-0002", "Dissolved oxygen dipped mid-run",
+                     ["do_pct_saturation"]),
+            _Finding("characterization:F-0003", "Product titer plateaued early",
+                     ["product_g_l"]),
         ],
         trajectories=[
-            _Traj("run-1", "S"), _Traj("run-1", "P"),
-            _Traj("run-1", "X"), _Traj("run-1", "DO"),
+            _Traj("run-1", "substrate_g_l"), _Traj("run-1", "product_g_l"),
+            _Traj("run-1", "od600_au"), _Traj("run-1", "do_pct_saturation"),
         ],
     )
 
 
-def test_one_knob_topic_per_lever():
+def test_no_knob_topics_without_discovered_levers():
+    # De-LABS: a bare call (no discovered levers) emits NO knob topics — there is
+    # no static LABS lever set to fall back on. Trends carry the debate.
     topics = extract_opportunity_topics(_char())
     knob_topics = [t for t in topics if t.source_type == TopicSourceType.OPEN_QUESTION]
-    assert len(knob_topics) == len(DEFAULT_LEVERS)
-    assert [t.source_id for t in knob_topics] == [f"lever-{l.knob}" for l in DEFAULT_LEVERS]
+    assert knob_topics == []
     # ids are well-formed and unique
     ids = [t.topic_id for t in topics]
     assert all(i.startswith("T-") for i in ids)
     assert len(ids) == len(set(ids))
 
 
-def test_knob_topic_cites_only_relevant_evidence():
-    topics = extract_opportunity_topics(_char())
-    biomass = next(t for t in topics if t.source_id == "lever-biomass")
-    # biomass acts on X, P -> cites the P finding and the X/P trajectories, not the DO/S-only ones
-    assert "characterization:F-0003" in biomass.cited_finding_ids   # P plateau
-    assert "characterization:F-0002" not in biomass.cited_finding_ids  # DO only
-    traj_vars = {tr.variable for tr in biomass.cited_trajectories}
-    assert traj_vars <= {"X", "P"}
-
-
 def test_trend_topics_prioritize_objective_and_are_capped():
     topics = extract_opportunity_topics(_char(), max_trend_topics=2)
     trend = [t for t in topics if t.source_type == TopicSourceType.TREND]
     assert len(trend) == 2
-    # the DO-only finding doesn't touch any driver var -> excluded
+    # the DO-only finding doesn't touch the objective -> excluded
     assert all("F-0002" not in t.source_id for t in trend)
-    # an objective (P) finding sorts first
-    assert "P" in trend[0].affected_variables
+    # an objective (product_g_l) finding sorts first
+    assert "product_g_l" in trend[0].affected_variables
 
 
-def test_no_topics_when_no_findings():
+def test_no_topics_when_no_findings_and_no_levers():
     empty = SimpleNamespace(findings=[], trajectories=[])
     topics = extract_opportunity_topics(empty)
-    # still emits the knob levers (the box spine); just no evidence/trend topics
-    assert len(topics) == len(DEFAULT_LEVERS)
-    assert all(t.cited_finding_ids == [] for t in topics)
+    # no levers discovered + no findings -> nothing to debate (no LABS spine)
+    assert topics == []
 
 
 def test_discovered_levers_drive_topics_not_default_labs_knobs():
@@ -177,11 +173,13 @@ def test_confounded_lever_is_labelled_and_does_not_lead():
     assert ranked[0].topic_id == nit.topic_id
 
 
-def test_no_discovered_levers_falls_back_to_static():
-    # discovery did not run (None) -> static LABS lever set still used.
+def test_no_discovered_levers_runs_trends_only_no_labs_fallback():
+    # discovery did not run (None) -> NO knob topics (de-LABS: no static LABS set).
     topics = extract_opportunity_topics(_char(), discovered_levers=None)
     knob = [t for t in topics if t.source_type == TopicSourceType.OPEN_QUESTION]
-    assert len(knob) == len(DEFAULT_LEVERS)
+    assert knob == []
+    # trends still carry the debate
+    assert any(t.source_type == TopicSourceType.TREND for t in topics)
 
 
 def test_empty_metadata_runs_on_trends_not_labs_fallback():
@@ -191,7 +189,7 @@ def test_empty_metadata_runs_on_trends_not_labs_fallback():
     derived = [Lever("acetate_g_l.initial", "numeric", "derived", {"R0": 0.01, "R1": 0.33})]
     topics = extract_opportunity_topics(_char(), discovered_levers=derived)
     knob = [t for t in topics if t.source_type == TopicSourceType.OPEN_QUESTION]
-    assert knob == []  # no lever topics, and crucially NOT the LABS DEFAULT_LEVERS
+    assert knob == []  # no lever topics, and crucially NOT a LABS DEFAULT_LEVERS set
     assert any(t.source_type == TopicSourceType.TREND for t in topics)
 
 
@@ -204,7 +202,7 @@ def test_trend_topics_inherit_finding_severity_and_outrank_levers():
 
     char = SimpleNamespace(
         findings=[
-            _Finding("characterization:F-0009", "Titer plateaued early", ["P"]),
+            _Finding("characterization:F-0009", "Titer plateaued early", ["product_g_l"]),
         ],
         trajectories=[],
     )
@@ -221,7 +219,7 @@ def test_higher_severity_trends_kept_when_capped():
 
     findings = []
     for i, sev in enumerate([Severity.INFO, Severity.MINOR, Severity.CRITICAL, Severity.MAJOR]):
-        f = _Finding(f"characterization:F-{i:04d}", f"obs {i}", ["P"])
+        f = _Finding(f"characterization:F-{i:04d}", f"obs {i}", ["product_g_l"])
         f.severity = sev
         findings.append(f)
     char = SimpleNamespace(findings=findings, trajectories=[])
@@ -293,25 +291,25 @@ def test_regression_3cfc2aa6_real_design_lever_leads_not_byproduct_initial():
         if t.source_id == "lever-main_fermentation_nitrogen_source")
 
 
-def test_knobs_for_variables_maps_back():
-    assert knobs_for_variables(["X"]) == ["biomass"]
-    assert "total_sub" in knobs_for_variables(["S"])
-    assert knobs_for_variables(["DO"]) == []  # no knob acts on DO directly
-
-
-def test_levers_from_output_sorts_and_maps():
+def test_levers_from_output_no_association_yields_no_knob():
+    # De-LABS: a hypothesis citing no within-run association maps to NO knob (it
+    # is NOT back-filled with the LABS knob set); it sorts below knob-bearing ones.
     out = SimpleNamespace(final_hypotheses=[
-        SimpleNamespace(hyp_id="H-0002", summary="raise substrate", affected_variables=["S", "P"],
-                        actionable_recommendation="bump total_sub", confidence=0.6,
-                        supporting_specialists=["kinetics"]),
-        SimpleNamespace(hyp_id="H-0001", summary="unmappable", affected_variables=["pH"],
-                        actionable_recommendation=None, confidence=0.9, supporting_specialists=[]),
+        SimpleNamespace(hyp_id="H-0002", summary="raise substrate",
+                        affected_variables=["substrate_g_l", "product_g_l"],
+                        actionable_recommendation="bump feed", confidence=0.6,
+                        supporting_specialists=["kinetics"],
+                        cited_association_ids=["WRA-feed_g_l"]),
+        SimpleNamespace(hyp_id="H-0001", summary="unmappable", affected_variables=["ph"],
+                        actionable_recommendation=None, confidence=0.9,
+                        supporting_specialists=[], cited_association_ids=[]),
     ])
     levers = levers_from_output(out)
-    # no associations cited -> LABS-knob fallback (back-compat for the LABS path)
+    # the WRA-citing hypothesis carries its real design factor and sorts first
     assert levers[0].lever_id == "H-0002"
-    assert "total_sub" in levers[0].knobs
-    assert levers[1].knobs == []  # pH maps to no knob, kept for narrative
+    assert levers[0].knobs == ["feed_g_l"]
+    # no association cited -> no knob (no LABS fallback), kept for narrative
+    assert levers[1].knobs == []
 
 
 def test_levers_from_output_uses_real_design_factors_when_associations_cited():
@@ -320,7 +318,7 @@ def test_levers_from_output_uses_real_design_factors_when_associations_cited():
     out = SimpleNamespace(final_hypotheses=[
         SimpleNamespace(
             hyp_id="H-0001", summary="nitrogen source drives titer",
-            affected_variables=["P"], actionable_recommendation="use YE Leiber H",
+            affected_variables=["product_g_l"], actionable_recommendation="use YE Leiber H",
             confidence=0.8, supporting_specialists=["metabolic"],
             cited_association_ids=["WRA-main_fermentation_nitrogen_source",
                                    "WRA-impeller_type_10l"]),

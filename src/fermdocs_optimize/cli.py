@@ -24,7 +24,7 @@ from fermdocs_optimize.agent import OptimizerAgent
 from fermdocs_optimize.evaluate import peak_titer_per_batch
 from fermdocs_optimize.llm_clients import build_optimize_client
 from fermdocs_optimize.schema import Box, OptimizationInput
-from fermdocs_optimize.simulators.labs import LABSSimulator
+from fermdocs_optimize.benchmark import LABSSimulator
 
 
 def _load_box(path: str) -> Box:

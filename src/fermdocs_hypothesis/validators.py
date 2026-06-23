@@ -52,6 +52,11 @@ def validate_hypothesis_output(
     drop_unknown_citations: bool = True,
     priors: ProcessPriors | None = None,
     organism: str | None = None,
+    dossier: dict | None = None,
+    obs_df=None,
+    objective_channel: str | None = None,
+    conditioning: list[str] | None = None,
+    strata: dict | None = None,
 ) -> HypothesisOutput:
     """Apply cross-output validation and soft enforcement.
 
@@ -107,11 +112,54 @@ def validate_hypothesis_output(
         upstream.findings, {t.variable for t in upstream.trajectories}, dossier=None)
     cleaned_finals = [_apply_claim_guard(h, facts, check_claim) for h in cleaned_finals]
 
+    # A3 — deterministic gates: a causal/recommendation claim that fails the
+    # confound/objective/materiality/direction/laundering gates against the bundle
+    # data is DOWNGRADED to schema_only with the failing gates named, so it cannot
+    # be honored as a trusted verdict. Requires the bundle data; skipped (graceful)
+    # when it isn't passed (legacy callers, or no observations).
+    if obs_df is not None and dossier is not None:
+        cleaned_finals = _apply_structured_gates(
+            cleaned_finals, dossier, obs_df,
+            objective_channel=objective_channel,
+            conditioning=conditioning or [], strata=strata)
+
     # Rejected hypotheses are kept untouched; they're audit records, not
     # outputs anyone consumes for reasoning.
     return output.model_copy(
         update={"final_hypotheses": cleaned_finals},
     )
+
+
+def _apply_structured_gates(
+    finals, dossier, obs_df, *, objective_channel, conditioning, strata,
+):
+    """Downgrade gate-failed hypotheses (A3). Returns a new list; blocked claims are
+    demoted to schema_only with their failing gates recorded, not silently dropped
+    (audit-preserving, consistent with claim-guard)."""
+    from fermdocs_hypothesis.gate_bridge import apply_gates
+
+    _, blocked = apply_gates(
+        list(finals), dossier, obs_df, objective_channel=objective_channel,
+        conditioning=conditioning, strata=strata)
+    blocked_map = {id(h): verdicts for h, verdicts in blocked}
+    out = []
+    for h in finals:
+        verdicts = blocked_map.get(id(h))
+        if verdicts is None:
+            out.append(h)
+            continue
+        fails = [v for v in verdicts if (not v.passed) and v.severity == "fail"]
+        names = [v.gate for v in fails]
+        reason = "; ".join(f"{v.gate}: {v.reason}" for v in fails)
+        _log.warning("hypothesis %s gate-failed (%s)", h.hyp_id, ", ".join(names))
+        out.append(h.model_copy(update={
+            "summary": f"{h.summary}  [gates failed: {reason}]",
+            "confidence": min(h.confidence, 0.1),
+            "confidence_basis": ConfidenceBasis.SCHEMA_ONLY,
+            "provenance_downgraded": True,
+            "gate_failures": names,
+        }))
+    return out
 
 
 def _apply_claim_guard(h: FinalHypothesis, facts, check_claim) -> FinalHypothesis:

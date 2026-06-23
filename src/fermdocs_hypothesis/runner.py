@@ -1138,12 +1138,24 @@ def run_stage(
             priors = cached_priors()
         except Exception:
             priors = None
+        # A3: when the bundle has a structured target stratum, run the deterministic
+        # gates so a gate-failed (confounded/clamped-objective/etc) claim is
+        # downgraded out of the trusted verdict. Best-effort + off without a target
+        # stratum (diagnostic path / pre-B1') — bundle_context returns {} then.
+        gate_ctx = {}
+        try:
+            from fermdocs_hypothesis.gate_bridge import bundle_context
+            if getattr(hyp_input, "bundle_path", None):
+                gate_ctx = bundle_context(hyp_input.bundle_path)
+        except Exception:  # noqa: BLE001 — never let gating break the run
+            gate_ctx = {}
         output = validate_hypothesis_output(
             output,
             upstream=hyp_input.characterization,
             drop_unknown_citations=True,
             priors=priors,
             organism=hyp_input.organism,
+            **gate_ctx,
         )
 
     return RunResult(output=output, state=state, events=events)
@@ -1388,12 +1400,24 @@ def resume_stage(
             priors = cached_priors()
         except Exception:
             priors = None
+        # A3: when the bundle has a structured target stratum, run the deterministic
+        # gates so a gate-failed (confounded/clamped-objective/etc) claim is
+        # downgraded out of the trusted verdict. Best-effort + off without a target
+        # stratum (diagnostic path / pre-B1') — bundle_context returns {} then.
+        gate_ctx = {}
+        try:
+            from fermdocs_hypothesis.gate_bridge import bundle_context
+            if getattr(hyp_input, "bundle_path", None):
+                gate_ctx = bundle_context(hyp_input.bundle_path)
+        except Exception:  # noqa: BLE001 — never let gating break the run
+            gate_ctx = {}
         output = validate_hypothesis_output(
             output,
             upstream=hyp_input.characterization,
             drop_unknown_citations=True,
             priors=priors,
             organism=hyp_input.organism,
+            **gate_ctx,
         )
 
     return RunResult(output=output, state=state, events=events)

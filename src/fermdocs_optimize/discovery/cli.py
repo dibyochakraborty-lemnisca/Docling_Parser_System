@@ -23,7 +23,7 @@ import pandas as pd
 from fermdocs_optimize.discovery.loop import discover_model
 from fermdocs_optimize.discovery.proposers import LLMSpecProposer, TemplateProposer
 from fermdocs_optimize.schema import Box
-from fermdocs_optimize.simulators.labs import LABSSimulator
+from fermdocs_optimize.benchmark import LABSSimulator
 
 
 def _box_from_config(path: str) -> Box:

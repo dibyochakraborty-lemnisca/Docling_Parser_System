@@ -177,7 +177,8 @@ class _FakeConverter:
     Avoids pulling in pint and unit registry for what's a guard-logic test.
     """
 
-    def convert(self, value, unit_raw, golden_unit, *, normalizer=None):
+    def convert(self, value, unit_raw, golden_unit, *, normalizer=None,
+                density_g_per_ml=None):
         from fermdocs.domain.models import ConversionStatus
         from types import SimpleNamespace
 
@@ -191,4 +192,5 @@ class _FakeConverter:
             status=ConversionStatus.OK,
             via="pint",
             hint=None,
+            error=None,
         )

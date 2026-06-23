@@ -88,6 +88,9 @@ columns:
     description: Product (titer) concentration (P). Static bounds intentionally omitted (rises through run).
     data_type: float
     canonical_unit: g/L
+    # Schema-designated optimization objective: the optimizer/debate maximize this
+    # channel by default (overridable per-run via the user question).
+    objective: true
     synonyms: [product, titer, P, target_product, lactate, lactic_acid, ethanol_titer]
     examples:
       - {raw_header: "Product (g/L)"}
@@ -118,6 +121,20 @@ columns:
       - {raw_header: "Volume"}
       - {raw_header: "V (L)"}
       - {raw_header: "Working Volume"}
+
+  - name: density_g_per_ml
+    # Broth/solution density. Needed to convert gravimetric concentrations
+    # (%w/w, g/kg) to volumetric (g/L) — see units/converter.py. Often reported
+    # without a unit string (a bare ~1.05) or as specific gravity (dimensionless),
+    # g/cm3, or g/mL; all resolve to g/mL (g/cm3 == g/mL; specific gravity ~= g/mL).
+    description: Broth/solution density (per run). Conversion input for %w/w -> g/L.
+    data_type: float
+    canonical_unit: g/mL
+    synonyms: [density, specific_gravity, specific gravity, sp_gr, SG, relative_density]
+    examples:
+      - {raw_header: "Density"}
+      - {raw_header: "Density (g/cm3)"}
+      - {raw_header: "Specific Gravity"}
 
   - name: weight_kg
     # No nominal/std_dev: tracks volume_l up monotonically in fed-batch.

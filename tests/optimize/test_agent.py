@@ -179,10 +179,13 @@ def test_debate_levers_inform_but_do_not_constrain(tmp_path):
     """The optimizer reads debated levers via get_levers, surfaces them in the
     rationale (inform-only), but the search and result still come from the loop."""
     # a minimal optimization_debate.json (HypothesisOutput shape)
+    # The hypothesis cites the real lever it's about (WRA-<knob>); de-LABS,
+    # levers_from_output no longer fabricates LABS knobs from affected_variables.
     debate = {"final_hypotheses": [
         {"hyp_id": "H-0001", "summary": "lower dilution to avoid washout",
          "affected_variables": ["V", "S", "P"], "actionable_recommendation": "drop dilution",
-         "confidence": 0.7, "supporting_specialists": ["mass_transfer"]},
+         "confidence": 0.7, "supporting_specialists": ["mass_transfer"],
+         "cited_association_ids": ["WRA-dilution"]},
     ]}
     path = tmp_path / "optimization_debate.json"
     path.write_text(json.dumps(debate))

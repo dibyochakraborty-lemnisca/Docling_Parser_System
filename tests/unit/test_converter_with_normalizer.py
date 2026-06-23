@@ -50,7 +50,24 @@ def test_pint_fails_normalizer_use_pint_expr_retries():
     assert result.hint is not None
 
 
-def test_pint_fails_normalizer_dimensionless():
+def test_dimensionless_into_dimensionless_target_stores_as_is():
+    # DIMENSIONLESS "store as-is" is correct only when the TARGET is dimensionless.
+    conv = UnitConverter()
+    norm = _ScriptedNormalizer(
+        NormalizationHint(
+            action=NormalizationAction.DIMENSIONLESS,
+            rationale="fold change", confidence=0.9, source="rule_based",
+        )
+    )
+    result = conv.convert("0.5", "weird/units", "fold_change", normalizer=norm)
+    assert result.status == ConversionStatus.OK
+    assert result.via == "rule_based"
+    assert result.value_canonical == 0.5
+
+
+def test_dimensionless_into_concentration_target_refuses():
+    # De-LABS #0a: the same DIMENSIONLESS hint into a g/L target must REFUSE — this
+    # was the silent pass-through that stored a mass fraction verbatim as g/L.
     conv = UnitConverter()
     norm = _ScriptedNormalizer(
         NormalizationHint(
@@ -59,9 +76,9 @@ def test_pint_fails_normalizer_dimensionless():
         )
     )
     result = conv.convert("0.5", "weird/units", "g/L", normalizer=norm)
-    assert result.status == ConversionStatus.OK
-    assert result.via == "rule_based"
-    assert result.value_canonical == 0.5
+    assert result.status == ConversionStatus.FAILED
+    assert result.value_canonical is None
+    assert "dimensionless" in (result.error or "")
 
 
 def test_pint_fails_normalizer_unconvertible():
